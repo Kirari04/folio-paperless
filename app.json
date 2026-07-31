@@ -1,0 +1,64 @@
+{
+  "expo": {
+    "name": "Folio for Paperless",
+    "slug": "folio-paperless",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "folio-paperless",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "icon": "./assets/images/icon.png",
+      "supportsTablet": true,
+      "bundleIdentifier": "app.folio.paperless"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#17231B",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "package": "app.folio.paperless",
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "single",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Folio to scan paper documents.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": false
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#F3F0E8",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 128
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow Folio to protect your document previews with Face ID."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#17231B"
+        }
+      ],
+      "expo-sharing"
+    ],
+    "experiments": {
+      "reactCompiler": true
+    }
+  }
+}
