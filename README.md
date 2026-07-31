@@ -1,5 +1,9 @@
 # Folio for Paperless
 
+<p align="center">
+  <img src="docs/showcase/banner.svg" alt="Folio for Paperless — Paperwork, minus the work" width="100%" />
+</p>
+
 Folio is a clean, mobile-first client for [Paperless-ngx](https://docs.paperless-ngx.com/).
 It is built with Expo SDK 57 and React Native. Folio is an independent community project and is
 not affiliated with or endorsed by the Paperless-ngx project.
@@ -23,6 +27,19 @@ not affiliated with or endorsed by the Paperless-ngx project.
 - Reduce-Motion-aware page transitions, tactile press feedback, semantic haptics, and animated state changes.
 - Direct Paperless-ngx API v10 connectivity with credentials stored in Secure Store.
 - A polished demo workspace so the product can be evaluated without a server.
+
+## Inside Folio
+
+<p align="center">
+  <img src="docs/screenshots/home.svg" alt="Folio home dashboard in demo mode" width="23%" />
+  <img src="docs/screenshots/library.svg" alt="Folio document library in grid view" width="23%" />
+  <img src="docs/screenshots/inbox.svg" alt="Folio quick-triage inbox" width="23%" />
+  <img src="docs/screenshots/document.svg" alt="Folio document details and preview" width="23%" />
+</p>
+
+<p align="center">
+  <sub>Dashboard · Grid library · Quick triage · Document details</sub>
+</p>
 
 ## Requirements
 
