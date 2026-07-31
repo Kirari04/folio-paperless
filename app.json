@@ -2,7 +2,6 @@
   "expo": {
     "name": "Folio for Paperless",
     "slug": "folio-paperless",
-    "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "folio-paperless",
@@ -55,7 +54,8 @@
           "color": "#17231B"
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      "./plugins/withAndroidReleaseSigning"
     ],
     "experiments": {
       "reactCompiler": true
