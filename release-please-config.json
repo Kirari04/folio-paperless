@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "include-v-in-tag": true,
+  "include-component-in-tag": false,
+  "draft": true,
+  "force-tag-creation": true,
+  "packages": {
+    ".": {
+      "component": "Folio",
+      "package-name": "folio-paperless",
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}

@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    name: PR title
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate Conventional Commit title
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          node <<'NODE'
+          if (process.env.EVENT_NAME !== 'pull_request') {
+            console.log('Manual run: no pull request title to validate.');
+            process.exit(0);
+          }
+
+          const title = process.env.PR_TITLE ?? '';
+          const conventionalTitle = /^(feat|fix|docs|refactor|perf|test|build|ci|chore)(\([^)]+\))?!?:\s+\S.*$/;
+          if (!conventionalTitle.test(title)) {
+            console.error(`Invalid pull request title: ${JSON.stringify(title)}`);
+            console.error('Use a Conventional Commit title, for example:');
+            console.error('  feat: add offline document queue       (minor release)');
+            console.error('  fix(sync): retry interrupted uploads   (patch release)');
+            console.error('  feat(scanner)!: change scan contract   (major release)');
+            console.error('docs:, chore:, test:, build:, and ci: changes alone do not publish a release.');
+            process.exit(1);
+          }
+          console.log(`Valid Conventional Commit title: ${title}`);
+          NODE
+
+  quality:
+    name: Quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: Check Expo dependency compatibility
+        run: npx expo-doctor
+      - name: Export web bundle
+        env:
+          CI: '1'
+        run: npx expo export --platform web
+
+  android-debug:
+    name: Android debug build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate Android project
+        env:
+          CI: '1'
+        run: npx expo prebuild --platform android --clean --no-install
+      - name: Assemble debug APK
+        env:
+          NODE_ENV: development
+        working-directory: android
+        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Upload debug APK
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: folio-pr-${{ github.event.pull_request.number || github.run_number }}-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  required-checks:
+    name: Required checks
+    if: always()
+    needs:
+      - pr-title
+      - quality
+      - android-debug
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Consolidate required results
+        env:
+          ANDROID_RESULT: ${{ needs.android-debug.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          TITLE_RESULT: ${{ needs.pr-title.result }}
+        run: |
+          node <<'NODE'
+          const results = {
+            'PR title': process.env.TITLE_RESULT,
+            Quality: process.env.QUALITY_RESULT,
+            'Android debug build': process.env.ANDROID_RESULT,
+          };
+          const failed = Object.entries(results).filter(([, result]) => result !== 'success');
+          for (const [name, result] of Object.entries(results)) {
+            console.log(`${name}: ${result}`);
+          }
+          if (failed.length > 0) {
+            console.error(`Required jobs did not succeed: ${failed.map(([name]) => name).join(', ')}`);
+            process.exit(1);
+          }
+          NODE

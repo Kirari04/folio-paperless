@@ -1,0 +1,237 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      release_as:
+        description: Force the next Release Please PR version (for example, 0.1.0)
+        required: false
+        type: string
+      rebuild_tag:
+        description: Rebuild an existing draft release tag (for example, v0.1.0)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: folio-release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Validate manual inputs
+        env:
+          REBUILD_TAG: ${{ inputs.rebuild_tag }}
+          RELEASE_AS: ${{ inputs.release_as }}
+        run: |
+          node <<'NODE'
+          const releaseAs = process.env.RELEASE_AS ?? '';
+          const rebuildTag = process.env.REBUILD_TAG ?? '';
+          const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+          const tag = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+          if (releaseAs && rebuildTag) {
+            throw new Error('release_as and rebuild_tag are mutually exclusive.');
+          }
+          if (releaseAs && !semver.test(releaseAs)) {
+            throw new Error(`release_as must be a stable MAJOR.MINOR.PATCH version; received ${releaseAs}.`);
+          }
+          if (rebuildTag && !tag.test(rebuildTag)) {
+            throw new Error(`rebuild_tag must be vMAJOR.MINOR.PATCH; received ${rebuildTag}.`);
+          }
+          NODE
+      - name: Create or update release pull request
+        id: release
+        if: ${{ inputs.rebuild_tag == '' }}
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          target-branch: main
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          release-as: ${{ inputs.release_as }}
+
+  build-release:
+    name: Build signed Android release
+    if: ${{ needs.release-please.outputs.release_created == 'true' || inputs.rebuild_tag != '' }}
+    needs: release-please
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}
+    steps:
+      - name: Check out exact release tag
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
+      - name: Confirm the release is an unpublished draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName > "$RUNNER_TEMP/release.json"
+          node <<'NODE'
+          const release = require(`${process.env.RUNNER_TEMP}/release.json`);
+          if (release.tagName !== process.env.RELEASE_TAG) {
+            throw new Error(`Expected ${process.env.RELEASE_TAG}, received ${release.tagName}.`);
+          }
+          if (!release.isDraft) {
+            throw new Error(`Release ${release.tagName} is already published; refusing to overwrite it.`);
+          }
+          NODE
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate release version contract
+        id: version
+        run: |
+          npx expo config --type prebuild --json > "$RUNNER_TEMP/expo-config.json"
+          node <<'NODE'
+          const fs = require('fs');
+          const packageJson = require('./package.json');
+          const expoConfig = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/expo-config.json`, 'utf8'));
+          const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(packageJson.version);
+          if (!match) throw new Error(`Invalid package version: ${packageJson.version}`);
+          const expectedTag = `v${packageJson.version}`;
+          if (process.env.RELEASE_TAG !== expectedTag) {
+            throw new Error(`Tag ${process.env.RELEASE_TAG} does not match package version ${expectedTag}.`);
+          }
+          if (expoConfig.version !== packageJson.version) {
+            throw new Error(`Expo version ${expoConfig.version} does not match ${packageJson.version}.`);
+          }
+          const [major, minor, patch] = match.slice(1).map(Number);
+          if ([major, minor, patch].some((component) => component > 999)) {
+            throw new Error('SemVer components must not exceed 999.');
+          }
+          const versionCode = major * 1_000_000 + minor * 1_000 + patch;
+          if (expoConfig.android?.versionCode !== versionCode) {
+            throw new Error(`Android versionCode ${expoConfig.android?.versionCode} does not match ${versionCode}.`);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${packageJson.version}\nversion_code=${versionCode}\n`);
+          console.log(`Release contract valid: ${expectedTag} (Android versionCode ${versionCode}).`);
+          NODE
+      - name: Validate signing environment
+        env:
+          ANDROID_CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          for variable_name in ANDROID_CERT_SHA256 ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!variable_name}" ]; then
+              echo "Missing release environment value: $variable_name" >&2
+              exit 1
+            fi
+          done
+      - name: Prepare release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          keystore_path="$RUNNER_TEMP/folio-release.p12"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          chmod 600 "$keystore_path"
+          {
+            echo "ORG_GRADLE_PROJECT_FOLIO_REQUIRE_RELEASE_SIGNING=true"
+            echo "ORG_GRADLE_PROJECT_FOLIO_UPLOAD_STORE_FILE=$keystore_path"
+            echo "ORG_GRADLE_PROJECT_FOLIO_UPLOAD_STORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
+            echo "ORG_GRADLE_PROJECT_FOLIO_UPLOAD_KEY_ALIAS=$ANDROID_KEY_ALIAS"
+            echo "ORG_GRADLE_PROJECT_FOLIO_UPLOAD_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+      - name: Generate Android project
+        env:
+          CI: '1'
+        run: npx expo prebuild --platform android --clean --no-install
+      - name: Assemble signed release APK
+        env:
+          NODE_ENV: production
+        working-directory: android
+        run: ./gradlew :app:assembleRelease --no-daemon
+      - name: Verify and name release assets
+        env:
+          ANDROID_CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+          EXPECTED_VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        run: |
+          source_apk="android/app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$source_apk" ]; then
+            echo "Release APK was not generated at $source_apk" >&2
+            exit 1
+          fi
+
+          build_tools_dir="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          aapt="$build_tools_dir/aapt"
+          apksigner="$build_tools_dir/apksigner"
+          if [ ! -x "$aapt" ] || [ ! -x "$apksigner" ]; then
+            echo "Android verification tools were not found in $build_tools_dir" >&2
+            exit 1
+          fi
+
+          badging="$($aapt dump badging "$source_apk" | head -n 1)"
+          [[ "$badging" == *"name='app.folio.paperless'"* ]] || { echo "Unexpected package: $badging" >&2; exit 1; }
+          [[ "$badging" == *"versionName='$EXPECTED_VERSION'"* ]] || { echo "Unexpected versionName: $badging" >&2; exit 1; }
+          [[ "$badging" == *"versionCode='$EXPECTED_VERSION_CODE'"* ]] || { echo "Unexpected versionCode: $badging" >&2; exit 1; }
+
+          signature_report="$RUNNER_TEMP/apksigner-report.txt"
+          "$apksigner" verify --verbose --print-certs "$source_apk" | tee "$signature_report"
+          if grep -Fqi 'Android Debug' "$signature_report"; then
+            echo 'APK is signed with an Android debug certificate.' >&2
+            exit 1
+          fi
+          grep -Fq 'CN=Folio for Paperless' "$signature_report" || { echo 'Unexpected signing certificate identity.' >&2; exit 1; }
+
+          actual_fingerprint="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$signature_report" | head -n 1 | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+          expected_fingerprint="$(printf '%s' "$ANDROID_CERT_SHA256" | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+          if [ -z "$actual_fingerprint" ] || [ "$actual_fingerprint" != "$expected_fingerprint" ]; then
+            echo 'APK certificate SHA-256 does not match the release environment fingerprint.' >&2
+            exit 1
+          fi
+
+          asset="Folio-${RELEASE_TAG}-android-universal.apk"
+          cp "$source_apk" "$asset"
+          sha256sum "$asset" > "$asset.sha256"
+          echo "ASSET_PATH=$asset" >> "$GITHUB_ENV"
+          echo "CHECKSUM_PATH=$asset.sha256" >> "$GITHUB_ENV"
+      - name: Upload verified assets to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$RELEASE_TAG" "$ASSET_PATH" "$CHECKSUM_PATH" --clobber --repo "$GITHUB_REPOSITORY"
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest --repo "$GITHUB_REPOSITORY"

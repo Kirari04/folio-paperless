@@ -13,6 +13,7 @@ import {
   Trash2,
   Unplug,
 } from 'lucide-react-native';
+import Constants from 'expo-constants';
 import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -35,6 +36,9 @@ import { useApp } from '@/context/app-context';
 import { useRouter } from '@/lib/router';
 
 export default function SettingsScreen() {
+  const versionLabel = Constants.expoConfig?.version
+    ? `Version ${Constants.expoConfig.version}`
+    : 'Development build';
   const serverSheetRef = useRef<KeyboardSheetHandle>(null);
   const serverInputRef = useRef<TextInput>(null);
   const tokenInputRef = useRef<TextInput>(null);
@@ -283,11 +287,11 @@ export default function SettingsScreen() {
           onPress={() =>
             Alert.alert(
               'Folio for Paperless',
-              'Version 0.1.0\nExpo SDK 57\n\nA private, direct-to-server Paperless-ngx client.',
+              `${versionLabel}\nExpo SDK 57\n\nA private, direct-to-server Paperless-ngx client.`,
             )
           }
           title="About Folio"
-          subtitle="Version 0.1.0 · Expo SDK 57"
+          subtitle={`${versionLabel} · Expo SDK 57`}
           trailing={<ChevronRight color={palette.faint} size={18} />}
         />
         <SettingRow

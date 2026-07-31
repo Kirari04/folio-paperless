@@ -4,6 +4,11 @@
   <img src="docs/showcase/banner.svg" alt="Folio for Paperless — Paperwork, minus the work" width="100%" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/Kirari04/folio-paperless/actions/workflows/ci.yml"><img src="https://github.com/Kirari04/folio-paperless/actions/workflows/ci.yml/badge.svg?branch=dev" alt="CI status" /></a>
+  <a href="https://github.com/Kirari04/folio-paperless/releases/latest"><img src="https://img.shields.io/github/v/release/Kirari04/folio-paperless?display_name=tag&sort=semver" alt="Latest release" /></a>
+</p>
+
 Folio is a clean, mobile-first client for [Paperless-ngx](https://docs.paperless-ngx.com/).
 It is built with Expo SDK 57 and React Native. Folio is an independent community project and is
 not affiliated with or endorsed by the Paperless-ngx project.
@@ -50,6 +55,16 @@ not affiliated with or endorsed by the Paperless-ngx project.
 Folio uses native modules for document scanning and PDF viewing, so it requires an Expo
 development build. It does not run completely in Expo Go.
 
+## Android releases
+
+Signed Android APKs are available from [GitHub Releases](https://github.com/Kirari04/folio-paperless/releases).
+GitHub release builds are Android-only for now; there is no iOS, Play Store, or App Store package
+yet. Every release includes a SHA-256 checksum alongside the universal APK.
+
+Development builds and GitHub release APKs use different signing identities. Android will not
+install one as an update over the other. Keep the development build if it contains Paperless
+credentials, and test a release on a clean emulator or spare device.
+
 ## Run on Android
 
 ```bash
@@ -94,6 +109,17 @@ npm run lint
 npx expo-doctor
 npx expo export --platform web
 ```
+
+## Development workflow
+
+The persistent branches are protected. Create feature and fix branches from `dev`, open a pull
+request back to `dev`, and squash merge after `CI / Required checks` passes. Promotions from
+`dev` to `main` use merge commits so Release Please can calculate the next semantic version from
+the individual Conventional Commits.
+
+Release Please opens the version/changelog pull request on `main`. Merging that pull request
+builds, verifies, and publishes a signed Android APK. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+branch naming, accepted PR titles, merge methods, and release recovery.
 
 ## License
 
