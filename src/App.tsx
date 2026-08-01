@@ -19,6 +19,7 @@ import SettingsScreen from '@/app/settings';
 import TrashScreen from '@/app/trash';
 import { BottomNav } from '@/components/bottom-nav';
 import { FolioLogo } from '@/components/folio-logo';
+import { UpdateOverlay } from '@/components/update-overlay';
 import {
   MotionPressable as Pressable,
   MotionProvider,
@@ -26,6 +27,7 @@ import {
 } from '@/components/motion';
 import { fonts, palette, radii } from '@/constants/theme';
 import { AppProvider, useApp } from '@/context/app-context';
+import { UpdateProvider } from '@/context/update-context';
 import { authenticateForFolio } from '@/lib/device-features';
 import { NavigationProvider, useNavigationMotion, useNavigationRoute } from '@/lib/router';
 import type { RoutePath } from '@/lib/router';
@@ -172,7 +174,12 @@ function ProtectedApp() {
     );
   }
 
-  return <CurrentScreen />;
+  return (
+    <>
+      <CurrentScreen />
+      <UpdateOverlay />
+    </>
+  );
 }
 
 export default function App() {
@@ -180,12 +187,14 @@ export default function App() {
     <SafeAreaProvider>
       <MotionProvider>
         <AppProvider>
-          <NavigationProvider>
-            <StatusBar style="dark" />
-            <View style={{ flex: 1, backgroundColor: palette.canvas }}>
-              <ProtectedApp />
-            </View>
-          </NavigationProvider>
+          <UpdateProvider>
+            <NavigationProvider>
+              <StatusBar style="dark" />
+              <View style={{ flex: 1, backgroundColor: palette.canvas }}>
+                <ProtectedApp />
+              </View>
+            </NavigationProvider>
+          </UpdateProvider>
         </AppProvider>
       </MotionProvider>
     </SafeAreaProvider>

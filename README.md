@@ -29,6 +29,7 @@ not affiliated with or endorsed by the Paperless-ngx project.
 - Recoverable deletion with a dedicated Paperless trash screen for restore and permanent erase.
 - Native file sharing/export plus document reprocessing and guarded deletion.
 - Optional biometric locking and local notifications when an upload finishes processing.
+- GitHub-only Android update checks with signed APK verification, download progress, and a system-installer handoff.
 - Reduce-Motion-aware page transitions, tactile press feedback, semantic haptics, and animated state changes.
 - Direct Paperless-ngx API v10 connectivity with credentials stored in Secure Store.
 - A polished demo workspace so the product can be evaluated without a server.
@@ -61,9 +62,16 @@ Signed Android APKs are available from [GitHub Releases](https://github.com/Kira
 GitHub release builds are Android-only for now; there is no iOS, Play Store, or App Store package
 yet. Every release includes a SHA-256 checksum alongside the universal APK.
 
+Signed release builds check GitHub Releases once per day and also provide a manual check in
+**Settings → Software updates**. Folio never installs silently: it downloads only after confirmation,
+verifies the SHA-256 digest, package ID, version, and official signing certificate, then hands the
+APK to Android's system installer for final approval. The first updater-enabled release must be
+installed manually; later signed releases can update from inside Folio.
+
 Development builds and GitHub release APKs use different signing identities. Android will not
-install one as an update over the other. Keep the development build if it contains Paperless
-credentials, and test a release on a clean emulator or spare device.
+install one as an update over the other, so the in-app updater is intentionally disabled in
+development builds. Keep the development build if it contains Paperless credentials, and test a
+release on a clean emulator or spare device.
 
 ## Run on Android
 
