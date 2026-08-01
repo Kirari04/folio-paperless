@@ -2,6 +2,7 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
+  CircleAlert,
   Clock3,
   Sparkles,
   WandSparkles,
@@ -14,6 +15,7 @@ import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/c
 import { PaperThumbnail } from '@/components/paper-thumbnail';
 import { fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
+import { isPendingDocument } from '@/lib/document-routing';
 import { useRouter } from '@/lib/router';
 
 export default function InboxScreen() {
@@ -22,9 +24,10 @@ export default function InboxScreen() {
   const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null);
   const [filing, setFiling] = useState(false);
   const activeDocument = inboxDocuments[0];
+  const activeDocumentPending = activeDocument ? isPendingDocument(activeDocument) : false;
 
   async function approve() {
-    if (!activeDocument || activeDocument.status === 'processing' || activeDocument.processingError) return;
+    if (!activeDocument || activeDocumentPending) return;
     setFiling(true);
     try {
       animateLayout();
@@ -68,7 +71,11 @@ export default function InboxScreen() {
         <>
           <View style={styles.progressRow}>
             <Text style={styles.progressLabel}>
-              {activeDocument.status === 'processing' ? 'Processing upload' : 'Ready to review'}
+              {activeDocument.processingError
+                ? 'Processing needs attention'
+                : activeDocumentPending
+                  ? 'Processing upload'
+                  : 'Ready to review'}
             </Text>
             <Text style={styles.progressCount}>{inboxDocuments.length} remaining</Text>
           </View>
@@ -82,6 +89,18 @@ export default function InboxScreen() {
           </View>
 
           <Pressable
+            accessibilityHint={
+              activeDocument.processingError
+                ? 'Shows the processing problem and how to check again'
+                : activeDocumentPending
+                  ? 'Shows processing status; document actions become available when ready'
+                  : 'Opens the document details and review actions'
+            }
+            accessibilityLabel={
+              activeDocumentPending
+                ? `View processing status for ${activeDocument.title}`
+                : `Open ${activeDocument.title}`
+            }
             onPressIn={() =>
               router.preload({
                 pathname: '/document/[id]',
@@ -107,8 +126,18 @@ export default function InboxScreen() {
 
             <View style={styles.reviewBody}>
               <View style={styles.suggestionLabel}>
-                <WandSparkles color={palette.limeDark} size={14} />
-                <Text style={styles.suggestionLabelText}>FOLIO SUGGESTS</Text>
+                {activeDocument.processingError ? (
+                  <CircleAlert color={palette.danger} size={14} />
+                ) : (
+                  <WandSparkles color={palette.limeDark} size={14} />
+                )}
+                <Text
+                  style={[
+                    styles.suggestionLabelText,
+                    activeDocument.processingError && styles.suggestionLabelError,
+                  ]}>
+                  {activeDocumentPending ? 'PAPERLESS STATUS' : 'FOLIO SUGGESTS'}
+                </Text>
               </View>
               <Text style={styles.documentTitle}>{activeDocument.title}</Text>
               <Text style={styles.excerpt} numberOfLines={3}>
@@ -152,24 +181,23 @@ export default function InboxScreen() {
             </Pressable>
             <Pressable
               accessibilityLabel={`File ${activeDocument.title}`}
-              disabled={
-                filing || activeDocument.status === 'processing' || Boolean(activeDocument.processingError)
-              }
+              disabled={filing || activeDocumentPending}
               onPress={approve}
               style={[
                 styles.fileButton,
-                (activeDocument.status === 'processing' || activeDocument.processingError) &&
-                  styles.fileButtonDisabled,
+                activeDocumentPending && styles.fileButtonDisabled,
               ]}>
-              {filing || activeDocument.status === 'processing' ? (
+              {filing || (activeDocumentPending && !activeDocument.processingError) ? (
                 <ActivityIndicator color={palette.ink} size="small" />
+              ) : activeDocument.processingError ? (
+                <CircleAlert color={palette.danger} size={20} />
               ) : (
                 <Check color={palette.ink} size={20} strokeWidth={2.6} />
               )}
               <Text style={styles.fileButtonText}>
                 {activeDocument.processingError
-                  ? 'Refresh to retry'
-                  : activeDocument.status === 'processing'
+                  ? 'Processing issue'
+                  : activeDocumentPending
                     ? 'Processing…'
                     : 'Looks good · File it'}
               </Text>
@@ -180,6 +208,11 @@ export default function InboxScreen() {
             <View style={styles.upNext}>
               <Text style={styles.upNextLabel}>UP NEXT</Text>
               <Pressable
+                accessibilityLabel={
+                  isPendingDocument(inboxDocuments[1])
+                    ? `View processing status for ${inboxDocuments[1].title}`
+                    : `Open ${inboxDocuments[1].title}`
+                }
                 onPressIn={() =>
                   router.preload({
                     pathname: '/document/[id]',
@@ -359,6 +392,9 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '900',
     letterSpacing: 1,
+  },
+  suggestionLabelError: {
+    color: palette.danger,
   },
   documentTitle: {
     color: palette.ink,
