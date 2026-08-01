@@ -99,7 +99,7 @@ jobs:
         env:
           NODE_ENV: development
         working-directory: android
-        run: ./gradlew :app:assembleDebug --no-daemon
+        run: ./gradlew :app:assembleDebug --build-cache --no-daemon
       - name: Upload debug APK
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
