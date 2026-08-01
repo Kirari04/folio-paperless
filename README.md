@@ -29,7 +29,7 @@ not affiliated with or endorsed by the Paperless-ngx project.
 - Recoverable deletion with a dedicated Paperless trash screen for restore and permanent erase.
 - Native file sharing/export plus document reprocessing and guarded deletion.
 - Optional biometric locking and local notifications when an upload finishes processing.
-- GitHub-only Android update checks with signed APK verification, download progress, and a system-installer handoff.
+- GitHub Releases with a signed Android APK, an unsigned iPhone IPA, checksums, and Android update checks.
 - Reduce-Motion-aware page transitions, tactile press feedback, semantic haptics, and animated state changes.
 - Direct Paperless-ngx API v10 connectivity with credentials stored in Secure Store.
 - A polished demo workspace so the product can be evaluated without a server.
@@ -56,11 +56,16 @@ not affiliated with or endorsed by the Paperless-ngx project.
 Folio uses native modules for document scanning and PDF viewing, so it requires an Expo
 development build. It does not run completely in Expo Go.
 
-## Android releases
+## GitHub releases
 
-Signed Android APKs are available from [GitHub Releases](https://github.com/Kirari04/folio-paperless/releases).
-GitHub release builds are Android-only for now; there is no iOS, Play Store, or App Store package
-yet. Every release includes a SHA-256 checksum alongside the universal APK.
+Each [GitHub Release](https://github.com/Kirari04/folio-paperless/releases) contains a signed
+universal Android APK, an unsigned iPhone IPA, and a SHA-256 checksum for each file. Folio is not
+distributed through Google Play or the App Store.
+
+The IPA intentionally contains no Apple provisioning profile or code signature. It cannot be
+installed directly on an iPhone: sign it with your own Apple ID or developer certificate using a
+sideloading tool, then install the signed copy. The IPA targets iPhone only and does not require
+the project maintainers to hold or distribute Apple credentials.
 
 Signed release builds check GitHub Releases once per day and also provide a manual check in
 **Settings → Software updates**. Folio never installs silently: it downloads only after confirmation,
@@ -97,7 +102,7 @@ npx expo start --dev-client
 Processing notifications are local. Remote push notifications are intentionally not configured.
 The first GitHub-distributed iOS build is iPhone-only and requires an HTTPS Paperless address with
 a certificate trusted by the device. See the [iOS release-readiness checklist](docs/ios-release-readiness.md)
-for the physical-device gate that precedes release automation.
+for signing, sideloading, and the physical-device release gate.
 
 ## Connect Paperless
 
@@ -130,7 +135,8 @@ request back to `dev`, and squash merge after `CI / Required checks` passes. Pro
 the individual Conventional Commits.
 
 Release Please opens the version/changelog pull request on `main`. Merging that pull request
-builds, verifies, and publishes a signed Android APK. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+builds and verifies both the signed Android APK and unsigned iPhone IPA, then publishes them only
+after both artifacts and their checksums are present. See [CONTRIBUTING.md](CONTRIBUTING.md) for
 branch naming, accepted PR titles, merge methods, and release recovery.
 
 ## License

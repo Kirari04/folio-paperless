@@ -1,6 +1,6 @@
 # iOS release readiness
 
-Folio's first iOS distribution is an unsigned iPhone build attached to GitHub Releases. It is not an App Store or TestFlight release. The build workflow belongs in a follow-up change; this document records the app-side contract that should be verified before that workflow ships.
+Folio's iOS distribution is an unsigned iPhone build attached to GitHub Releases. It is not an App Store or TestFlight release. The IPA must be signed with the tester's own Apple ID or developer certificate before installation; a stock iPhone cannot install the unsigned artifact directly.
 
 ## Included in the app
 
@@ -25,9 +25,17 @@ The following items from the earlier App Store audit do not apply to unsigned Gi
 
 Dark appearance and a complete migration of content UI to native navigation bars are product enhancements, not iOS release blockers. Folio intentionally remains a light, branded interface for this release. Its platform navigation and system-facing controls still follow iOS behavior.
 
+## Build and publication contract
+
+- Every pull request builds an unsigned Release IPA on a GitHub-hosted macOS 26 runner using Xcode 26 or newer. The IPA and SHA-256 file are retained as an Actions artifact for seven days so the exact PR can be signed and tested on hardware.
+- Release Please creates an unpublished draft. Android and iOS build independently from the exact release tag and upload their verified assets to that draft.
+- The iOS job rejects a mismatched bundle ID, version, build number, device family, or architecture; a missing JavaScript bundle or privacy manifest; and any app signature or embedded provisioning profile.
+- A final job verifies the signed APK, unsigned IPA, and both checksum files are present and non-empty before publishing. If either platform fails, the release remains a draft and can be rebuilt with `rebuild_tag=vX.Y.Z`.
+- Release assets are named `Folio-vX.Y.Z-ios-unsigned.ipa` and `Folio-vX.Y.Z-ios-unsigned.ipa.sha256`.
+
 ## Physical-device release gate
 
-Before publishing the first IPA, exercise a release build on at least one smaller iPhone and one current standard/large iPhone:
+Before publishing the first IPA, download the PR's unsigned IPA artifact, sign it locally, and exercise it on at least one smaller iPhone and one current standard/large iPhone:
 
 - Fresh install, launch, demo workspace, connect, disconnect, and relaunch
 - Trusted public HTTPS server and trusted local-network HTTPS server
@@ -40,4 +48,4 @@ Before publishing the first IPA, exercise a release build on at least one smalle
 - Light status bar on camera/preview surfaces and dark status bar on light content surfaces
 - Upgrade over an older build without losing the Secure Store token or preferences
 
-The future GitHub Action should run `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`, `npx expo-doctor`, and a clean iOS prebuild before compiling the unsigned release artifact.
+The shared CI gate runs `npm ci`, typechecking, linting, tests, Expo diagnostics, and platform builds. The iOS job performs a clean prebuild, CocoaPods install, device Release archive, unsigned-package verification, and checksum generation.
