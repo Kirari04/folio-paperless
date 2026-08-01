@@ -1,19 +1,20 @@
 import ExpoModulesCore
+import ImageIO
 import UIKit
 
 public final class FolioIOSSupportModule: Module {
-  private static let maximumPageCount = 24
-  private static let a4PageBounds = CGRect(x: 0, y: 0, width: 595, height: 842)
+  // 3508 px is the long edge of an A4 page at 300 dpi. It preserves print-quality
+  // text while bounding the decoded bitmap for each scanned page to predictable memory.
+  private static let maximumRasterDimension = 3_508
+  private static let maximumPageDimension: CGFloat = 842
+  private static let referencePageBounds = CGRect(x: 0, y: 0, width: 595, height: 842)
 
   public func definition() -> ModuleDefinition {
     Name("FolioIOSSupport")
 
     AsyncFunction("createPdfAsync") { (pageUris: [String]) throws -> String in
-      guard pageUris.count >= 2 else {
-        throw Self.error("At least two scanned pages are required to assemble a PDF.")
-      }
-      guard pageUris.count <= Self.maximumPageCount else {
-        throw Self.error("A scan can contain at most \(Self.maximumPageCount) pages.")
+      guard !pageUris.isEmpty else {
+        throw Self.error("At least one scanned page is required to assemble a PDF.")
       }
 
       let pageUrls = try pageUris.map { value -> URL in
@@ -29,39 +30,34 @@ public final class FolioIOSSupportModule: Module {
       let outputUrl = FileManager.default.temporaryDirectory
         .appendingPathComponent("folio-scan-\(UUID().uuidString)")
         .appendingPathExtension("pdf")
-      let renderer = UIGraphicsPDFRenderer(bounds: Self.a4PageBounds)
+      let format = UIGraphicsPDFRendererFormat()
+      format.documentInfo = [kCGPDFContextCreator as String: "Folio for Paperless"]
+      let renderer = UIGraphicsPDFRenderer(bounds: Self.referencePageBounds, format: format)
       var renderingError: Error?
 
       do {
         try renderer.writePDF(to: outputUrl) { context in
           for pageUrl in pageUrls {
             if renderingError != nil { break }
-            context.beginPage()
 
             autoreleasepool {
-              guard let image = UIImage(contentsOfFile: pageUrl.path), image.size.width > 0,
-                    image.size.height > 0 else {
+              guard let image = Self.loadPageImage(at: pageUrl) else {
                 renderingError = Self.error("A scanned page could not be decoded for PDF export.")
                 return
               }
 
-              let scale = min(
-                Self.a4PageBounds.width / image.size.width,
-                Self.a4PageBounds.height / image.size.height
-              )
-              let targetSize = CGSize(
-                width: image.size.width * scale,
-                height: image.size.height * scale
-              )
-              let targetRect = CGRect(
-                x: (Self.a4PageBounds.width - targetSize.width) / 2,
-                y: (Self.a4PageBounds.height - targetSize.height) / 2,
-                width: targetSize.width,
-                height: targetSize.height
-              )
-              image.draw(in: targetRect)
+              let pageBounds = Self.pageBounds(for: image.size)
+              context.beginPage(withBounds: pageBounds, pageInfo: [:])
+              context.cgContext.setFillColor(UIColor.white.cgColor)
+              context.cgContext.fill(pageBounds)
+              image.draw(in: pageBounds)
             }
           }
+        }
+
+        let values = try outputUrl.resourceValues(forKeys: [.fileSizeKey])
+        guard let fileSize = values.fileSize, fileSize > 0 else {
+          throw Self.error("iOS created an empty PDF for this scan.")
         }
       } catch {
         try? FileManager.default.removeItem(at: outputUrl)
@@ -75,6 +71,37 @@ public final class FolioIOSSupportModule: Module {
 
       return outputUrl.absoluteString
     }
+  }
+
+  private static func loadPageImage(at url: URL) -> UIImage? {
+    let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
+      return nil
+    }
+
+    let thumbnailOptions: [CFString: Any] = [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceShouldCacheImmediately: true,
+      kCGImageSourceThumbnailMaxPixelSize: maximumRasterDimension,
+    ]
+    guard let image = CGImageSourceCreateThumbnailAtIndex(
+      source,
+      0,
+      thumbnailOptions as CFDictionary
+    ) else {
+      return nil
+    }
+    return UIImage(cgImage: image)
+  }
+
+  private static func pageBounds(for imageSize: CGSize) -> CGRect {
+    guard imageSize.width > 0, imageSize.height > 0 else { return referencePageBounds }
+    let scale = maximumPageDimension / max(imageSize.width, imageSize.height)
+    return CGRect(
+      origin: .zero,
+      size: CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+    )
   }
 
   private static func error(_ message: String) -> NSError {

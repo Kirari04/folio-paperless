@@ -7,7 +7,7 @@ Folio's first iOS distribution is an unsigned iPhone build attached to GitHub Re
 - iPhone-only targeting. iPad remains a future layout project rather than an accidental enlarged-phone promise.
 - Native stack presentation for document detail, scanner, and trash screens, including the standard iOS interactive back gesture.
 - A dedicated scan action outside the destination tabs, with SF Symbols in the iOS tab bar.
-- File-based, native iOS assembly for multi-page scan PDFs. Scanned images are decoded one at a time and a scan is limited to 24 pages; JavaScript no longer holds a multi-page base64 document.
+- File-based, native iOS assembly for scan PDFs with no Folio-imposed page limit. ImageIO downsamples and decodes one page at a time, each PDF page preserves the detected document shape, and JavaScript never holds the scan as base64.
 - A privacy curtain as soon as iOS becomes inactive, before the app-switcher snapshot, plus biometric relocking when enabled.
 - HTTPS-only Paperless URLs on iOS, device-trust guidance for certificate failures, and a local-network permission explanation.
 - An aggregate Apple privacy manifest based on the required-reason declarations in the installed Expo and React Native dependencies.
@@ -33,8 +33,7 @@ Before publishing the first IPA, exercise a release build on at least one smalle
 - Trusted public HTTPS server and trusted local-network HTTPS server
 - Clear rejection copy for HTTP and an untrusted/self-signed certificate
 - Camera denial, Settings recovery, smart-scan cancellation, backgrounding, and low-storage failure
-- 1-page and 24-page scans; verify PDF page order, orientation, readability, upload progress, and cleanup after failure
-- A 25-or-more-page VisionKit scan; verify Folio refuses it with the 24-page explanation rather than attempting PDF assembly
+- 1-page, 25-page, and 50-or-more-page VisionKit scans on the oldest supported iPhone; verify PDF page order, orientation, receipt/document proportions, readability, stable memory use, upload progress, retry reuse, and cleanup after failure
 - App switcher, Control Center, notification shade, Face ID success/cancel/fallback, and biometric lock disabled/enabled
 - Edge-swipe back from document and trash screens; swipe/dismiss and explicit close paths from scanning
 - VoiceOver reading order, Reduce Motion, Bold Text, Button Shapes, and the largest accessibility text sizes

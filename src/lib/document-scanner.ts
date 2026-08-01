@@ -4,8 +4,6 @@ import type { ScanResult } from 'expo-document-scanner';
 
 import { createIOSScanPdf } from '@/lib/folio-ios-support-native';
 
-export const MAX_SCAN_PAGES = 24;
-
 export type SmartScanPage = {
   uri: string;
 };
@@ -78,18 +76,12 @@ export async function launchSmartScanner(): Promise<SmartScanSession | null> {
     const result = await scanDocument({
       quality: 0.9,
       includeBase64: false,
-      maxNumDocuments: MAX_SCAN_PAGES,
       galleryImportAllowed: true,
       includePdf: Platform.OS === 'android',
       scannerMode: 'full',
     });
 
     if (!result.pages.length) throw new Error('The scanner did not return any pages.');
-    if (result.pages.length > MAX_SCAN_PAGES) {
-      throw new Error(
-        `This scan has ${result.pages.length} pages. Folio supports up to ${MAX_SCAN_PAGES} pages per scan.`,
-      );
-    }
     return {
       pages: result.pages.map((page) => ({ uri: page.uri })),
       pdfUri: result.pdfUri,
@@ -121,6 +113,15 @@ export async function prepareSmartScan(session: SmartScanSession): Promise<Prepa
     };
   }
 
+  if (Platform.OS === 'ios') {
+    return {
+      uri: await createPdfFromPages(session.pages),
+      name: scanName('pdf'),
+      mimeType: 'application/pdf',
+      pageCount,
+    };
+  }
+
   if (pageCount === 1) {
     const page = session.pages[0];
     const extension = imageExtension(page.uri);
@@ -132,10 +133,5 @@ export async function prepareSmartScan(session: SmartScanSession): Promise<Prepa
     };
   }
 
-  return {
-    uri: await createPdfFromPages(session.pages),
-    name: scanName('pdf'),
-    mimeType: 'application/pdf',
-    pageCount,
-  };
+  throw new Error('The document scanner did not return its expected multi-page PDF.');
 }

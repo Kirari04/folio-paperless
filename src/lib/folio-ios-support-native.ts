@@ -12,7 +12,7 @@ const iosSupportModule = Platform.OS === 'ios'
 export async function createIOSScanPdf(pageUris: string[]) {
   if (!iosSupportModule) {
     throw new Error(
-      'Multi-page scanning needs the current Folio iOS build. Rebuild the app and scan again.',
+      'PDF scanning needs the current Folio iOS build. Rebuild the app and scan again.',
     );
   }
   return iosSupportModule.createPdfAsync(pageUris);

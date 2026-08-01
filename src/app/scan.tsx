@@ -34,7 +34,6 @@ import { fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import {
   launchSmartScanner,
-  MAX_SCAN_PAGES,
   prepareSmartScan,
   SmartScannerUnavailableError,
   SmartScanSession,
@@ -160,9 +159,12 @@ export default function ScanScreen() {
     if (!scanSession || isSaving) return;
     setIsSaving(true);
     setScanError(null);
-    setSavingLabel(scanSession.pages.length > 1 && !scanSession.pdfUri ? 'Preparing PDF…' : 'Uploading…');
+    setSavingLabel(Platform.OS === 'ios' && !scanSession.pdfUri ? 'Preparing PDF…' : 'Uploading…');
     try {
       const file = await prepareSmartScan(scanSession);
+      if (!scanSession.pdfUri && file.mimeType === 'application/pdf') {
+        setScanSession((current) => current === scanSession ? { ...current, pdfUri: file.uri } : current);
+      }
       setSavingLabel(connected ? 'Uploading…' : 'Adding…');
       let reportedProgress = -1;
       await importDocument(file, {
@@ -549,9 +551,7 @@ export default function ScanScreen() {
           </View>
           <View style={styles.capabilityRow}>
             <Layers3 color={palette.limeDark} size={18} />
-            <Text style={styles.capabilityText}>
-              Combines up to {MAX_SCAN_PAGES} pages into one document
-            </Text>
+            <Text style={styles.capabilityText}>Combines every scanned page into one PDF</Text>
           </View>
           <View style={styles.capabilityRow}>
             <Sparkles color={palette.limeDark} size={18} />
