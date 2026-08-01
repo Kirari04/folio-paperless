@@ -57,14 +57,31 @@ jobs:
           NODE
       - name: Create or update release pull request
         id: release
-        if: ${{ inputs.rebuild_tag == '' }}
+        if: ${{ inputs.rebuild_tag == '' && inputs.release_as == '' }}
         uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           target-branch: main
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          release-as: ${{ inputs.release_as }}
+      - name: Set up Node.js for a forced release proposal
+        if: ${{ inputs.release_as != '' }}
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - name: Create forced release pull request
+        if: ${{ inputs.release_as != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_AS: ${{ inputs.release_as }}
+        run: |
+          npx --yes release-please@17.3.0 release-pr \
+            --token "$GH_TOKEN" \
+            --repo-url "$GITHUB_REPOSITORY" \
+            --target-branch main \
+            --config-file release-please-config.json \
+            --manifest-file .release-please-manifest.json \
+            --release-as "$RELEASE_AS"
 
   build-release:
     name: Build signed Android release
