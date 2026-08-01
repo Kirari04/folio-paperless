@@ -198,7 +198,7 @@ jobs:
         env:
           NODE_ENV: production
         working-directory: android
-        run: ./gradlew :app:assembleRelease --no-daemon
+        run: ./gradlew :app:assembleRelease --build-cache --no-daemon
       - name: Verify and name release assets
         env:
           ANDROID_CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
