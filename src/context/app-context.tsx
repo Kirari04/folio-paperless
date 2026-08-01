@@ -51,6 +51,7 @@ import {
   PaperlessTrashWorkspace,
 } from '@/types/document';
 import { matchesLibraryFilters } from '@/lib/library-filters';
+import { resolveDocumentAlias } from '@/lib/document-routing';
 
 const CREDENTIALS_KEY = 'folio.paperless.credentials';
 const PREFERENCES_KEY = 'folio.preferences';
@@ -83,6 +84,7 @@ type AppContextValue = {
   lastSynced: string;
   connectionError: string | null;
   operationError: string | null;
+  resolveDocumentId: (id: string) => string;
   preferences: AppPreferences;
   preferencesReady: boolean;
   clearOperationError: () => void;
@@ -118,6 +120,7 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 type DocumentDetailContextValue = {
   details: Record<string, DocumentItem>;
+  version: number;
   loadDocumentDetails: (id: string) => Promise<DocumentItem | null>;
 };
 
@@ -286,6 +289,7 @@ function applyDocumentChanges(document: DocumentItem, changes: DocumentChanges):
 export function AppProvider({ children }: PropsWithChildren) {
   const [documents, setDocuments] = useState<DocumentItem[]>(demoWorkspace.documents);
   const [documentDetails, setDocumentDetails] = useState<Record<string, DocumentItem>>({});
+  const [documentDetailsVersion, setDocumentDetailsVersion] = useState(0);
   const documentDetailsRef = useRef(documentDetails);
   const [catalog, setCatalog] = useState<PaperlessCatalog>(demoWorkspace.catalog);
   const [totalDocuments, setTotalDocuments] = useState(demoWorkspace.documents.length);
@@ -296,8 +300,15 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [lastSynced, setLastSynced] = useState('demo mode');
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [documentIdAliases, setDocumentIdAliases] = useState<Record<string, string>>({});
   const [preferences, setPreferences] = useState(defaultPreferences);
   const [preferencesReady, setPreferencesReady] = useState(false);
+  const pendingProcessedDocumentIds = useRef(new Set<string>());
+
+  const resolveDocumentId = useCallback(
+    (id: string) => resolveDocumentAlias(id, documentIdAliases),
+    [documentIdAliases],
+  );
 
   const updateCachedDocument = useCallback(
     (id: string, update: (document: DocumentItem) => DocumentItem) => {
@@ -315,6 +326,7 @@ export function AppProvider({ children }: PropsWithChildren) {
   const clearDocumentDetails = useCallback(() => {
     documentDetailsRef.current = {};
     setDocumentDetails({});
+    setDocumentDetailsVersion((current) => current + 1);
   }, []);
 
   const loadRemoteWorkspace = useCallback(async (nextCredentials: PaperlessCredentials) => {
@@ -331,8 +343,16 @@ export function AppProvider({ children }: PropsWithChildren) {
       setConnectionError(null);
       try {
         const { workspace, info } = await loadRemoteWorkspace(nextCredentials);
+        const workspaceDocumentIds = new Set(workspace.documents.map((document) => document.id));
+        for (const id of pendingProcessedDocumentIds.current) {
+          if (workspaceDocumentIds.has(id)) pendingProcessedDocumentIds.current.delete(id);
+        }
         setDocuments((current) => [
-          ...current.filter((document) => document.status === 'processing'),
+          ...current.filter(
+            (document) =>
+              !workspaceDocumentIds.has(document.id) &&
+              (document.status === 'processing' || pendingProcessedDocumentIds.current.has(document.id)),
+          ),
           ...workspace.documents,
         ]);
         clearDocumentDetails();
@@ -382,6 +402,8 @@ export function AppProvider({ children }: PropsWithChildren) {
       try {
         const { workspace, info } = await loadRemoteWorkspace(nextCredentials);
         await saveStoredValue(CREDENTIALS_KEY, nextCredentials);
+        pendingProcessedDocumentIds.current.clear();
+        setDocumentIdAliases({});
         setCredentials(nextCredentials);
         setDocuments(workspace.documents);
         clearDocumentDetails();
@@ -401,6 +423,8 @@ export function AppProvider({ children }: PropsWithChildren) {
 
   const disconnect = useCallback(async () => {
     await saveStoredValue(CREDENTIALS_KEY, null);
+    pendingProcessedDocumentIds.current.clear();
+    setDocumentIdAliases({});
     setCredentials(null);
     setConnectionInfo(null);
     setDocuments(demoWorkspace.documents);
@@ -865,17 +889,38 @@ export function AppProvider({ children }: PropsWithChildren) {
           const task = await waitForPaperlessTask(credentials, taskId);
           let processed: DocumentItem | null = null;
           if (task.documentId) {
-            processed = await fetchPaperlessDocument(credentials, task.documentId, catalog);
+            processed = {
+              ...(await fetchPaperlessDocument(credentials, task.documentId, catalog)),
+              taskId,
+            };
           }
-          setDocuments((current) => {
-            const withoutPlaceholder = current.filter((item) => item.id !== placeholderId);
-            return processed ? [processed, ...withoutPlaceholder] : withoutPlaceholder;
-          });
-          setTotalDocuments((current) => current + 1);
+          if (processed) {
+            pendingProcessedDocumentIds.current.add(processed.id);
+            setDocumentIdAliases((current) => ({ ...current, [placeholderId]: processed.id }));
+            setDocuments((current) => {
+              const withoutPlaceholder = current.filter((item) => item.id !== placeholderId);
+              return [processed, ...withoutPlaceholder];
+            });
+            void sync(credentials).catch(() => {
+              // Preserve the freshly processed document until a later sync confirms it in the catalog.
+            });
+            setTotalDocuments((current) => current + 1);
+          } else {
+            setDocuments((current) =>
+              current.map((item) =>
+                item.id === placeholderId
+                  ? {
+                      ...item,
+                      fileSize: 'Finalizing',
+                      suggestion: 'Syncing the finished document',
+                    }
+                  : item,
+              ),
+            );
+            await sync(credentials);
+            setDocuments((current) => current.filter((item) => item.id !== placeholderId));
+          }
           if (preferences.processingNotifications) await notifyDocumentProcessed(processed?.title || title);
-          sync(credentials).catch(() => {
-            // The freshly processed document is already in local state; a later refresh can update catalogs.
-          });
         } catch (error) {
           const message = errorMessage(error);
           setDocuments((current) =>
@@ -927,6 +972,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       lastSynced,
       connectionError,
       operationError,
+      resolveDocumentId,
       preferences,
       preferencesReady,
       clearOperationError: () => setOperationError(null),
@@ -971,6 +1017,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       isSyncing,
       lastSynced,
       operationError,
+      resolveDocumentId,
       preferences,
       preferencesReady,
       refresh,
@@ -994,8 +1041,8 @@ export function AppProvider({ children }: PropsWithChildren) {
   );
 
   const detailValue = useMemo<DocumentDetailContextValue>(
-    () => ({ details: documentDetails, loadDocumentDetails }),
-    [documentDetails, loadDocumentDetails],
+    () => ({ details: documentDetails, version: documentDetailsVersion, loadDocumentDetails }),
+    [documentDetails, documentDetailsVersion, loadDocumentDetails],
   );
 
   return (
@@ -1018,6 +1065,7 @@ export function useDocumentDetail(id: string) {
   if (!context) throw new Error('useDocumentDetail must be used inside AppProvider');
   return {
     document: context.details[id],
+    version: context.version,
     loadDocumentDetails: context.loadDocumentDetails,
   };
 }

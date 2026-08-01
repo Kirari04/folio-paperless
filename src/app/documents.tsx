@@ -120,7 +120,7 @@ const DocumentsScreen = memo(function DocumentsScreen({
   }, [credentials]);
 
   useEffect(() => {
-    const firstDocument = documents[0];
+    const firstDocument = documents.find((document) => document.status !== 'processing');
     if (!firstDocument || prewarmedFirstDocumentId.current === firstDocument.id) return;
     const timer = setTimeout(() => {
       prewarmedFirstDocumentId.current = firstDocument.id;

@@ -186,6 +186,7 @@ export function MotionScreen({
         StyleSheet.absoluteFill,
         {
           backgroundColor,
+          display: visible ? 'flex' : 'none',
           zIndex: 30,
         },
       ]}>

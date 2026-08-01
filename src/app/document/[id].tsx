@@ -45,6 +45,7 @@ import {
 } from '@/components/motion';
 import { fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
 import { useApp, useDocumentDetail } from '@/context/app-context';
+import { findRoutedDocument, taskIdFromPlaceholderId } from '@/lib/document-routing';
 import { getPaperlessDocumentUrl, paperlessFileHeaders } from '@/lib/paperless';
 import { useLocalSearchParams, useRouter } from '@/lib/router';
 import { isValidIsoDate } from '@/lib/validation';
@@ -68,7 +69,7 @@ export default function DocumentDetailScreen({
   documentId,
 }: DocumentDetailScreenProps = {}) {
   const routeParams = useLocalSearchParams<{ id?: string; from?: string }>();
-  const id = documentId || routeParams.id || '';
+  const requestedId = documentId || routeParams.id || '';
   const from = documentFrom || routeParams.from;
   const router = useRouter();
   const reducedMotion = useReducedMotion();
@@ -82,12 +83,20 @@ export default function DocumentDetailScreen({
     createTag,
     deleteDocument,
     reprocessDocument,
+    resolveDocumentId,
     shareDocument: shareDocumentFile,
     saveDocument,
   } = useApp();
-  const listDocument = documents.find((item) => item.id === id);
-  const { document: detailedDocument, loadDocumentDetails } = useDocumentDetail(id);
+  const resolvedId = resolveDocumentId(requestedId);
+  const listDocument = findRoutedDocument(documents, requestedId, resolvedId);
+  const id = listDocument?.id || resolvedId;
+  const {
+    document: detailedDocument,
+    loadDocumentDetails,
+    version: documentDetailsVersion,
+  } = useDocumentDetail(id);
   const document = detailedDocument || listDocument;
+  const requestedTaskId = taskIdFromPlaceholderId(requestedId);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(document?.title || '');
   const [created, setCreated] = useState(document?.created || '');
@@ -102,7 +111,8 @@ export default function DocumentDetailScreen({
   const [selectedVersionId, setSelectedVersionId] = useState<number | string | undefined>();
   const [previewReady, setPreviewReady] = useState(false);
   const [screenOpacity] = useState(() => new Animated.Value(0));
-  const detailLoaded = useRef(false);
+  const detailLoadSignature = useRef<string | null>(null);
+  const presentedDocumentId = useRef(document?.id);
   const closing = useRef(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewVersionId = typeof selectedVersionId === 'number' ? selectedVersionId : undefined;
@@ -173,14 +183,6 @@ export default function DocumentDetailScreen({
       secondFrame = requestAnimationFrame(() => {
         if (!mounted) return;
         setPreviewReady(true);
-        if (!detailLoaded.current && listDocument?.remoteId) {
-          detailLoaded.current = true;
-          void loadDocumentDetails(id).catch((error) => {
-            if (mounted) {
-              showToast(error instanceof Error ? error.message : 'Could not load document metadata.', true);
-            }
-          });
-        }
       });
     });
     return () => {
@@ -188,7 +190,57 @@ export default function DocumentDetailScreen({
       cancelAnimationFrame(firstFrame);
       if (secondFrame) cancelAnimationFrame(secondFrame);
     };
-  }, [active, id, listDocument?.remoteId, loadDocumentDetails, previewReady]);
+  }, [active, previewReady]);
+
+  useEffect(() => {
+    const loadSignature = `${id}:${documentDetailsVersion}`;
+    if (
+      !active ||
+      !previewReady ||
+      !listDocument?.remoteId ||
+      detailLoadSignature.current === loadSignature
+    ) return;
+    let mounted = true;
+    detailLoadSignature.current = loadSignature;
+    void loadDocumentDetails(id).catch((error) => {
+      if (mounted) {
+        showToast(error instanceof Error ? error.message : 'Could not load document metadata.', true);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [active, documentDetailsVersion, id, listDocument?.remoteId, loadDocumentDetails, previewReady]);
+
+  useEffect(() => {
+    if (!document || presentedDocumentId.current === document.id) return;
+    presentedDocumentId.current = document.id;
+    setTitle(document.title);
+    setCreated(document.created);
+    setEditing(false);
+    setEditingDate(false);
+    setExpandedText(false);
+    setPreviewFailed(false);
+    setPreviewOpen(false);
+    setPicker(null);
+    setMoreOpen(false);
+    setSelectedVersionId(undefined);
+  }, [document]);
+
+  useEffect(() => {
+    if (!active || document || !requestedTaskId) return;
+    router.replace('/inbox');
+  }, [active, document, requestedTaskId, router]);
+
+  if (!document && requestedTaskId) {
+    return (
+      <View accessibilityLiveRegion="polite" style={styles.notFound}>
+        <ActivityIndicator color={palette.ink} size="large" />
+        <Text style={styles.notFoundTitle}>Finalizing document</Text>
+        <Text style={styles.transitionCopy}>Syncing the finished file with your inbox…</Text>
+      </View>
+    );
+  }
 
   if (!document) {
     return (
@@ -1210,6 +1262,15 @@ const styles = StyleSheet.create({
     fontFamily: fonts.serif,
     fontSize: 25,
     marginTop: 13,
+  },
+  transitionCopy: {
+    maxWidth: 300,
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 7,
+    textAlign: 'center',
   },
   backLink: {
     color: palette.limeDark,
