@@ -5,6 +5,8 @@ import {
   DocumentItem,
   LibraryFilters,
   PaperlessCatalog,
+  PaperlessCreatableOptionKind,
+  PaperlessCreationCapabilities,
   PaperlessConnectionInfo,
   PaperlessCredentials,
   PaperlessCustomFieldDataType,
@@ -39,6 +41,13 @@ type ApiUser = {
   username: string;
   first_name?: string;
   last_name?: string;
+};
+
+type ApiUiSettings = {
+  user?: {
+    is_superuser?: boolean;
+  };
+  permissions?: string[];
 };
 
 type ApiDocument = {
@@ -590,6 +599,21 @@ export async function testPaperlessConnection(
   };
 }
 
+export async function fetchPaperlessCreationCapabilities(
+  credentials: PaperlessCredentials,
+): Promise<PaperlessCreationCapabilities> {
+  const settings = await getJson<ApiUiSettings>(credentials, '/api/ui_settings/');
+  const permissions = new Set(settings.permissions || []);
+  const canAdd = (permission: string) =>
+    settings.user?.is_superuser === true || permissions.has(permission);
+
+  return {
+    tag: canAdd('add_tag'),
+    correspondent: canAdd('add_correspondent'),
+    documentType: canAdd('add_documenttype'),
+  };
+}
+
 export async function fetchPaperlessWorkspace(
   credentials: PaperlessCredentials,
 ): Promise<PaperlessWorkspace> {
@@ -671,11 +695,64 @@ export async function updatePaperlessDocument(
   await sendJson<ApiDocument>(credentials, `/api/documents/${remoteId}/`, 'PATCH', body);
 }
 
-export async function createPaperlessTag(credentials: PaperlessCredentials, name: string) {
-  const item = await sendJson<ApiNamedItem>(credentials, '/api/tags/', 'POST', {
-    name: name.trim(),
-  });
-  return toOption('tag', item);
+const creatableOptionConfig: Record<PaperlessCreatableOptionKind, {
+  endpoint: string;
+  noun: string;
+  optionKind: string;
+}> = {
+  tag: { endpoint: '/api/tags/', noun: 'tag', optionKind: 'tag' },
+  correspondent: {
+    endpoint: '/api/correspondents/',
+    noun: 'correspondent',
+    optionKind: 'correspondent',
+  },
+  documentType: {
+    endpoint: '/api/document_types/',
+    noun: 'document type',
+    optionKind: 'type',
+  },
+};
+
+async function fetchPaperlessCreatableOptions(
+  credentials: PaperlessCredentials,
+  kind: PaperlessCreatableOptionKind,
+) {
+  const config = creatableOptionConfig[kind];
+  const page = await getAllPages<ApiNamedItem>(
+    credentials,
+    `${config.endpoint}?page_size=100&ordering=name`,
+  );
+  return page.results.map((item) => toOption(config.optionKind, item));
+}
+
+export async function createPaperlessCatalogOption(
+  credentials: PaperlessCredentials,
+  kind: PaperlessCreatableOptionKind,
+  name: string,
+) {
+  const config = creatableOptionConfig[kind];
+  const normalized = name.trim();
+  try {
+    const item = await sendJson<ApiNamedItem>(credentials, config.endpoint, 'POST', {
+      name: normalized,
+    });
+    return toOption(config.optionKind, item);
+  } catch (error) {
+    if (error instanceof PaperlessApiError && error.status === 400) {
+      const options = await fetchPaperlessCreatableOptions(credentials, kind);
+      const existing = options.find(
+        (option) => option.name.trim().toLocaleLowerCase() === normalized.toLocaleLowerCase(),
+      );
+      if (existing) return existing;
+      if (/unique|already exists|owner \/ name/i.test(error.message)) {
+        throw new PaperlessApiError(
+          `A ${config.noun} with this name already exists but is not available to this account.`,
+          400,
+        );
+      }
+    }
+    throw error;
+  }
 }
 
 export async function deletePaperlessDocument(credentials: PaperlessCredentials, remoteId: number) {

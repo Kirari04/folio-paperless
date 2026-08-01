@@ -83,10 +83,11 @@ export default function DocumentDetailScreen({
     documents,
     credentials,
     catalog,
+    creationCapabilities,
     isSyncing,
     approveDocument,
     updateDocument,
-    createTag,
+    createCatalogOption,
     deleteDocument,
     reprocessDocument,
     retryDocumentProcessing,
@@ -846,8 +847,12 @@ export default function DocumentDetailScreen({
 
       {picker === 'correspondent' && <ChoiceSheet
         allowNone
+        createLabel="Create a new correspondent"
+        creationAllowed={creationCapabilities.correspondent}
+        creationNoun="correspondent"
         onClose={() => setPicker(null)}
         onConfirm={async (selected) => updateDocument(id, { correspondent: selected[0] || null })}
+        onCreate={(name) => createCatalogOption('correspondent', name)}
         options={catalog.correspondents}
         selectedIds={document.correspondentId ? [document.correspondentId] : []}
         title="Correspondent"
@@ -855,8 +860,12 @@ export default function DocumentDetailScreen({
       />}
       {picker === 'documentType' && <ChoiceSheet
         allowNone
+        createLabel="Create a new document type"
+        creationAllowed={creationCapabilities.documentType}
+        creationNoun="document type"
         onClose={() => setPicker(null)}
         onConfirm={async (selected) => updateDocument(id, { documentType: selected[0] || null })}
+        onCreate={(name) => createCatalogOption('documentType', name)}
         options={catalog.documentTypes}
         selectedIds={document.documentTypeId ? [document.documentTypeId] : []}
         title="Document type"
@@ -864,10 +873,12 @@ export default function DocumentDetailScreen({
       />}
       {picker === 'tags' && <ChoiceSheet
         createLabel="Create a new tag"
+        creationAllowed={creationCapabilities.tag}
+        creationNoun="tag"
         multiple
         onClose={() => setPicker(null)}
         onConfirm={async (selected) => updateDocument(id, { tags: selected })}
-        onCreate={createTag}
+        onCreate={(name) => createCatalogOption('tag', name)}
         options={catalog.tags}
         selectedIds={document.tagIds}
         title="Tags"

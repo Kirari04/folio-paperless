@@ -7,6 +7,13 @@ export type PaperlessOption = {
   color?: string;
 };
 
+export type PaperlessCreatableOptionKind = 'tag' | 'correspondent' | 'documentType';
+
+export type PaperlessCreationCapabilities = Record<
+  PaperlessCreatableOptionKind,
+  boolean | null
+>;
+
 export type PaperlessCustomFieldDataType =
   | 'string'
   | 'url'

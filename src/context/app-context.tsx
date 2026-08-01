@@ -17,12 +17,13 @@ import { notifyDocumentProcessed, requestProcessingNotificationPermission, requi
 import { savePaperlessDocument, sharePaperlessDocument } from '@/lib/document-files';
 import {
   addPaperlessNote,
-  createPaperlessTag,
+  createPaperlessCatalogOption,
   deletePaperlessDocument,
   deletePaperlessNote,
   deletePaperlessVersion,
   emptyPaperlessTrash,
   fetchPaperlessDocument,
+  fetchPaperlessCreationCapabilities,
   fetchPaperlessLibraryDocuments,
   fetchPaperlessSavedViewDocuments,
   fetchPaperlessTrash,
@@ -41,6 +42,8 @@ import {
   DocumentChanges,
   DocumentItem,
   PaperlessCatalog,
+  PaperlessCreatableOptionKind,
+  PaperlessCreationCapabilities,
   PaperlessConnectionInfo,
   PaperlessCredentials,
   PaperlessDocumentVersion,
@@ -83,6 +86,7 @@ type AppContextValue = {
   connected: boolean;
   credentials: PaperlessCredentials | null;
   connectionInfo: PaperlessConnectionInfo | null;
+  creationCapabilities: PaperlessCreationCapabilities;
   isBootstrapping: boolean;
   isSyncing: boolean;
   lastSynced: string;
@@ -100,7 +104,10 @@ type AppContextValue = {
   importDocument: (file: ImportFile, options?: ImportDocumentOptions) => Promise<void>;
   retryDocumentProcessing: (id: string) => Promise<void>;
   updateDocument: (id: string, changes: DocumentChanges) => Promise<void>;
-  createTag: (name: string) => Promise<PaperlessOption>;
+  createCatalogOption: (
+    kind: PaperlessCreatableOptionKind,
+    name: string,
+  ) => Promise<PaperlessOption>;
   deleteDocument: (id: string) => Promise<void>;
   reprocessDocument: (id: string) => Promise<void>;
   loadSavedView: (view: PaperlessSavedView) => Promise<DocumentItem[]>;
@@ -122,6 +129,18 @@ type AppContextValue = {
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
+
+const demoCreationCapabilities: PaperlessCreationCapabilities = {
+  tag: true,
+  correspondent: true,
+  documentType: true,
+};
+
+const unknownCreationCapabilities: PaperlessCreationCapabilities = {
+  tag: null,
+  correspondent: null,
+  documentType: null,
+};
 
 type DocumentDetailContextValue = {
   details: Record<string, DocumentItem>;
@@ -252,6 +271,33 @@ function syncedLabel() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function catalogOptionsForKind(
+  catalog: PaperlessCatalog,
+  kind: PaperlessCreatableOptionKind,
+) {
+  if (kind === 'tag') return catalog.tags;
+  if (kind === 'correspondent') return catalog.correspondents;
+  return catalog.documentTypes;
+}
+
+function addCatalogOption(
+  catalog: PaperlessCatalog,
+  kind: PaperlessCreatableOptionKind,
+  option: PaperlessOption,
+) {
+  const key = kind === 'tag'
+    ? 'tags'
+    : kind === 'correspondent'
+      ? 'correspondents'
+      : 'documentTypes';
+  const options = catalog[key];
+  if (options.some((item) => item.id === option.id)) return catalog;
+  return {
+    ...catalog,
+    [key]: [...options, option].sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
 function applyDocumentChanges(document: DocumentItem, changes: DocumentChanges): DocumentItem {
   const tags = changes.tags;
   return {
@@ -300,6 +346,8 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [totalDocuments, setTotalDocuments] = useState(demoWorkspace.documents.length);
   const [credentials, setCredentials] = useState<PaperlessCredentials | null>(null);
   const [connectionInfo, setConnectionInfo] = useState<PaperlessConnectionInfo | null>(null);
+  const [creationCapabilities, setCreationCapabilities] =
+    useState<PaperlessCreationCapabilities>(demoCreationCapabilities);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSynced, setLastSynced] = useState('demo mode');
@@ -335,11 +383,13 @@ export function AppProvider({ children }: PropsWithChildren) {
   }, []);
 
   const loadRemoteWorkspace = useCallback(async (nextCredentials: PaperlessCredentials) => {
-    const [workspace, info] = await Promise.all([
+    const [workspace, info, nextCreationCapabilities] = await Promise.all([
       fetchPaperlessWorkspace(nextCredentials),
       testPaperlessConnection(nextCredentials),
+      fetchPaperlessCreationCapabilities(nextCredentials)
+        .catch(() => unknownCreationCapabilities),
     ]);
-    return { workspace, info };
+    return { workspace, info, creationCapabilities: nextCreationCapabilities };
   }, []);
 
   const sync = useCallback(
@@ -347,7 +397,8 @@ export function AppProvider({ children }: PropsWithChildren) {
       setIsSyncing(true);
       setConnectionError(null);
       try {
-        const { workspace, info } = await loadRemoteWorkspace(nextCredentials);
+        const { workspace, info, creationCapabilities: nextCreationCapabilities } =
+          await loadRemoteWorkspace(nextCredentials);
         const workspaceDocumentIds = new Set(workspace.documents.map((document) => document.id));
         for (const id of pendingProcessedDocumentIds.current) {
           if (workspaceDocumentIds.has(id)) pendingProcessedDocumentIds.current.delete(id);
@@ -364,6 +415,7 @@ export function AppProvider({ children }: PropsWithChildren) {
         setCatalog(workspace.catalog);
         setTotalDocuments(workspace.totalDocuments);
         setConnectionInfo(info);
+        setCreationCapabilities(nextCreationCapabilities);
         setLastSynced(syncedLabel());
       } catch (error) {
         setConnectionError(errorMessage(error));
@@ -405,7 +457,8 @@ export function AppProvider({ children }: PropsWithChildren) {
       setIsSyncing(true);
       setConnectionError(null);
       try {
-        const { workspace, info } = await loadRemoteWorkspace(nextCredentials);
+        const { workspace, info, creationCapabilities: nextCreationCapabilities } =
+          await loadRemoteWorkspace(nextCredentials);
         await saveStoredValue(CREDENTIALS_KEY, nextCredentials);
         pendingProcessedDocumentIds.current.clear();
         setDocumentIdAliases({});
@@ -415,6 +468,7 @@ export function AppProvider({ children }: PropsWithChildren) {
         setCatalog(workspace.catalog);
         setTotalDocuments(workspace.totalDocuments);
         setConnectionInfo(info);
+        setCreationCapabilities(nextCreationCapabilities);
         setLastSynced(syncedLabel());
       } catch (error) {
         setConnectionError(errorMessage(error));
@@ -432,6 +486,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     setDocumentIdAliases({});
     setCredentials(null);
     setConnectionInfo(null);
+    setCreationCapabilities(demoCreationCapabilities);
     setDocuments(demoWorkspace.documents);
     clearDocumentDetails();
     setCatalog(demoWorkspace.catalog);
@@ -537,30 +592,31 @@ export function AppProvider({ children }: PropsWithChildren) {
     [catalog, credentials, documents],
   );
 
-  const createTag = useCallback(
-    async (name: string) => {
+  const createCatalogOption = useCallback(
+    async (kind: PaperlessCreatableOptionKind, name: string) => {
       const normalized = name.trim();
-      if (!normalized) throw new Error('Enter a tag name.');
-      const existing = catalog.tags.find(
-        (tag) => tag.name.toLocaleLowerCase() === normalized.toLocaleLowerCase(),
+      const noun = kind === 'documentType' ? 'document type' : kind;
+      if (!normalized) throw new Error(`Enter a ${noun} name.`);
+      const existing = catalogOptionsForKind(catalog, kind).find(
+        (option) => option.name.toLocaleLowerCase() === normalized.toLocaleLowerCase(),
       );
       if (existing) return existing;
 
       try {
-        const tag = credentials
-          ? await createPaperlessTag(credentials, normalized)
-          : { id: `local-tag-${Date.now()}`, name: normalized };
-        setCatalog((current) => ({
-          ...current,
-          tags: [...current.tags, tag].sort((a, b) => a.name.localeCompare(b.name)),
-        }));
-        return tag;
+        const option = credentials
+          ? await createPaperlessCatalogOption(credentials, kind, normalized)
+          : { id: `local-${kind}-${Date.now()}`, name: normalized };
+        setCatalog((current) => addCatalogOption(current, kind, option));
+        return option;
       } catch (error) {
-        setOperationError(errorMessage(error));
-        throw error;
+        const message = error instanceof Error && 'status' in error && error.status === 403
+          ? `Your Paperless account can't create ${kind === 'documentType' ? 'document types' : `${noun}s`}.`
+          : errorMessage(error);
+        setOperationError(message);
+        throw new Error(message);
       }
     },
-    [catalog.tags, credentials],
+    [catalog, credentials],
   );
 
   const deleteDocument = useCallback(
@@ -1068,6 +1124,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       connected: Boolean(credentials),
       credentials,
       connectionInfo,
+      creationCapabilities,
       isBootstrapping,
       isSyncing,
       lastSynced,
@@ -1085,7 +1142,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       importDocument,
       retryDocumentProcessing,
       updateDocument,
-      createTag,
+      createCatalogOption,
       deleteDocument,
       reprocessDocument,
       loadSavedView,
@@ -1108,8 +1165,9 @@ export function AppProvider({ children }: PropsWithChildren) {
       connect,
       connectionError,
       connectionInfo,
+      creationCapabilities,
       credentials,
-      createTag,
+      createCatalogOption,
       deferDocument,
       deleteDocument,
       disconnect,
