@@ -231,8 +231,9 @@ jobs:
             exit 1
           fi
           grep -Fq 'CN=Folio for Paperless' "$signature_report" || { echo 'Unexpected signing certificate identity.' >&2; exit 1; }
+          grep -Fqx 'Number of signers: 1' "$signature_report" || { echo 'APK must have exactly one signer.' >&2; exit 1; }
 
-          actual_fingerprint="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$signature_report" | head -n 1 | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+          actual_fingerprint="$(sed -n 's/^.*certificate SHA-256 digest: //p' "$signature_report" | head -n 1 | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
           expected_fingerprint="$(printf '%s' "$ANDROID_CERT_SHA256" | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
           if [ -z "$actual_fingerprint" ] || [ "$actual_fingerprint" != "$expected_fingerprint" ]; then
             echo 'APK certificate SHA-256 does not match the release environment fingerprint.' >&2
