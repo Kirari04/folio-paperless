@@ -2,7 +2,9 @@ import {
   Bell,
   Check,
   ChevronRight,
+  CircleAlert,
   Cloud,
+  Download,
   ExternalLink,
   Fingerprint,
   Info,
@@ -33,9 +35,12 @@ import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/c
 import { FolioLogo } from '@/components/folio-logo';
 import { fonts, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
+import { useUpdates } from '@/context/update-context';
+import { formatUpdateSize } from '@/lib/app-updates';
 import { useRouter } from '@/lib/router';
 
 export default function SettingsScreen() {
+  const updates = useUpdates();
   const versionLabel = Constants.expoConfig?.version
     ? `Version ${Constants.expoConfig.version}`
     : 'Development build';
@@ -137,6 +142,43 @@ export default function SettingsScreen() {
     setToken(credentials?.token || '');
     setEditingServer(true);
   }
+
+  function openSoftwareUpdates() {
+    updates.openUpdateSheet();
+    if (updates.status === 'idle' || updates.status === 'error') {
+      void updates.checkForUpdates();
+    }
+  }
+
+  const updateSubtitle = (() => {
+    if (updates.support === 'initializing') return 'Preparing secure update checks…';
+    if (updates.support === 'development-build') return 'Release updates stay off in development builds';
+    if (updates.support === 'module-unavailable') return 'Rebuild once to enable native verification';
+    if (updates.support === 'android-release-only') return 'Signed Android releases are available on GitHub';
+
+    switch (updates.status) {
+      case 'checking':
+        return 'Checking GitHub Releases…';
+      case 'available':
+        return `Version ${updates.release?.version} available · ${formatUpdateSize(updates.release?.apk?.size ?? 0)}`;
+      case 'downloading':
+        return `Downloading from GitHub · ${Math.round(updates.progress * 100)}%`;
+      case 'verifying':
+        return 'Verifying hash, package, version, and signer…';
+      case 'ready':
+        return `Version ${updates.release?.version} is verified and ready`;
+      case 'permission':
+        return 'Waiting for Android install permission';
+      case 'installing':
+        return 'Opening the Android installer…';
+      case 'error':
+        return 'Update interrupted · Tap to try again';
+      case 'up-to-date':
+        return `${versionLabel} · Up to date`;
+      default:
+        return 'GitHub Releases · Automatic daily checks';
+    }
+  })();
 
   return (
     <>
@@ -260,6 +302,7 @@ export default function SettingsScreen() {
         />
         <SettingRow
           icon={Bell}
+          last
           title="Processing notifications"
           subtitle="Notify when an uploaded document is ready"
           trailing={
@@ -283,6 +326,13 @@ export default function SettingsScreen() {
       <Text style={styles.sectionLabel}>ABOUT</Text>
       <View style={styles.settingsGroup}>
         <SettingRow
+          icon={Download}
+          onPress={openSoftwareUpdates}
+          title="Software updates"
+          subtitle={updateSubtitle}
+          trailing={<UpdateStatusTrailing />}
+        />
+        <SettingRow
           icon={Info}
           onPress={() =>
             Alert.alert(
@@ -296,6 +346,7 @@ export default function SettingsScreen() {
         />
         <SettingRow
           icon={ExternalLink}
+          last
           onPress={() => Linking.openURL('https://docs.paperless-ngx.com/')}
           title="Paperless documentation"
           subtitle="API and server setup"
@@ -402,15 +453,20 @@ function SettingRow({
   subtitle,
   trailing,
   onPress,
+  last = false,
 }: {
   icon: IconComponent;
   title: string;
   subtitle: string;
   trailing: React.ReactNode;
   onPress?: () => void;
+  last?: boolean;
 }) {
   return (
-    <Pressable disabled={!onPress} onPress={onPress} style={styles.settingRow}>
+    <Pressable
+      disabled={!onPress}
+      onPress={onPress}
+      style={[styles.settingRow, last && styles.settingRowLast]}>
       <View style={styles.settingIcon}>
         <Icon color={palette.ink} size={19} />
       </View>
@@ -421,6 +477,30 @@ function SettingRow({
       {trailing}
     </Pressable>
   );
+}
+
+function UpdateStatusTrailing() {
+  const { status } = useUpdates();
+  if (status === 'checking' || status === 'downloading' || status === 'verifying' || status === 'installing') {
+    return <ActivityIndicator color={palette.ink} size="small" />;
+  }
+  if (status === 'available') {
+    return (
+      <View style={styles.updateBadge}>
+        <Text style={styles.updateBadgeText}>NEW</Text>
+      </View>
+    );
+  }
+  if (status === 'ready' || status === 'permission') {
+    return (
+      <View style={[styles.updateBadge, styles.updateBadgeReady]}>
+        <Text style={styles.updateBadgeText}>READY</Text>
+      </View>
+    );
+  }
+  if (status === 'error') return <CircleAlert color={palette.danger} size={18} />;
+  if (status === 'up-to-date') return <Check color={palette.limeDark} size={19} strokeWidth={2.5} />;
+  return <ChevronRight color={palette.faint} size={18} />;
 }
 
 const styles = StyleSheet.create({
@@ -698,6 +778,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderColor: palette.line,
   },
+  settingRowLast: {
+    borderBottomWidth: 0,
+  },
   settingIcon: {
     width: 36,
     height: 36,
@@ -720,6 +803,25 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sans,
     fontSize: 10,
     marginTop: 3,
+  },
+  updateBadge: {
+    minWidth: 42,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    borderRadius: radii.pill,
+    backgroundColor: palette.lime,
+  },
+  updateBadgeReady: {
+    backgroundColor: palette.mint,
+  },
+  updateBadgeText: {
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.6,
   },
   privacyNote: {
     color: palette.faint,

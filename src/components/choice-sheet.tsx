@@ -28,6 +28,8 @@ type ChoiceSheetProps = {
   multiple?: boolean;
   allowNone?: boolean;
   createLabel?: string;
+  creationAllowed?: boolean | null;
+  creationNoun?: string;
   onClose: () => void;
   onConfirm: (selected: PaperlessOption[]) => Promise<void> | void;
   onCreate?: (name: string) => Promise<PaperlessOption>;
@@ -43,6 +45,8 @@ export function ChoiceSheet({
   multiple = false,
   allowNone = false,
   createLabel,
+  creationAllowed,
+  creationNoun,
   onClose,
   onConfirm,
   onCreate,
@@ -54,6 +58,7 @@ export function ChoiceSheet({
   const [query, setQuery] = useState('');
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [error, setError] = useState<string | null>(null);
+  const [createdOptionName, setCreatedOptionName] = useState<string | null>(null);
 
   useEffect(() => {
     if (visible && !wasVisible.current) {
@@ -62,6 +67,7 @@ export function ChoiceSheet({
       setQuery('');
       setBusyAction(null);
       setError(null);
+      setCreatedOptionName(null);
     }
     wasVisible.current = visible;
   }, [options, selectedIds, visible]);
@@ -78,10 +84,13 @@ export function ChoiceSheet({
   const hasExactMatch = localOptions.some(
     (option) => option.name.trim().toLocaleLowerCase() === normalizedQuery,
   );
-  const canCreate = !!onCreate && !!normalizedQuery && !hasExactMatch;
+  const canOfferCreation = !!onCreate && creationAllowed !== false;
+  const canCreate = canOfferCreation && !!normalizedQuery && !hasExactMatch;
+  const creationDenied = !!onCreate && creationAllowed === false;
   const saving = busyAction !== null;
   const canConfirm = multiple || allowNone || draftIds.length > 0;
-  const selectionNoun = title.trim().toLocaleLowerCase() === 'tags' ? 'tag' : 'item';
+  const selectionNoun = creationNoun || (title.trim().toLocaleLowerCase() === 'tags' ? 'tag' : 'item');
+  const selectionNounPlural = `${selectionNoun}s`;
 
   function toggle(option: PaperlessOption) {
     setError(null);
@@ -112,7 +121,7 @@ export function ChoiceSheet({
 
   async function createOption() {
     const name = query.trim();
-    if (!name || !onCreate || hasExactMatch) return;
+    if (!name || !onCreate || hasExactMatch || creationAllowed === false) return;
     setBusyAction('create');
     setError(null);
     try {
@@ -124,10 +133,11 @@ export function ChoiceSheet({
       setDraftIds((current) => multiple
         ? [...new Set([...current, option.id])]
         : [option.id]);
+      setCreatedOptionName(option.name);
       setQuery('');
       await hapticFeedback('confirm');
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Could not create this item.');
+      setError(nextError instanceof Error ? nextError.message : `Could not create this ${selectionNoun}.`);
       await hapticFeedback('error');
     } finally {
       setBusyAction(null);
@@ -154,7 +164,7 @@ export function ChoiceSheet({
       )}
       {canCreate && (
         <Pressable
-          accessibilityHint="Creates this item in Paperless and selects it"
+          accessibilityHint={`Creates this ${selectionNoun} in Paperless and selects it`}
           disabled={saving}
           haptic="none"
           onPress={createOption}
@@ -166,7 +176,7 @@ export function ChoiceSheet({
           </View>
           <View style={styles.optionCopy}>
             <Text numberOfLines={1} style={styles.createName}>Create “{query.trim()}”</Text>
-            <Text style={styles.optionMeta}>Add to Paperless and select it</Text>
+            <Text style={styles.optionMeta}>Create in Paperless · assign with Apply</Text>
           </View>
         </Pressable>
       )}
@@ -205,12 +215,23 @@ export function ChoiceSheet({
         )}
       </View>
 
-      {!!onCreate && !query && (
+      {canOfferCreation && !query && !createdOptionName && (
         <Text style={styles.createHint}>
           {createLabel
             ? `${createLabel}: type a name above.`
             : 'Type a new name to create it without leaving this sheet.'}
         </Text>
+      )}
+
+      {!!createdOptionName && !query && (
+        <View accessibilityLiveRegion="polite" style={styles.createdBox}>
+          <View style={styles.createdIcon}>
+            <Check color={palette.ink} size={14} />
+          </View>
+          <Text style={styles.createdText}>
+            “{createdOptionName}” created in Paperless. Apply to assign it.
+          </Text>
+        </View>
       )}
 
       {multiple && !!selectedOptions.length && (
@@ -252,8 +273,16 @@ export function ChoiceSheet({
         keyExtractor={(item) => item.id}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>{canCreate ? 'No existing match' : 'No matches'}</Text>
-            <Text style={styles.emptyCopy}>{canCreate ? 'Create it above, or try another name.' : 'Try another name.'}</Text>
+            <Text style={styles.emptyTitle}>
+              {canCreate || creationDenied ? 'No existing match' : 'No matches'}
+            </Text>
+            <Text style={styles.emptyCopy}>
+              {canCreate
+                ? `Create this ${selectionNoun} above, or try another name.`
+                : creationDenied
+                  ? `Your Paperless account can't create ${selectionNounPlural}.`
+                  : 'Try another name.'}
+            </Text>
           </View>
         }
         ListHeaderComponent={header}
@@ -331,8 +360,36 @@ const styles = StyleSheet.create({
     marginTop: 7,
     color: palette.muted,
     fontFamily: fonts.sans,
-    fontSize: 10,
-    lineHeight: 15,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  createdBox: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    marginTop: 8,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: radii.md,
+    backgroundColor: '#EDF6CD',
+  },
+  createdIcon: {
+    width: 26,
+    height: 26,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 13,
+    backgroundColor: palette.lime,
+  },
+  createdText: {
+    flex: 1,
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 16,
   },
   selectedSection: {
     marginTop: 12,
@@ -341,7 +398,7 @@ const styles = StyleSheet.create({
     marginBottom: 7,
     color: palette.muted,
     fontFamily: fonts.sans,
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '900',
     letterSpacing: 0.8,
   },
@@ -363,7 +420,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     color: palette.ink,
     fontFamily: fonts.sans,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '800',
   },
   listView: {
@@ -405,7 +462,8 @@ const styles = StyleSheet.create({
     marginTop: 3,
     color: palette.muted,
     fontFamily: fonts.sans,
-    fontSize: 10,
+    fontSize: 11,
+    lineHeight: 15,
   },
   colorDot: {
     width: 10,

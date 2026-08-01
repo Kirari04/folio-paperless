@@ -36,6 +36,7 @@ import { AppShell } from '@/components/app-shell';
 import { ChoiceSheet } from '@/components/choice-sheet';
 import { DocumentDeepSections } from '@/components/document-deep-sections';
 import { DocumentPreviewViewer } from '@/components/document-preview-viewer';
+import { PaperThumbnail } from '@/components/paper-thumbnail';
 import { TextEditSheet } from '@/components/text-edit-sheet';
 import {
   MotionPressable as Pressable,
@@ -45,6 +46,11 @@ import {
 } from '@/components/motion';
 import { fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
 import { useApp, useDocumentDetail } from '@/context/app-context';
+import {
+  findRoutedDocument,
+  isPendingDocument,
+  taskIdFromPlaceholderId,
+} from '@/lib/document-routing';
 import { getPaperlessDocumentUrl, paperlessFileHeaders } from '@/lib/paperless';
 import { useLocalSearchParams, useRouter } from '@/lib/router';
 import { isValidIsoDate } from '@/lib/validation';
@@ -68,7 +74,7 @@ export default function DocumentDetailScreen({
   documentId,
 }: DocumentDetailScreenProps = {}) {
   const routeParams = useLocalSearchParams<{ id?: string; from?: string }>();
-  const id = documentId || routeParams.id || '';
+  const requestedId = documentId || routeParams.id || '';
   const from = documentFrom || routeParams.from;
   const router = useRouter();
   const reducedMotion = useReducedMotion();
@@ -77,17 +83,29 @@ export default function DocumentDetailScreen({
     documents,
     credentials,
     catalog,
+    creationCapabilities,
+    isSyncing,
     approveDocument,
     updateDocument,
-    createTag,
+    createCatalogOption,
     deleteDocument,
     reprocessDocument,
+    retryDocumentProcessing,
+    refresh,
+    resolveDocumentId,
     shareDocument: shareDocumentFile,
     saveDocument,
   } = useApp();
-  const listDocument = documents.find((item) => item.id === id);
-  const { document: detailedDocument, loadDocumentDetails } = useDocumentDetail(id);
+  const resolvedId = resolveDocumentId(requestedId);
+  const listDocument = findRoutedDocument(documents, requestedId, resolvedId);
+  const id = listDocument?.id || resolvedId;
+  const {
+    document: detailedDocument,
+    loadDocumentDetails,
+    version: documentDetailsVersion,
+  } = useDocumentDetail(id);
   const document = detailedDocument || listDocument;
+  const requestedTaskId = taskIdFromPlaceholderId(requestedId);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(document?.title || '');
   const [created, setCreated] = useState(document?.created || '');
@@ -102,11 +120,13 @@ export default function DocumentDetailScreen({
   const [selectedVersionId, setSelectedVersionId] = useState<number | string | undefined>();
   const [previewReady, setPreviewReady] = useState(false);
   const [screenOpacity] = useState(() => new Animated.Value(0));
-  const detailLoaded = useRef(false);
+  const detailLoadSignature = useRef<string | null>(null);
+  const presentedDocumentId = useRef(document?.id);
   const closing = useRef(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewVersionId = typeof selectedVersionId === 'number' ? selectedVersionId : undefined;
   const canOpenPreview = previewReady && !!credentials && !!document?.remoteId;
+  const documentRefreshing = busyAction === 'refresh' || isSyncing;
 
   const closeDocument = useCallback(() => {
     if (closing.current) return;
@@ -173,14 +193,6 @@ export default function DocumentDetailScreen({
       secondFrame = requestAnimationFrame(() => {
         if (!mounted) return;
         setPreviewReady(true);
-        if (!detailLoaded.current && listDocument?.remoteId) {
-          detailLoaded.current = true;
-          void loadDocumentDetails(id).catch((error) => {
-            if (mounted) {
-              showToast(error instanceof Error ? error.message : 'Could not load document metadata.', true);
-            }
-          });
-        }
       });
     });
     return () => {
@@ -188,7 +200,66 @@ export default function DocumentDetailScreen({
       cancelAnimationFrame(firstFrame);
       if (secondFrame) cancelAnimationFrame(secondFrame);
     };
-  }, [active, id, listDocument?.remoteId, loadDocumentDetails, previewReady]);
+  }, [active, previewReady]);
+
+  useEffect(() => {
+    const loadSignature = `${id}:${documentDetailsVersion}`;
+    if (
+      !active ||
+      !previewReady ||
+      !listDocument?.remoteId ||
+      detailLoadSignature.current === loadSignature
+    ) return;
+    let mounted = true;
+    detailLoadSignature.current = loadSignature;
+    void loadDocumentDetails(id).catch((error) => {
+      if (mounted) {
+        showToast(error instanceof Error ? error.message : 'Could not load document metadata.', true);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [active, documentDetailsVersion, id, listDocument?.remoteId, loadDocumentDetails, previewReady]);
+
+  useEffect(() => {
+    if (!document || presentedDocumentId.current === document.id) return;
+    const finishedProcessing = Boolean(
+      presentedDocumentId.current &&
+        taskIdFromPlaceholderId(presentedDocumentId.current) &&
+        !isPendingDocument(document),
+    );
+    presentedDocumentId.current = document.id;
+    if (finishedProcessing) {
+      animateLayout();
+      showToast('Document ready to review');
+    }
+    setTitle(document.title);
+    setCreated(document.created);
+    setEditing(false);
+    setEditingDate(false);
+    setExpandedText(false);
+    setPreviewFailed(false);
+    setPreviewOpen(false);
+    setPicker(null);
+    setMoreOpen(false);
+    setSelectedVersionId(undefined);
+  }, [document]);
+
+  useEffect(() => {
+    if (!active || document || !requestedTaskId) return;
+    router.replace('/inbox');
+  }, [active, document, requestedTaskId, router]);
+
+  if (!document && requestedTaskId) {
+    return (
+      <View accessibilityLiveRegion="polite" style={styles.notFound}>
+        <ActivityIndicator color={palette.ink} size="large" />
+        <Text style={styles.notFoundTitle}>Finalizing document</Text>
+        <Text style={styles.transitionCopy}>Syncing the finished file with your inbox…</Text>
+      </View>
+    );
+  }
 
   if (!document) {
     return (
@@ -313,6 +384,43 @@ export default function DocumentDetailScreen({
     }
   }
 
+  async function refreshDocument() {
+    if (documentRefreshing) return;
+    setMoreOpen(false);
+    setBusyAction('refresh');
+    setPreviewFailed(false);
+    try {
+      await refresh();
+      const refreshedDocument = await loadDocumentDetails(id);
+      if (refreshedDocument) {
+        setTitle(refreshedDocument.title);
+        setCreated(refreshedDocument.created);
+        if (
+          selectedVersionId !== undefined &&
+          !refreshedDocument.versions?.some((version) => version.id === selectedVersionId)
+        ) {
+          setSelectedVersionId(undefined);
+        }
+      }
+      showToast('Document refreshed');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not refresh this document.', true);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function checkProcessing() {
+    setBusyAction('processing-refresh');
+    try {
+      await retryDocumentProcessing(id);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not check processing status.', true);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   function confirmDelete() {
     setMoreOpen(false);
     Alert.alert(
@@ -337,6 +445,137 @@ export default function DocumentDetailScreen({
     );
   }
 
+  if (isPendingDocument(document)) {
+    const processingFailed = Boolean(document.processingError);
+    return (
+      <Animated.View style={[styles.root, { opacity: screenOpacity }]}>
+        <SafeAreaView edges={['top']} style={styles.safe}>
+          <View style={styles.header}>
+            <Pressable
+              accessibilityLabel="Go back"
+              onPress={closeDocument}
+              style={styles.headerButton}>
+              <ArrowLeft color={palette.ink} size={21} />
+            </Pressable>
+            <Text style={styles.headerTitle}>
+              {processingFailed ? 'Processing issue' : 'Processing'}
+            </Text>
+            <View style={styles.headerSpacer} />
+          </View>
+        </SafeAreaView>
+
+        <AppShell contentStyle={styles.processingContent} safeTop={false} showNav={false}>
+          <View
+            accessibilityLabel={
+              processingFailed
+                ? `Processing failed for ${document.title}`
+                : `${document.title} is processing in Paperless`
+            }
+            accessibilityLiveRegion="polite"
+            style={styles.processingCard}>
+            <View
+              style={[
+                styles.processingPreview,
+                { backgroundColor: processingFailed ? palette.rose : document.color },
+              ]}>
+              <View style={styles.processingGlow} />
+              <PaperThumbnail document={document} width={154} />
+              <View
+                style={[
+                  styles.processingIndicator,
+                  processingFailed && styles.processingIndicatorError,
+                ]}>
+                {processingFailed ? (
+                  <CircleAlert color={palette.paper} size={23} />
+                ) : (
+                  <ActivityIndicator color={palette.ink} size="small" />
+                )}
+              </View>
+            </View>
+
+            <View style={styles.processingBody}>
+              <Text style={styles.processingHeading}>
+                {processingFailed
+                  ? 'Processing needs attention'
+                  : 'Getting your document ready'}
+              </Text>
+              <Text style={styles.processingCopy}>
+                {processingFailed
+                  ? `Paperless could not finish “${document.title}”.`
+                  : `Paperless is running OCR, classification, and workflows for “${document.title}”.`}
+              </Text>
+
+              <View style={styles.processingStatusRow}>
+                {processingFailed ? (
+                  <CircleAlert color={palette.danger} size={17} />
+                ) : (
+                  <ActivityIndicator color={palette.limeDark} size="small" />
+                )}
+                <Text
+                  style={[
+                    styles.processingStatusText,
+                    processingFailed && styles.processingStatusTextError,
+                  ]}>
+                  {processingFailed ? document.processingError : 'Processing in Paperless'}
+                </Text>
+              </View>
+
+              <View style={styles.processingFacts}>
+                <View style={styles.processingFact}>
+                  <FileText color={palette.inkSoft} size={17} />
+                  <Text style={styles.processingFactText}>
+                    {document.pageCount} {document.pageCount === 1 ? 'page' : 'pages'}
+                  </Text>
+                </View>
+                <View style={styles.processingFactDivider} />
+                <Text style={styles.processingFactText}>Uploaded {document.added.toLowerCase()}</Text>
+              </View>
+
+              {processingFailed && (
+                <Pressable
+                  accessibilityLabel={`Check processing status for ${document.title}`}
+                  disabled={busyAction === 'processing-refresh'}
+                  onPress={checkProcessing}
+                  style={styles.processingRetry}>
+                  {busyAction === 'processing-refresh' ? (
+                    <ActivityIndicator color={palette.ink} size="small" />
+                  ) : (
+                    <RefreshCw color={palette.ink} size={18} />
+                  )}
+                  <Text style={styles.processingRetryText}>
+                    {busyAction === 'processing-refresh' ? 'Checking…' : 'Check again'}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+
+          {!processingFailed && (
+            <View style={styles.processingNote}>
+              <Check color={palette.limeDark} size={17} />
+              <Text style={styles.processingNoteText}>
+                You can leave this screen. Processing continues in the background.
+              </Text>
+            </View>
+          )}
+        </AppShell>
+
+        {!!toast && (
+          <View
+            accessibilityLiveRegion="polite"
+            style={[styles.toast, toast.error && styles.toastError]}>
+            {toast.error ? (
+              <CircleAlert color={palette.paper} size={17} />
+            ) : (
+              <Check color={palette.lime} size={17} />
+            )}
+            <Text style={styles.toastText}>{toast.message}</Text>
+          </View>
+        )}
+      </Animated.View>
+    );
+  }
+
   return (
     <Animated.View style={[styles.root, { opacity: screenOpacity }]}>
       <SafeAreaView edges={['top']} style={styles.safe}>
@@ -347,13 +586,29 @@ export default function DocumentDetailScreen({
             style={styles.headerButton}>
             <ArrowLeft color={palette.ink} size={21} />
           </Pressable>
-          <Text style={styles.headerTitle}>Document</Text>
-          <Pressable
-            accessibilityLabel="More document actions"
-            onPress={() => setMoreOpen((open) => !open)}
-            style={styles.headerButton}>
-            <MoreHorizontal color={palette.ink} size={22} />
-          </Pressable>
+          <Text pointerEvents="none" style={[styles.headerTitle, styles.headerTitleCentered]}>
+            Document
+          </Text>
+          <View style={styles.headerActions}>
+            <Pressable
+              accessibilityHint="Reloads this document and its metadata from Paperless"
+              accessibilityLabel="Refresh document"
+              disabled={documentRefreshing}
+              onPress={refreshDocument}
+              style={styles.headerButton}>
+              {documentRefreshing ? (
+                <ActivityIndicator color={palette.ink} size="small" />
+              ) : (
+                <RefreshCw color={palette.ink} size={20} />
+              )}
+            </Pressable>
+            <Pressable
+              accessibilityLabel="More document actions"
+              onPress={() => setMoreOpen((open) => !open)}
+              style={styles.headerButton}>
+              <MoreHorizontal color={palette.ink} size={22} />
+            </Pressable>
+          </View>
         </View>
       </SafeAreaView>
 
@@ -376,7 +631,12 @@ export default function DocumentDetailScreen({
         </View>
       )}
 
-      <AppShell contentStyle={styles.content} safeTop={false} showNav={false}>
+      <AppShell
+        contentStyle={styles.content}
+        onRefresh={() => void refreshDocument()}
+        refreshing={documentRefreshing}
+        safeTop={false}
+        showNav={false}>
         <View style={styles.previewCard}>
           <Pressable
             accessibilityHint="Opens the full document with page navigation and zoom controls"
@@ -401,7 +661,7 @@ export default function DocumentDetailScreen({
                   ),
                   headers: paperlessFileHeaders(credentials.token),
                 }}
-                key={String(selectedVersionId || 'current')}
+                key={`${documentDetailsVersion}:${String(selectedVersionId || 'current')}`}
                 style={styles.realPreview}
               />
             ) : (
@@ -587,8 +847,12 @@ export default function DocumentDetailScreen({
 
       {picker === 'correspondent' && <ChoiceSheet
         allowNone
+        createLabel="Create a new correspondent"
+        creationAllowed={creationCapabilities.correspondent}
+        creationNoun="correspondent"
         onClose={() => setPicker(null)}
         onConfirm={async (selected) => updateDocument(id, { correspondent: selected[0] || null })}
+        onCreate={(name) => createCatalogOption('correspondent', name)}
         options={catalog.correspondents}
         selectedIds={document.correspondentId ? [document.correspondentId] : []}
         title="Correspondent"
@@ -596,8 +860,12 @@ export default function DocumentDetailScreen({
       />}
       {picker === 'documentType' && <ChoiceSheet
         allowNone
+        createLabel="Create a new document type"
+        creationAllowed={creationCapabilities.documentType}
+        creationNoun="document type"
         onClose={() => setPicker(null)}
         onConfirm={async (selected) => updateDocument(id, { documentType: selected[0] || null })}
+        onCreate={(name) => createCatalogOption('documentType', name)}
         options={catalog.documentTypes}
         selectedIds={document.documentTypeId ? [document.documentTypeId] : []}
         title="Document type"
@@ -605,10 +873,12 @@ export default function DocumentDetailScreen({
       />}
       {picker === 'tags' && <ChoiceSheet
         createLabel="Create a new tag"
+        creationAllowed={creationCapabilities.tag}
+        creationNoun="tag"
         multiple
         onClose={() => setPicker(null)}
         onConfirm={async (selected) => updateDocument(id, { tags: selected })}
-        onCreate={createTag}
+        onCreate={(name) => createCatalogOption('tag', name)}
         options={catalog.tags}
         selectedIds={document.tagIds}
         title="Tags"
@@ -653,7 +923,7 @@ export default function DocumentDetailScreen({
 
       {!!credentials && !!document.remoteId && (
         <DocumentPreviewViewer
-          cacheKey={`folio-${document.remoteId}-${previewVersionId || 'current'}`}
+          cacheKey={`folio-${document.remoteId}-${previewVersionId || 'current'}-${documentDetailsVersion}`}
           fallbackSource={{
             uri: getPaperlessDocumentUrl(
               credentials,
@@ -763,6 +1033,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    position: 'relative',
     paddingHorizontal: 20,
   },
   headerButton: {
@@ -775,11 +1046,26 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.line,
   },
+  headerSpacer: {
+    width: 40,
+    height: 40,
+  },
   headerTitle: {
     color: palette.ink,
     fontFamily: fonts.sans,
     fontSize: 13,
     fontWeight: '800',
+  },
+  headerTitleCentered: {
+    position: 'absolute',
+    left: 112,
+    right: 112,
+    textAlign: 'center',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   moreMenu: {
     position: 'absolute',
@@ -821,6 +1107,138 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingTop: 6,
+  },
+  processingContent: {
+    paddingTop: 8,
+  },
+  processingCard: {
+    overflow: 'hidden',
+    borderRadius: radii.lg,
+    backgroundColor: palette.paper,
+    ...shadows.card,
+  },
+  processingPreview: {
+    height: 286,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  processingGlow: {
+    position: 'absolute',
+    width: 290,
+    height: 290,
+    borderRadius: 145,
+    backgroundColor: 'rgba(255,253,248,0.52)',
+  },
+  processingIndicator: {
+    position: 'absolute',
+    right: 20,
+    bottom: 18,
+    width: 45,
+    height: 45,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 23,
+    backgroundColor: palette.paper,
+    ...shadows.card,
+  },
+  processingIndicatorError: {
+    backgroundColor: palette.danger,
+  },
+  processingBody: {
+    paddingHorizontal: 22,
+    paddingTop: 24,
+    paddingBottom: 22,
+  },
+  processingHeading: {
+    maxWidth: 520,
+    color: palette.ink,
+    fontFamily: fonts.serif,
+    fontSize: 29,
+    lineHeight: 35,
+    fontWeight: '600',
+    letterSpacing: -0.6,
+  },
+  processingCopy: {
+    maxWidth: 560,
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 10,
+  },
+  processingStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 22,
+  },
+  processingStatusText: {
+    flex: 1,
+    color: palette.inkSoft,
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  processingStatusTextError: {
+    color: palette.danger,
+  },
+  processingFacts: {
+    minHeight: 49,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderTopWidth: 1,
+    borderColor: palette.line,
+    marginTop: 21,
+    paddingTop: 17,
+  },
+  processingFact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  processingFactDivider: {
+    width: 1,
+    height: 18,
+    backgroundColor: palette.lineStrong,
+  },
+  processingFactText: {
+    color: palette.inkSoft,
+    fontFamily: fonts.sans,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  processingRetry: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 9,
+    borderRadius: radii.md,
+    backgroundColor: palette.lime,
+    marginTop: 23,
+  },
+  processingRetryText: {
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  processingNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 18,
+    paddingHorizontal: 6,
+  },
+  processingNoteText: {
+    flex: 1,
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    lineHeight: 18,
   },
   previewCard: {
     overflow: 'hidden',
@@ -1210,6 +1628,15 @@ const styles = StyleSheet.create({
     fontFamily: fonts.serif,
     fontSize: 25,
     marginTop: 13,
+  },
+  transitionCopy: {
+    maxWidth: 300,
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 7,
+    textAlign: 'center',
   },
   backLink: {
     color: palette.limeDark,
