@@ -21,6 +21,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -33,6 +34,7 @@ import { fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import {
   launchSmartScanner,
+  MAX_SCAN_PAGES,
   prepareSmartScan,
   SmartScannerUnavailableError,
   SmartScanSession,
@@ -110,6 +112,7 @@ export default function ScanScreen() {
   }, []);
 
   useEffect(() => {
+    if (Platform.OS === 'ios') return;
     if (autoLaunchRef.current) return;
     autoLaunchRef.current = true;
     const timer = setTimeout(() => void startSmartScan(), 220);
@@ -546,7 +549,9 @@ export default function ScanScreen() {
           </View>
           <View style={styles.capabilityRow}>
             <Layers3 color={palette.limeDark} size={18} />
-            <Text style={styles.capabilityText}>Combines multiple pages into one document</Text>
+            <Text style={styles.capabilityText}>
+              Combines up to {MAX_SCAN_PAGES} pages into one document
+            </Text>
           </View>
           <View style={styles.capabilityRow}>
             <Sparkles color={palette.limeDark} size={18} />

@@ -47,8 +47,9 @@ Install with the lockfile and run the same quality checks as CI:
 
 ```bash
 npm ci
-npx tsc --noEmit
+npm run typecheck
 npm run lint
+npm test
 npx expo-doctor
 npx expo export --platform web
 ```

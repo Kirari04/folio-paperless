@@ -95,6 +95,9 @@ npx expo start --dev-client
 ```
 
 Processing notifications are local. Remote push notifications are intentionally not configured.
+The first GitHub-distributed iOS build is iPhone-only and requires an HTTPS Paperless address with
+a certificate trusted by the device. See the [iOS release-readiness checklist](docs/ios-release-readiness.md)
+for the physical-device gate that precedes release automation.
 
 ## Connect Paperless
 
@@ -112,8 +115,9 @@ files, signing keys, or exported Paperless data when contributing.
 ## Useful checks
 
 ```bash
-npx tsc --noEmit
+npm run typecheck
 npm run lint
+npm test
 npx expo-doctor
 npx expo export --platform web
 ```

@@ -78,6 +78,28 @@ type UpdateContextValue = {
 
 const UpdateContext = createContext<UpdateContextValue | null>(null);
 
+const ignoreAsync = () => Promise.resolve();
+const unsupportedUpdateContext: UpdateContextValue = {
+  status: 'unsupported',
+  support: 'android-release-only',
+  currentVersion: Constants.expoConfig?.version ?? '0.0.0',
+  release: null,
+  progress: 0,
+  error: null,
+  lastCheckedAt: null,
+  sheetVisible: false,
+  noticeVisible: false,
+  canRequestPackageInstalls: false,
+  checkForUpdates: ignoreAsync,
+  openUpdateSheet: () => {},
+  closeUpdateSheet: () => {},
+  remindLater: ignoreAsync,
+  downloadUpdate: ignoreAsync,
+  cancelDownload: ignoreAsync,
+  installUpdate: ignoreAsync,
+  retry: ignoreAsync,
+};
+
 function errorMessage(error: unknown) {
   if (error instanceof FolioUpdateError || error instanceof Error) return error.message;
   return 'The update could not be completed. Try again.';
@@ -90,6 +112,17 @@ function statusForRelease(release: FolioRelease | null, currentVersion: string):
 }
 
 export function UpdateProvider({ children }: PropsWithChildren) {
+  if (Platform.OS !== 'android') {
+    return (
+      <UpdateContext.Provider value={unsupportedUpdateContext}>
+        {children}
+      </UpdateContext.Provider>
+    );
+  }
+  return <AndroidUpdateProvider>{children}</AndroidUpdateProvider>;
+}
+
+function AndroidUpdateProvider({ children }: PropsWithChildren) {
   const nativeUpdater = getFolioUpdaterModule();
   const configuredVersion = Constants.expoConfig?.version ?? '0.0.0';
   const [status, setStatus] = useState<UpdateStatus>('idle');

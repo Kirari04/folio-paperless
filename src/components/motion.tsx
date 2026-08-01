@@ -117,6 +117,8 @@ export function MotionPressable({
   haptic = 'selection',
   pressedScale = 0.975,
   disabled,
+  accessibilityRole,
+  hitSlop,
   onPress,
   onPressIn,
   onPressOut,
@@ -146,7 +148,9 @@ export function MotionPressable({
   return (
     <AnimatedPressable
       {...props}
+      accessibilityRole={accessibilityRole ?? (onPress ? 'button' : undefined)}
       disabled={disabled}
+      hitSlop={hitSlop ?? (onPress ? 8 : undefined)}
       onPress={(event) => {
         void hapticFeedback(haptic);
         onPress?.(event);

@@ -36,7 +36,7 @@ import { FolioLogo } from '@/components/folio-logo';
 import { fonts, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useUpdates } from '@/context/update-context';
-import { formatUpdateSize } from '@/lib/app-updates';
+import { FOLIO_RELEASES_URL, formatUpdateSize } from '@/lib/app-updates';
 import { useRouter } from '@/lib/router';
 
 export default function SettingsScreen() {
@@ -325,13 +325,23 @@ export default function SettingsScreen() {
 
       <Text style={styles.sectionLabel}>ABOUT</Text>
       <View style={styles.settingsGroup}>
-        <SettingRow
-          icon={Download}
-          onPress={openSoftwareUpdates}
-          title="Software updates"
-          subtitle={updateSubtitle}
-          trailing={<UpdateStatusTrailing />}
-        />
+        {Platform.OS === 'android' ? (
+          <SettingRow
+            icon={Download}
+            onPress={openSoftwareUpdates}
+            title="Software updates"
+            subtitle={updateSubtitle}
+            trailing={<UpdateStatusTrailing />}
+          />
+        ) : (
+          <SettingRow
+            icon={Download}
+            onPress={() => Linking.openURL(FOLIO_RELEASES_URL)}
+            title="Release downloads"
+            subtitle="New Folio builds are published on GitHub"
+            trailing={<ExternalLink color={palette.faint} size={18} />}
+          />
+        )}
         <SettingRow
           icon={Info}
           onPress={() =>

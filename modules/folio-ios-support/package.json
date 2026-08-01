@@ -1,0 +1,6 @@
+{
+  "name": "folio-ios-support",
+  "version": "0.1.0",
+  "description": "Small native iOS helpers used by Folio.",
+  "private": true
+}

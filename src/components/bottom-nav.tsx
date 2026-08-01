@@ -6,27 +6,43 @@ import {
   Settings,
   type LucideIcon,
 } from 'lucide-react-native';
+import type { SFSymbol } from 'expo-symbols';
 import { useEffect, useState } from 'react';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { bottomNavHeight, fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
+import { PlatformIcon } from '@/components/platform-icon';
 import { usePathname, useRouter } from '@/lib/router';
 
 type NavItem = {
   label: string;
   href: '/' | '/documents' | '/inbox' | '/settings';
   icon: LucideIcon;
+  symbol: SFSymbol;
+  selectedSymbol: SFSymbol;
 };
 
 type TabPathname = NavItem['href'];
 
 const items: NavItem[] = [
-  { label: 'Home', href: '/', icon: Home },
-  { label: 'Library', href: '/documents', icon: Archive },
-  { label: 'Inbox', href: '/inbox', icon: Inbox },
-  { label: 'Settings', href: '/settings', icon: Settings },
+  { label: 'Home', href: '/', icon: Home, symbol: 'house', selectedSymbol: 'house.fill' },
+  {
+    label: 'Library',
+    href: '/documents',
+    icon: Archive,
+    symbol: 'archivebox',
+    selectedSymbol: 'archivebox.fill',
+  },
+  { label: 'Inbox', href: '/inbox', icon: Inbox, symbol: 'tray', selectedSymbol: 'tray.fill' },
+  {
+    label: 'Settings',
+    href: '/settings',
+    icon: Settings,
+    symbol: 'gearshape',
+    selectedSymbol: 'gearshape.fill',
+  },
 ];
 
 function isActive(pathname: string, href: NavItem['href']) {
@@ -72,7 +88,13 @@ export function BottomNav({
           accessibilityRole="button"
           onPress={() => router.push('/scan')}
           style={styles.scanButton}>
-          <Plus color={palette.ink} size={26} strokeWidth={2.5} />
+          <PlatformIcon
+            color={palette.ink}
+            fallback={<Plus color={palette.ink} size={26} strokeWidth={2.5} />}
+            iosName="plus"
+            size={24}
+            weight="bold"
+          />
         </Pressable>
 
         {items.slice(2).map((item) => (
@@ -93,6 +115,8 @@ export function BottomNav({
 function NavButton({
   label,
   icon: Icon,
+  symbol,
+  selectedSymbol,
   active,
   onPress,
 }: NavItem & { active: boolean; onPress: () => void }) {
@@ -144,7 +168,19 @@ function NavButton({
             },
           ]}
         />
-        <Icon color={active ? palette.paper : palette.faint} size={20} strokeWidth={active ? 2.4 : 2} />
+        <PlatformIcon
+          color={active ? palette.paper : palette.onDarkMuted}
+          fallback={(
+            <Icon
+              color={active ? palette.paper : palette.onDarkMuted}
+              size={20}
+              strokeWidth={active ? 2.4 : 2}
+            />
+          )}
+          iosName={active ? selectedSymbol : symbol}
+          size={19}
+          weight={active ? 'semibold' : 'regular'}
+        />
       </View>
       <Text style={[styles.navLabel, active && styles.navLabelActive]}>{label}</Text>
     </Pressable>
@@ -198,7 +234,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.pill,
   },
   navLabel: {
-    color: palette.faint,
+    color: palette.onDarkMuted,
     fontSize: 10,
     fontFamily: fonts.sans,
     fontWeight: '600',

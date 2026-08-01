@@ -31,6 +31,10 @@ module.exports = ({ config: staticConfig }) => {
   return {
     ...staticConfig,
     version,
+    ios: {
+      ...staticConfig.ios,
+      buildNumber: String(versionCode),
+    },
     android: {
       ...staticConfig.android,
       versionCode,

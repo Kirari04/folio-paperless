@@ -1,4 +1,5 @@
 import { File, UploadType } from 'expo-file-system';
+import { Platform } from 'react-native';
 
 import {
   DocumentChanges,
@@ -22,6 +23,7 @@ import {
 } from '@/types/document';
 
 import { matchesLibraryFilters } from '@/lib/library-filters';
+import { normalizePaperlessServerUrl, ServerUrlError } from '@/lib/server-url';
 
 type ApiList<T> = {
   count: number;
@@ -167,21 +169,12 @@ export class PaperlessApiError extends Error {
 }
 
 export function normalizeServerUrl(value: string) {
-  const normalized = value.trim().replace(/\/+$/, '');
-  if (!normalized) throw new PaperlessApiError('Enter the address of your Paperless server.');
-
-  let parsed: URL;
   try {
-    parsed = new URL(normalized);
-  } catch {
-    throw new PaperlessApiError('Enter a complete server URL, including http:// or https://.');
+    return normalizePaperlessServerUrl(value, { requireHttps: Platform.OS === 'ios' });
+  } catch (error) {
+    if (error instanceof ServerUrlError) throw new PaperlessApiError(error.message);
+    throw error;
   }
-
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new PaperlessApiError('Paperless server URLs must start with http:// or https://.');
-  }
-
-  return normalized;
 }
 
 export function paperlessHeaders(token: string): Record<string, string> {
@@ -264,7 +257,7 @@ function uploadFileError(error: unknown) {
   }
   if (/certificate|ssl|trust anchor|hostname.*verif/i.test(message)) {
     return new PaperlessApiError(
-      'The secure connection to Paperless was rejected. Check the server certificate and try again.',
+      'The secure connection to Paperless was rejected. Use a certificate trusted by this device and check that its hostname matches the server address.',
     );
   }
   return new PaperlessApiError(
@@ -372,7 +365,9 @@ async function request(
       throw new PaperlessApiError('The Paperless server took too long to respond. Try again.');
     }
     throw new PaperlessApiError(
-      'Could not reach this Paperless server. Check the address, network, and HTTPS certificate.',
+      Platform.OS === 'ios'
+        ? 'Could not reach this Paperless server. Check local-network permission and use HTTPS with a certificate trusted by this device.'
+        : 'Could not reach this Paperless server. Check the address, network, and HTTPS certificate.',
     );
   } finally {
     clearTimeout(timeout);

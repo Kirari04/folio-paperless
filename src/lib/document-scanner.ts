@@ -2,9 +2,12 @@ import { Platform } from 'react-native';
 
 import type { ScanResult } from 'expo-document-scanner';
 
+import { createIOSScanPdf } from '@/lib/folio-ios-support-native';
+
+export const MAX_SCAN_PAGES = 24;
+
 export type SmartScanPage = {
   uri: string;
-  base64?: string;
 };
 
 export type SmartScanSession = {
@@ -74,16 +77,21 @@ export async function launchSmartScanner(): Promise<SmartScanSession | null> {
   try {
     const result = await scanDocument({
       quality: 0.9,
-      includeBase64: Platform.OS === 'ios',
-      maxNumDocuments: 24,
+      includeBase64: false,
+      maxNumDocuments: MAX_SCAN_PAGES,
       galleryImportAllowed: true,
       includePdf: Platform.OS === 'android',
       scannerMode: 'full',
     });
 
     if (!result.pages.length) throw new Error('The scanner did not return any pages.');
+    if (result.pages.length > MAX_SCAN_PAGES) {
+      throw new Error(
+        `This scan has ${result.pages.length} pages. Folio supports up to ${MAX_SCAN_PAGES} pages per scan.`,
+      );
+    }
     return {
-      pages: result.pages.map((page) => ({ uri: page.uri, base64: page.base64 })),
+      pages: result.pages.map((page) => ({ uri: page.uri })),
       pdfUri: result.pdfUri,
     };
   } catch (error) {
@@ -94,49 +102,11 @@ export async function launchSmartScanner(): Promise<SmartScanSession | null> {
   }
 }
 
-function pdfHtml(pages: SmartScanPage[]) {
-  const pageMarkup = pages
-    .map((page) => {
-      if (!page.base64) throw new Error('A scanned page could not be prepared for PDF export.');
-      const source = `data:${imageMimeType(page.uri)};base64,${page.base64}`;
-      return `<section class="page"><img src="${source}" /></section>`;
-    })
-    .join('');
-
-  return `<!DOCTYPE html>
-<html>
-  <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <style>
-      @page { margin: 0; }
-      html, body { margin: 0; padding: 0; background: #fff; }
-      .page {
-        width: 100vw;
-        height: 100vh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        overflow: hidden;
-        break-after: page;
-        page-break-after: always;
-      }
-      .page:last-child { break-after: auto; page-break-after: auto; }
-      img { display: block; width: 100%; height: 100%; object-fit: contain; }
-    </style>
-  </head>
-  <body>${pageMarkup}</body>
-</html>`;
-}
-
 async function createPdfFromPages(pages: SmartScanPage[]) {
-  const { printToFileAsync } = await import('expo-print');
-  const result = await printToFileAsync({
-    html: pdfHtml(pages),
-    width: 595,
-    height: 842,
-    margins: { top: 0, right: 0, bottom: 0, left: 0 },
-  });
-  return result.uri;
+  if (Platform.OS !== 'ios') {
+    throw new Error('The document scanner did not return its expected multi-page PDF.');
+  }
+  return createIOSScanPdf(pages.map((page) => page.uri));
 }
 
 export async function prepareSmartScan(session: SmartScanSession): Promise<PreparedScanFile> {
