@@ -83,12 +83,14 @@ export default function DocumentDetailScreen({
     documents,
     credentials,
     catalog,
+    isSyncing,
     approveDocument,
     updateDocument,
     createTag,
     deleteDocument,
     reprocessDocument,
     retryDocumentProcessing,
+    refresh,
     resolveDocumentId,
     shareDocument: shareDocumentFile,
     saveDocument,
@@ -123,6 +125,7 @@ export default function DocumentDetailScreen({
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewVersionId = typeof selectedVersionId === 'number' ? selectedVersionId : undefined;
   const canOpenPreview = previewReady && !!credentials && !!document?.remoteId;
+  const documentRefreshing = busyAction === 'refresh' || isSyncing;
 
   const closeDocument = useCallback(() => {
     if (closing.current) return;
@@ -380,6 +383,32 @@ export default function DocumentDetailScreen({
     }
   }
 
+  async function refreshDocument() {
+    if (documentRefreshing) return;
+    setMoreOpen(false);
+    setBusyAction('refresh');
+    setPreviewFailed(false);
+    try {
+      await refresh();
+      const refreshedDocument = await loadDocumentDetails(id);
+      if (refreshedDocument) {
+        setTitle(refreshedDocument.title);
+        setCreated(refreshedDocument.created);
+        if (
+          selectedVersionId !== undefined &&
+          !refreshedDocument.versions?.some((version) => version.id === selectedVersionId)
+        ) {
+          setSelectedVersionId(undefined);
+        }
+      }
+      showToast('Document refreshed');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not refresh this document.', true);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function checkProcessing() {
     setBusyAction('processing-refresh');
     try {
@@ -556,13 +585,29 @@ export default function DocumentDetailScreen({
             style={styles.headerButton}>
             <ArrowLeft color={palette.ink} size={21} />
           </Pressable>
-          <Text style={styles.headerTitle}>Document</Text>
-          <Pressable
-            accessibilityLabel="More document actions"
-            onPress={() => setMoreOpen((open) => !open)}
-            style={styles.headerButton}>
-            <MoreHorizontal color={palette.ink} size={22} />
-          </Pressable>
+          <Text pointerEvents="none" style={[styles.headerTitle, styles.headerTitleCentered]}>
+            Document
+          </Text>
+          <View style={styles.headerActions}>
+            <Pressable
+              accessibilityHint="Reloads this document and its metadata from Paperless"
+              accessibilityLabel="Refresh document"
+              disabled={documentRefreshing}
+              onPress={refreshDocument}
+              style={styles.headerButton}>
+              {documentRefreshing ? (
+                <ActivityIndicator color={palette.ink} size="small" />
+              ) : (
+                <RefreshCw color={palette.ink} size={20} />
+              )}
+            </Pressable>
+            <Pressable
+              accessibilityLabel="More document actions"
+              onPress={() => setMoreOpen((open) => !open)}
+              style={styles.headerButton}>
+              <MoreHorizontal color={palette.ink} size={22} />
+            </Pressable>
+          </View>
         </View>
       </SafeAreaView>
 
@@ -585,7 +630,12 @@ export default function DocumentDetailScreen({
         </View>
       )}
 
-      <AppShell contentStyle={styles.content} safeTop={false} showNav={false}>
+      <AppShell
+        contentStyle={styles.content}
+        onRefresh={() => void refreshDocument()}
+        refreshing={documentRefreshing}
+        safeTop={false}
+        showNav={false}>
         <View style={styles.previewCard}>
           <Pressable
             accessibilityHint="Opens the full document with page navigation and zoom controls"
@@ -610,7 +660,7 @@ export default function DocumentDetailScreen({
                   ),
                   headers: paperlessFileHeaders(credentials.token),
                 }}
-                key={String(selectedVersionId || 'current')}
+                key={`${documentDetailsVersion}:${String(selectedVersionId || 'current')}`}
                 style={styles.realPreview}
               />
             ) : (
@@ -862,7 +912,7 @@ export default function DocumentDetailScreen({
 
       {!!credentials && !!document.remoteId && (
         <DocumentPreviewViewer
-          cacheKey={`folio-${document.remoteId}-${previewVersionId || 'current'}`}
+          cacheKey={`folio-${document.remoteId}-${previewVersionId || 'current'}-${documentDetailsVersion}`}
           fallbackSource={{
             uri: getPaperlessDocumentUrl(
               credentials,
@@ -972,6 +1022,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    position: 'relative',
     paddingHorizontal: 20,
   },
   headerButton: {
@@ -993,6 +1044,17 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sans,
     fontSize: 13,
     fontWeight: '800',
+  },
+  headerTitleCentered: {
+    position: 'absolute',
+    left: 112,
+    right: 112,
+    textAlign: 'center',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   moreMenu: {
     position: 'absolute',
