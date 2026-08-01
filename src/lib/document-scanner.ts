@@ -1,3 +1,4 @@
+import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
 import type { ScanResult } from 'expo-document-scanner';
@@ -19,6 +20,20 @@ export type PreparedScanFile = {
   mimeType: string;
   pageCount: number;
 };
+
+export async function discardTemporaryFiles(uris: (string | undefined)[]) {
+  const localUris = [...new Set(uris.filter((uri): uri is string => Boolean(uri?.startsWith('file://'))))];
+  await Promise.all(
+    localUris.map((uri) => FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => undefined)),
+  );
+}
+
+export async function discardSmartScan(session: SmartScanSession) {
+  await discardTemporaryFiles([
+    ...session.pages.map((page) => page.uri),
+    session.pdfUri,
+  ]);
+}
 
 export class SmartScannerUnavailableError extends Error {
   constructor(message = 'Smart scanning is not available in this build.') {

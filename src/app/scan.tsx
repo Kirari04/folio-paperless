@@ -1,3 +1,6 @@
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { FlashList } from '@shopify/flash-list';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as DocumentPicker from 'expo-document-picker';
 import { Image } from 'expo-image';
@@ -22,7 +25,6 @@ import {
   ActivityIndicator,
   Linking,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -33,12 +35,15 @@ import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/c
 import { fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import {
+  discardSmartScan,
+  discardTemporaryFiles,
   launchSmartScanner,
   prepareSmartScan,
   SmartScannerUnavailableError,
   SmartScanSession,
 } from '@/lib/document-scanner';
 import { useRouter } from '@/lib/router';
+import type { RootStackParamList } from '@/lib/router';
 
 type CaptureKind = 'smart' | 'manual';
 
@@ -60,8 +65,10 @@ function smartScannerMessage(error: unknown) {
 
 export default function ScanScreen() {
   const router = useRouter();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Scan'>>();
   const cameraRef = useRef<CameraView>(null);
   const mountedRef = useRef(true);
+  const scanSessionRef = useRef<SmartScanSession | null>(null);
   const autoLaunchRef = useRef(false);
   const smartLaunchRef = useRef(false);
   const [permission, requestPermission] = useCameraPermissions();
@@ -78,12 +85,24 @@ export default function ScanScreen() {
   const [scanError, setScanError] = useState<string | null>(null);
   const { importDocument, connected } = useApp();
 
+  const rememberScanSession = useCallback((session: SmartScanSession | null) => {
+    scanSessionRef.current = session;
+    setScanSession(session);
+  }, []);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      const abandonedSession = scanSessionRef.current;
+      scanSessionRef.current = null;
+      if (abandonedSession) void discardSmartScan(abandonedSession);
     };
   }, []);
+
+  useEffect(() => {
+    navigation.setOptions({ gestureEnabled: !isSaving });
+  }, [isSaving, navigation]);
 
   const startSmartScan = useCallback(async () => {
     if (smartLaunchRef.current) return;
@@ -97,7 +116,7 @@ export default function ScanScreen() {
         animateLayout();
         setCaptureKind('smart');
         setSelectedPage(0);
-        setScanSession(result);
+        rememberScanSession(result);
         await hapticFeedback('confirm');
       }
     } catch (error) {
@@ -108,7 +127,7 @@ export default function ScanScreen() {
       smartLaunchRef.current = false;
       if (mountedRef.current) setIsLaunchingSmart(false);
     }
-  }, []);
+  }, [rememberScanSession]);
 
   useEffect(() => {
     if (Platform.OS === 'ios') return;
@@ -145,7 +164,7 @@ export default function ScanScreen() {
       animateLayout();
       setCaptureKind('manual');
       setSelectedPage(0);
-      setScanSession({ pages: [{ uri: photo.uri }] });
+      rememberScanSession({ pages: [{ uri: photo.uri }] });
       await hapticFeedback('medium');
     } catch (error) {
       setScanError(error instanceof Error ? error.message : 'The camera could not take a picture.');
@@ -162,9 +181,10 @@ export default function ScanScreen() {
     setSavingLabel(Platform.OS === 'ios' && !scanSession.pdfUri ? 'Preparing PDF…' : 'Uploading…');
     try {
       const file = await prepareSmartScan(scanSession);
-      if (!scanSession.pdfUri && file.mimeType === 'application/pdf') {
-        setScanSession((current) => current === scanSession ? { ...current, pdfUri: file.uri } : current);
-      }
+      const preparedSession = !scanSession.pdfUri && file.mimeType === 'application/pdf'
+        ? { ...scanSession, pdfUri: file.uri }
+        : scanSession;
+      if (preparedSession !== scanSession) rememberScanSession(preparedSession);
       setSavingLabel(connected ? 'Uploading…' : 'Adding…');
       let reportedProgress = -1;
       await importDocument(file, {
@@ -180,6 +200,8 @@ export default function ScanScreen() {
       });
       setSavingLabel(connected ? 'Sent to Paperless' : 'Added');
       await hapticFeedback('confirm');
+      scanSessionRef.current = null;
+      void discardSmartScan(preparedSession);
       router.replace('/inbox');
     } catch (error) {
       setScanError(error instanceof Error ? error.message : 'Could not save this scan.');
@@ -191,8 +213,11 @@ export default function ScanScreen() {
 
   function rescan() {
     if (isSaving) return;
+    const discardedSession = scanSessionRef.current;
+    scanSessionRef.current = null;
     animateLayout();
     setScanSession(null);
+    if (discardedSession) void discardSmartScan(discardedSession);
     setSelectedPage(0);
     setScanError(null);
     if (captureKind === 'manual') {
@@ -236,6 +261,7 @@ export default function ScanScreen() {
       setScanError(error instanceof Error ? error.message : 'Could not import this file.');
       await hapticFeedback('error');
     } finally {
+      await discardTemporaryFiles([file.uri]);
       setIsSaving(false);
     }
   }
@@ -299,22 +325,29 @@ export default function ScanScreen() {
         </View>
 
         {pageCount > 1 && (
-          <ScrollView
+          <FlashList
             contentContainerStyle={styles.thumbnailContent}
+            data={scanSession.pages}
+            drawDistance={180}
+            extraData={selectedPage}
             horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.thumbnailRail}>
-            {scanSession.pages.map((page, index) => {
+            ItemSeparatorComponent={() => <View style={styles.thumbnailSeparator} />}
+            keyExtractor={(page, index) => `${page.uri}-${index}`}
+            renderItem={({ item: page, index }) => {
               const selected = index === selectedPage;
               return (
                 <Pressable
                   accessibilityLabel={`Show page ${index + 1}`}
                   accessibilityState={{ selected }}
                   haptic="selection"
-                  key={`${page.uri}-${index}`}
                   onPress={() => setSelectedPage(index)}
                   style={[styles.thumbnailButton, selected && styles.thumbnailButtonSelected]}>
-                  <Image contentFit="cover" source={{ uri: page.uri }} style={styles.thumbnailImage} />
+                  <Image
+                    contentFit="cover"
+                    recyclingKey={page.uri}
+                    source={{ uri: page.uri }}
+                    style={styles.thumbnailImage}
+                  />
                   <View style={[styles.thumbnailNumber, selected && styles.thumbnailNumberSelected]}>
                     <Text style={[styles.thumbnailNumberText, selected && styles.thumbnailNumberTextSelected]}>
                       {index + 1}
@@ -322,8 +355,10 @@ export default function ScanScreen() {
                   </View>
                 </Pressable>
               );
-            })}
-          </ScrollView>
+            }}
+            showsHorizontalScrollIndicator={false}
+            style={styles.thumbnailRail}
+          />
         )}
 
         <SafeAreaView edges={['bottom']} style={styles.reviewActionsSafe}>
@@ -1129,12 +1164,15 @@ const styles = StyleSheet.create({
   },
   thumbnailRail: {
     flexGrow: 0,
+    height: 82,
     marginTop: 12,
   },
   thumbnailContent: {
-    gap: 9,
     paddingHorizontal: 18,
     paddingVertical: 3,
+  },
+  thumbnailSeparator: {
+    width: 9,
   },
   thumbnailButton: {
     width: 58,
