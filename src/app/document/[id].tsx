@@ -36,6 +36,7 @@ import { AppShell } from '@/components/app-shell';
 import { ChoiceSheet } from '@/components/choice-sheet';
 import { DocumentDeepSections } from '@/components/document-deep-sections';
 import { DocumentPreviewViewer } from '@/components/document-preview-viewer';
+import { PaperThumbnail } from '@/components/paper-thumbnail';
 import { TextEditSheet } from '@/components/text-edit-sheet';
 import {
   MotionPressable as Pressable,
@@ -45,7 +46,11 @@ import {
 } from '@/components/motion';
 import { fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
 import { useApp, useDocumentDetail } from '@/context/app-context';
-import { findRoutedDocument, taskIdFromPlaceholderId } from '@/lib/document-routing';
+import {
+  findRoutedDocument,
+  isPendingDocument,
+  taskIdFromPlaceholderId,
+} from '@/lib/document-routing';
 import { getPaperlessDocumentUrl, paperlessFileHeaders } from '@/lib/paperless';
 import { useLocalSearchParams, useRouter } from '@/lib/router';
 import { isValidIsoDate } from '@/lib/validation';
@@ -83,6 +88,7 @@ export default function DocumentDetailScreen({
     createTag,
     deleteDocument,
     reprocessDocument,
+    retryDocumentProcessing,
     resolveDocumentId,
     shareDocument: shareDocumentFile,
     saveDocument,
@@ -214,7 +220,16 @@ export default function DocumentDetailScreen({
 
   useEffect(() => {
     if (!document || presentedDocumentId.current === document.id) return;
+    const finishedProcessing = Boolean(
+      presentedDocumentId.current &&
+        taskIdFromPlaceholderId(presentedDocumentId.current) &&
+        !isPendingDocument(document),
+    );
     presentedDocumentId.current = document.id;
+    if (finishedProcessing) {
+      animateLayout();
+      showToast('Document ready to review');
+    }
     setTitle(document.title);
     setCreated(document.created);
     setEditing(false);
@@ -365,6 +380,17 @@ export default function DocumentDetailScreen({
     }
   }
 
+  async function checkProcessing() {
+    setBusyAction('processing-refresh');
+    try {
+      await retryDocumentProcessing(id);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not check processing status.', true);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   function confirmDelete() {
     setMoreOpen(false);
     Alert.alert(
@@ -386,6 +412,137 @@ export default function DocumentDetailScreen({
           },
         },
       ],
+    );
+  }
+
+  if (isPendingDocument(document)) {
+    const processingFailed = Boolean(document.processingError);
+    return (
+      <Animated.View style={[styles.root, { opacity: screenOpacity }]}>
+        <SafeAreaView edges={['top']} style={styles.safe}>
+          <View style={styles.header}>
+            <Pressable
+              accessibilityLabel="Go back"
+              onPress={closeDocument}
+              style={styles.headerButton}>
+              <ArrowLeft color={palette.ink} size={21} />
+            </Pressable>
+            <Text style={styles.headerTitle}>
+              {processingFailed ? 'Processing issue' : 'Processing'}
+            </Text>
+            <View style={styles.headerSpacer} />
+          </View>
+        </SafeAreaView>
+
+        <AppShell contentStyle={styles.processingContent} safeTop={false} showNav={false}>
+          <View
+            accessibilityLabel={
+              processingFailed
+                ? `Processing failed for ${document.title}`
+                : `${document.title} is processing in Paperless`
+            }
+            accessibilityLiveRegion="polite"
+            style={styles.processingCard}>
+            <View
+              style={[
+                styles.processingPreview,
+                { backgroundColor: processingFailed ? palette.rose : document.color },
+              ]}>
+              <View style={styles.processingGlow} />
+              <PaperThumbnail document={document} width={154} />
+              <View
+                style={[
+                  styles.processingIndicator,
+                  processingFailed && styles.processingIndicatorError,
+                ]}>
+                {processingFailed ? (
+                  <CircleAlert color={palette.paper} size={23} />
+                ) : (
+                  <ActivityIndicator color={palette.ink} size="small" />
+                )}
+              </View>
+            </View>
+
+            <View style={styles.processingBody}>
+              <Text style={styles.processingHeading}>
+                {processingFailed
+                  ? 'Processing needs attention'
+                  : 'Getting your document ready'}
+              </Text>
+              <Text style={styles.processingCopy}>
+                {processingFailed
+                  ? `Paperless could not finish “${document.title}”.`
+                  : `Paperless is running OCR, classification, and workflows for “${document.title}”.`}
+              </Text>
+
+              <View style={styles.processingStatusRow}>
+                {processingFailed ? (
+                  <CircleAlert color={palette.danger} size={17} />
+                ) : (
+                  <ActivityIndicator color={palette.limeDark} size="small" />
+                )}
+                <Text
+                  style={[
+                    styles.processingStatusText,
+                    processingFailed && styles.processingStatusTextError,
+                  ]}>
+                  {processingFailed ? document.processingError : 'Processing in Paperless'}
+                </Text>
+              </View>
+
+              <View style={styles.processingFacts}>
+                <View style={styles.processingFact}>
+                  <FileText color={palette.inkSoft} size={17} />
+                  <Text style={styles.processingFactText}>
+                    {document.pageCount} {document.pageCount === 1 ? 'page' : 'pages'}
+                  </Text>
+                </View>
+                <View style={styles.processingFactDivider} />
+                <Text style={styles.processingFactText}>Uploaded {document.added.toLowerCase()}</Text>
+              </View>
+
+              {processingFailed && (
+                <Pressable
+                  accessibilityLabel={`Check processing status for ${document.title}`}
+                  disabled={busyAction === 'processing-refresh'}
+                  onPress={checkProcessing}
+                  style={styles.processingRetry}>
+                  {busyAction === 'processing-refresh' ? (
+                    <ActivityIndicator color={palette.ink} size="small" />
+                  ) : (
+                    <RefreshCw color={palette.ink} size={18} />
+                  )}
+                  <Text style={styles.processingRetryText}>
+                    {busyAction === 'processing-refresh' ? 'Checking…' : 'Check again'}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+
+          {!processingFailed && (
+            <View style={styles.processingNote}>
+              <Check color={palette.limeDark} size={17} />
+              <Text style={styles.processingNoteText}>
+                You can leave this screen. Processing continues in the background.
+              </Text>
+            </View>
+          )}
+        </AppShell>
+
+        {!!toast && (
+          <View
+            accessibilityLiveRegion="polite"
+            style={[styles.toast, toast.error && styles.toastError]}>
+            {toast.error ? (
+              <CircleAlert color={palette.paper} size={17} />
+            ) : (
+              <Check color={palette.lime} size={17} />
+            )}
+            <Text style={styles.toastText}>{toast.message}</Text>
+          </View>
+        )}
+      </Animated.View>
     );
   }
 
@@ -827,6 +984,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.line,
   },
+  headerSpacer: {
+    width: 40,
+    height: 40,
+  },
   headerTitle: {
     color: palette.ink,
     fontFamily: fonts.sans,
@@ -873,6 +1034,138 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingTop: 6,
+  },
+  processingContent: {
+    paddingTop: 8,
+  },
+  processingCard: {
+    overflow: 'hidden',
+    borderRadius: radii.lg,
+    backgroundColor: palette.paper,
+    ...shadows.card,
+  },
+  processingPreview: {
+    height: 286,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  processingGlow: {
+    position: 'absolute',
+    width: 290,
+    height: 290,
+    borderRadius: 145,
+    backgroundColor: 'rgba(255,253,248,0.52)',
+  },
+  processingIndicator: {
+    position: 'absolute',
+    right: 20,
+    bottom: 18,
+    width: 45,
+    height: 45,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 23,
+    backgroundColor: palette.paper,
+    ...shadows.card,
+  },
+  processingIndicatorError: {
+    backgroundColor: palette.danger,
+  },
+  processingBody: {
+    paddingHorizontal: 22,
+    paddingTop: 24,
+    paddingBottom: 22,
+  },
+  processingHeading: {
+    maxWidth: 520,
+    color: palette.ink,
+    fontFamily: fonts.serif,
+    fontSize: 29,
+    lineHeight: 35,
+    fontWeight: '600',
+    letterSpacing: -0.6,
+  },
+  processingCopy: {
+    maxWidth: 560,
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 10,
+  },
+  processingStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 22,
+  },
+  processingStatusText: {
+    flex: 1,
+    color: palette.inkSoft,
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  processingStatusTextError: {
+    color: palette.danger,
+  },
+  processingFacts: {
+    minHeight: 49,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderTopWidth: 1,
+    borderColor: palette.line,
+    marginTop: 21,
+    paddingTop: 17,
+  },
+  processingFact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  processingFactDivider: {
+    width: 1,
+    height: 18,
+    backgroundColor: palette.lineStrong,
+  },
+  processingFactText: {
+    color: palette.inkSoft,
+    fontFamily: fonts.sans,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  processingRetry: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 9,
+    borderRadius: radii.md,
+    backgroundColor: palette.lime,
+    marginTop: 23,
+  },
+  processingRetryText: {
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  processingNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 18,
+    paddingHorizontal: 6,
+  },
+  processingNoteText: {
+    flex: 1,
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    lineHeight: 18,
   },
   previewCard: {
     overflow: 'hidden',

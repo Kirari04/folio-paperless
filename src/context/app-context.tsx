@@ -51,7 +51,11 @@ import {
   PaperlessTrashWorkspace,
 } from '@/types/document';
 import { matchesLibraryFilters } from '@/lib/library-filters';
-import { resolveDocumentAlias } from '@/lib/document-routing';
+import {
+  assertDocumentReady,
+  isPendingDocument,
+  resolveDocumentAlias,
+} from '@/lib/document-routing';
 
 const CREDENTIALS_KEY = 'folio.paperless.credentials';
 const PREFERENCES_KEY = 'folio.preferences';
@@ -94,6 +98,7 @@ type AppContextValue = {
   disconnect: () => Promise<void>;
   refresh: () => Promise<void>;
   importDocument: (file: ImportFile, options?: ImportDocumentOptions) => Promise<void>;
+  retryDocumentProcessing: (id: string) => Promise<void>;
   updateDocument: (id: string, changes: DocumentChanges) => Promise<void>;
   createTag: (name: string) => Promise<PaperlessOption>;
   deleteDocument: (id: string) => Promise<void>;
@@ -448,6 +453,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     async (id: string, changes: DocumentChanges) => {
       const original = documents.find((document) => document.id === id);
       if (!original) throw new Error('Document not found.');
+      assertDocumentReady(original);
       if (original.canEdit === false) throw new Error('Your Paperless account cannot edit this document.');
 
       const originalDetail = documentDetailsRef.current[id];
@@ -484,7 +490,8 @@ export function AppProvider({ children }: PropsWithChildren) {
   const approveDocument = useCallback(
     async (id: string) => {
       const document = documents.find((item) => item.id === id);
-      if (!document || document.status === 'processing') return;
+      if (!document) return;
+      assertDocumentReady(document);
       const remainingTags = catalog.tags.filter(
         (tag) => document.tagIds.includes(tag.id) && tag.name.toLocaleLowerCase() !== 'inbox',
       );
@@ -560,6 +567,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     async (id: string) => {
       const document = documents.find((item) => item.id === id);
       if (!document) return;
+      assertDocumentReady(document);
       setOperationError(null);
       try {
         if (credentials && document.remoteId) {
@@ -585,7 +593,9 @@ export function AppProvider({ children }: PropsWithChildren) {
   const reprocessDocument = useCallback(
     async (id: string) => {
       const document = documents.find((item) => item.id === id);
-      if (!credentials || !document?.remoteId) {
+      if (!document) throw new Error('Document not found.');
+      assertDocumentReady(document);
+      if (!credentials || !document.remoteId) {
         throw new Error('Only documents stored in Paperless can be reprocessed.');
       }
       try {
@@ -691,6 +701,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       const document = documentDetailsRef.current[id] || documents.find((item) => item.id === id);
       const normalized = note.trim();
       if (!document) throw new Error('Document not found.');
+      assertDocumentReady(document);
       if (!normalized) throw new Error('Write a note before adding it.');
       let nextNote: PaperlessNote;
       if (credentials && document.remoteId) {
@@ -715,6 +726,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     async (id: string, noteId: number | string) => {
       const document = documentDetailsRef.current[id] || documents.find((item) => item.id === id);
       if (!document) throw new Error('Document not found.');
+      assertDocumentReady(document);
       if (credentials && document.remoteId) {
         await deletePaperlessNote(credentials, document.remoteId, noteId);
       }
@@ -730,6 +742,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     async (id: string, file: ImportFile, label?: string) => {
       const document = documentDetailsRef.current[id] || documents.find((item) => item.id === id);
       if (!document) throw new Error('Document not found.');
+      assertDocumentReady(document);
       if (!credentials || !document.remoteId) {
         const version: PaperlessDocumentVersion = {
           id: `local-version-${Date.now()}`,
@@ -757,6 +770,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     async (id: string, versionId: number | string, label: string) => {
       const document = documentDetailsRef.current[id] || documents.find((item) => item.id === id);
       if (!document) throw new Error('Document not found.');
+      assertDocumentReady(document);
       let versionLabel = label.trim();
       if (credentials && document.remoteId && typeof versionId === 'number') {
         const updated = await renamePaperlessVersion(
@@ -780,8 +794,10 @@ export function AppProvider({ children }: PropsWithChildren) {
   const deleteVersion = useCallback(
     async (id: string, versionId: number | string) => {
       const document = documentDetailsRef.current[id] || documents.find((item) => item.id === id);
-      const version = document?.versions?.find((item) => item.id === versionId);
-      if (!document || !version) throw new Error('Document version not found.');
+      if (!document) throw new Error('Document not found.');
+      assertDocumentReady(document);
+      const version = document.versions?.find((item) => item.id === versionId);
+      if (!version) throw new Error('Document version not found.');
       if (version.isRoot) throw new Error('The original version cannot be removed.');
       if (credentials && document.remoteId && typeof versionId === 'number') {
         await deletePaperlessVersion(
@@ -802,6 +818,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     async (id: string, versionId?: number) => {
       const document = documents.find((item) => item.id === id);
       if (!document) throw new Error('Document not found.');
+      assertDocumentReady(document);
       if (!credentials || !document.remoteId) {
         throw new Error('Connect Paperless to share the original document file.');
       }
@@ -819,6 +836,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     async (id: string, versionId?: number) => {
       const document = documents.find((item) => item.id === id);
       if (!document) throw new Error('Document not found.');
+      assertDocumentReady(document);
       if (!credentials || !document.remoteId) {
         throw new Error('Connect Paperless to download the original document file.');
       }
@@ -932,7 +950,7 @@ export function AppProvider({ children }: PropsWithChildren) {
                     documentType: 'Processing issue',
                     excerpt: message,
                     processingError: message,
-                    suggestion: 'Tap refresh to check again',
+                    suggestion: 'Check again in a moment',
                   }
                 : item,
             ),
@@ -942,6 +960,89 @@ export function AppProvider({ children }: PropsWithChildren) {
       })();
     },
     [catalog, credentials, preferences.processingNotifications, sync],
+  );
+
+  const retryDocumentProcessing = useCallback(
+    async (id: string) => {
+      const placeholder = documents.find((document) => document.id === id);
+      if (!placeholder) throw new Error('Document not found.');
+      if (!isPendingDocument(placeholder) || !placeholder.taskId) {
+        throw new Error('This document is no longer waiting for Paperless.');
+      }
+      if (!credentials) throw new Error('Connect Paperless to check this processing task.');
+
+      const taskId = placeholder.taskId;
+      const placeholderId = placeholder.id;
+      setOperationError(null);
+      setDocuments((current) =>
+        current.map((document) =>
+          document.id === placeholderId
+            ? {
+                ...document,
+                status: 'processing',
+                documentType: 'Processing',
+                excerpt: 'OCR, classification, and workflow rules are running on your server.',
+                processingError: undefined,
+                suggestion: 'Checking with Paperless',
+              }
+            : document,
+        ),
+      );
+
+      try {
+        const task = await waitForPaperlessTask(credentials, taskId, {
+          attempts: 1,
+          intervalMs: 0,
+        });
+        let processed: DocumentItem | null = null;
+        if (task.documentId) {
+          processed = {
+            ...(await fetchPaperlessDocument(credentials, task.documentId, catalog)),
+            taskId,
+          };
+        }
+
+        if (processed) {
+          const readyDocument = processed;
+          pendingProcessedDocumentIds.current.add(readyDocument.id);
+          setDocumentIdAliases((current) => ({ ...current, [placeholderId]: readyDocument.id }));
+          setDocuments((current) => [
+            readyDocument,
+            ...current.filter((document) => document.id !== placeholderId),
+          ]);
+          void sync(credentials).catch(() => {
+            // Preserve the recovered document until a later sync confirms it in the catalog.
+          });
+          setTotalDocuments((current) => current + 1);
+        } else {
+          await sync(credentials);
+          setDocuments((current) => current.filter((document) => document.id !== placeholderId));
+        }
+
+        if (preferences.processingNotifications) {
+          await notifyDocumentProcessed(processed?.title || placeholder.title);
+        }
+      } catch (error) {
+        const message = errorMessage(error);
+        setDocuments((current) =>
+          current.map((document) =>
+            document.id === placeholderId
+              ? {
+                  ...document,
+                  status: 'inbox',
+                  documentType: 'Processing issue',
+                  excerpt: message,
+                  processingError: message,
+                  suggestion: 'Check again in a moment',
+                }
+              : document,
+          ),
+        );
+        setOperationError(message);
+        throw error;
+      }
+    },
+    [catalog, credentials, documents, preferences.processingNotifications, sync],
   );
 
   const updatePreference = useCallback(
@@ -982,6 +1083,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       disconnect,
       refresh,
       importDocument,
+      retryDocumentProcessing,
       updateDocument,
       createTag,
       deleteDocument,
@@ -1021,6 +1123,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       preferences,
       preferencesReady,
       refresh,
+      retryDocumentProcessing,
       reprocessDocument,
       loadSavedView,
       searchLibrary,
