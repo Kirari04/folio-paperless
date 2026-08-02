@@ -16,7 +16,13 @@ import {
   normalizeServerBaseUrl,
   validateCustomHeaders,
 } from './profile-store.ts';
-import { acceptApiToken, type AuthHttpClient, acquirePaperlessToken } from './session.ts';
+import {
+  acceptApiToken,
+  type AuthHttpClient,
+  type AuthHttpResponse,
+  acquirePaperlessToken,
+  validateServerRedirect,
+} from './session.ts';
 import type {
   ProfileConnectionDetails,
   ProfileRequestCredentials,
@@ -60,12 +66,312 @@ export type ConnectionProfileDraft = {
 };
 
 export type OidcLoginResult = {
+  /** Identity-provider token used only for the immediate Paperless exchange. */
   accessToken: string;
-  refreshToken?: string;
   idToken?: string;
-  expiresAt?: string;
   subject: string;
 };
+
+export type PaperlessOidcErrorCode =
+  | 'canceled'
+  | 'invalid-configuration'
+  | 'headless-unavailable'
+  | 'provider-not-configured'
+  | 'provider-token-unsupported'
+  | 'provider-token-rejected'
+  | 'additional-auth-required'
+  | 'rate-limited'
+  | 'unsafe-redirect'
+  | 'redirect-not-followed'
+  | 'unexpected-response'
+  | 'network-failure';
+
+export class PaperlessOidcError extends Error {
+  readonly code: PaperlessOidcErrorCode;
+  readonly retryable: boolean;
+
+  constructor(code: PaperlessOidcErrorCode, message: string, retryable = false) {
+    super(message);
+    this.name = 'PaperlessOidcError';
+    this.code = code;
+    this.retryable = retryable;
+  }
+}
+
+export type PaperlessOidcProviderCapability = {
+  providerId: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function responseHeader(response: AuthHttpResponse, name: string): string | undefined {
+  const match = Object.entries(response.headers ?? {}).find(
+    ([headerName]) => headerName.toLowerCase() === name.toLowerCase(),
+  );
+  return match?.[1];
+}
+
+function requireNoAuthRedirect(requestUrl: string, response: AuthHttpResponse) {
+  const redirectTarget = response.responseUrl && response.responseUrl !== requestUrl
+    ? response.responseUrl
+    : response.status >= 300 && response.status < 400
+      ? responseHeader(response, 'location')
+      : undefined;
+  if (!redirectTarget) return;
+  try {
+    validateServerRedirect(requestUrl, redirectTarget);
+  } catch {
+    throw new PaperlessOidcError(
+      'unsafe-redirect',
+      'Paperless redirected OIDC authentication to an unsafe destination.',
+    );
+  }
+  throw new PaperlessOidcError(
+    'redirect-not-followed',
+    'Paperless redirected OIDC authentication. Confirm the saved server URL before retrying.',
+  );
+}
+
+async function requestPaperlessOidc(
+  client: AuthHttpClient,
+  request: Parameters<AuthHttpClient['request']>[0],
+  signal?: AbortSignal,
+) {
+  let response: AuthHttpResponse;
+  try {
+    response = await client.request(request);
+  } catch (error) {
+    if (error instanceof PaperlessOidcError) throw error;
+    if (signal?.aborted) {
+      throw new PaperlessOidcError('canceled', 'OIDC sign-in was canceled.');
+    }
+    throw new PaperlessOidcError(
+      'network-failure',
+      'Could not reach the Paperless OIDC authentication endpoint.',
+      true,
+    );
+  }
+  requireNoAuthRedirect(request.url, response);
+  return response;
+}
+
+function canonicalOidcDiscoveryUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
+      return null;
+    }
+    url.pathname = url.pathname.replace(/\/+$/, '');
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Discovers the exact django-allauth provider ID configured by Paperless.
+ * This is capability based: forks/backports work without a version check, and
+ * an unsupported server fails before Folio opens the identity-provider UI.
+ */
+export async function discoverPaperlessOidcProvider(
+  input: {
+    serverUrl: string;
+    issuer: string;
+    clientId: string;
+    signal?: AbortSignal;
+  },
+  client: AuthHttpClient,
+): Promise<PaperlessOidcProviderCapability> {
+  const serverUrl = normalizeServerBaseUrl(input.serverUrl);
+  const expectedDiscoveryUrl = canonicalOidcDiscoveryUrl(
+    `${input.issuer.trim().replace(/\/+$/, '')}/.well-known/openid-configuration`,
+  );
+  const clientId = input.clientId.trim();
+  if (!expectedDiscoveryUrl || !clientId) {
+    throw new PaperlessOidcError(
+      'invalid-configuration',
+      'Enter a valid HTTPS OIDC issuer and client ID.',
+    );
+  }
+  const requestUrl = `${serverUrl}/api/auth/headless/app/v1/config`;
+  const response = await requestPaperlessOidc(
+    client,
+    {
+      url: requestUrl,
+      method: 'GET',
+      headers: { accept: 'application/json' },
+      redirect: 'manual',
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    },
+    input.signal,
+  );
+  if (response.status === 404 || response.status === 405) {
+    throw new PaperlessOidcError(
+      'headless-unavailable',
+      'This Paperless server does not expose headless app OIDC. Use API-token authentication or upgrade Paperless.',
+    );
+  }
+  if (response.status === 429) {
+    throw new PaperlessOidcError(
+      'rate-limited',
+      'Paperless temporarily limited OIDC requests. Try again later.',
+      true,
+    );
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new PaperlessOidcError(
+      'unexpected-response',
+      'Paperless returned an unexpected response while checking OIDC support.',
+      response.status >= 500,
+    );
+  }
+  if (
+    !isRecord(response.body)
+    || response.body.status !== 200
+    || !isRecord(response.body.data)
+  ) {
+    throw new PaperlessOidcError(
+      'unexpected-response',
+      'Paperless returned invalid headless OIDC configuration.',
+    );
+  }
+  const socialAccount = response.body.data.socialaccount;
+  const providers = isRecord(socialAccount) && Array.isArray(socialAccount.providers)
+    ? socialAccount.providers
+    : [];
+  const matches = providers.filter((provider) =>
+    isRecord(provider)
+    && provider.client_id === clientId
+    && canonicalOidcDiscoveryUrl(provider.openid_configuration_url) === expectedDiscoveryUrl,
+  );
+  if (matches.length === 0) {
+    throw new PaperlessOidcError(
+      'provider-not-configured',
+      'Paperless has no headless OIDC provider matching this issuer and client ID. Check the server and app configuration.',
+    );
+  }
+  if (matches.length !== 1) {
+    throw new PaperlessOidcError(
+      'unexpected-response',
+      'Paperless returned an ambiguous headless OIDC provider configuration.',
+    );
+  }
+  const provider = matches[0];
+  if (
+    !Array.isArray(provider.flows)
+    || !provider.flows.includes('provider_token')
+  ) {
+    throw new PaperlessOidcError(
+      'provider-token-unsupported',
+      'The matching Paperless OIDC provider does not support app token authentication.',
+    );
+  }
+  if (typeof provider.id !== 'string' || !provider.id.trim()) {
+    throw new PaperlessOidcError(
+      'unexpected-response',
+      'Paperless returned invalid headless OIDC provider configuration.',
+    );
+  }
+  return { providerId: provider.id.trim() };
+}
+
+/** Exchanges verified IdP tokens for the Paperless DRF token used by `/api/`. */
+export async function exchangePaperlessOidcToken(
+  input: {
+    serverUrl: string;
+    providerId: string;
+    clientId: string;
+    accessToken: string;
+    idToken?: string;
+    signal?: AbortSignal;
+  },
+  client: AuthHttpClient,
+): Promise<{ apiToken: string }> {
+  const serverUrl = normalizeServerBaseUrl(input.serverUrl);
+  const requestUrl = `${serverUrl}/api/auth/headless/app/v1/auth/provider/token`;
+  const response = await requestPaperlessOidc(
+    client,
+    {
+      url: requestUrl,
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        provider: input.providerId,
+        process: 'login',
+        token: {
+          client_id: input.clientId,
+          access_token: input.accessToken,
+          ...(input.idToken ? { id_token: input.idToken } : {}),
+        },
+      }),
+      redirect: 'manual',
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    },
+    input.signal,
+  );
+  if (response.status === 404 || response.status === 405) {
+    throw new PaperlessOidcError(
+      'headless-unavailable',
+      'This Paperless server does not expose headless app OIDC. Use API-token authentication or upgrade Paperless.',
+    );
+  }
+  if (response.status === 401) {
+    throw new PaperlessOidcError(
+      'additional-auth-required',
+      'Paperless requires an additional account verification or MFA step that Folio cannot complete. Finish setup in Paperless or use an API token.',
+    );
+  }
+  if (response.status === 400 || response.status === 403) {
+    throw new PaperlessOidcError(
+      'provider-token-rejected',
+      'Paperless rejected the OIDC login. Check the configured provider, client ID, and account signup policy.',
+      response.status === 400,
+    );
+  }
+  if (response.status === 429) {
+    throw new PaperlessOidcError(
+      'rate-limited',
+      'Paperless temporarily limited OIDC login attempts. Try again later.',
+      true,
+    );
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new PaperlessOidcError(
+      'unexpected-response',
+      'Paperless returned an unexpected OIDC authentication response.',
+      response.status >= 500,
+    );
+  }
+  const meta = isRecord(response.body) && isRecord(response.body.meta)
+    ? response.body.meta
+    : null;
+  if (
+    !meta
+    || !isRecord(response.body)
+    || response.body.status !== 200
+    || meta.is_authenticated !== true
+    || typeof meta.access_token !== 'string'
+  ) {
+    throw new PaperlessOidcError(
+      'unexpected-response',
+      'Paperless completed OIDC login but did not return an API token.',
+    );
+  }
+  try {
+    return acceptApiToken(meta.access_token);
+  } catch {
+    throw new PaperlessOidcError(
+      'unexpected-response',
+      'Paperless returned an invalid API token after OIDC login.',
+    );
+  }
+}
 
 export type ProfileOwnershipSummary = ProfileDataCounts & {
   profileId: string;
@@ -239,20 +545,40 @@ export async function prepareConnectionProfile(
         context.existingProfile.auth.clientId === clientId &&
         context.existingProfile.auth.redirectUri === draft.auth.redirectUri &&
         [...context.existingProfile.auth.scopes].sort().join('\u0000') === [...scopes].sort().join('\u0000') &&
-        existingSecrets?.oidc;
-      const oidc = canReuse
-        ? {
-            accessToken: existingSecrets.oidc!.accessToken,
-            refreshToken: existingSecrets.oidc!.refreshToken,
-            idToken: existingSecrets.oidc!.idToken,
-            expiresAt: existingSecrets.oidc!.expiresAt,
-            subject: 'saved-session',
-          }
-        : await dependencies.loginOidc?.(draft.auth, context.signal);
-      if (!oidc) {
-        throw new Error(
-          translateRuntime('authRuntime.oidcUnavailable'),
+        existingSecrets?.apiToken;
+      let apiToken = canReuse ? existingSecrets.apiToken : undefined;
+      if (!apiToken) {
+        const provider = await discoverPaperlessOidcProvider(
+          {
+            serverUrl,
+            issuer,
+            clientId,
+            ...(context.signal === undefined ? {} : { signal: context.signal }),
+          },
+          dependencies.authHttpClient,
         );
+        const oidc = await dependencies.loginOidc?.(
+          { ...draft.auth, issuer, clientId, scopes },
+          context.signal,
+        );
+        if (!oidc) {
+          throw new Error(
+            translateRuntime('authRuntime.oidcUnavailable'),
+          );
+        }
+        apiToken = (
+          await exchangePaperlessOidcToken(
+            {
+              serverUrl,
+              providerId: provider.providerId,
+              clientId,
+              accessToken: oidc.accessToken,
+              ...(oidc.idToken ? { idToken: oidc.idToken } : {}),
+              ...(context.signal === undefined ? {} : { signal: context.signal }),
+            },
+            dependencies.authHttpClient,
+          )
+        ).apiToken;
       }
       auth = {
         kind: 'oidc',
@@ -261,18 +587,13 @@ export async function prepareConnectionProfile(
         redirectUri: draft.auth.redirectUri,
         scopes,
       };
-      secrets = {
-        oidc: {
-          accessToken: oidc.accessToken,
-          ...(oidc.refreshToken ? { refreshToken: oidc.refreshToken } : {}),
-          ...(oidc.idToken ? { idToken: oidc.idToken } : {}),
-          ...(oidc.expiresAt ? { expiresAt: oidc.expiresAt } : {}),
-        },
-      };
+      // The IdP token only proves identity to Paperless. Paperless's returned
+      // DRF token is the sole long-lived credential for its REST API.
+      secrets = { apiToken };
       credentials = {
         serverUrl,
-        token: oidc.accessToken,
-        authorizationScheme: 'Bearer',
+        token: apiToken,
+        authorizationScheme: 'Token',
       };
       break;
     }

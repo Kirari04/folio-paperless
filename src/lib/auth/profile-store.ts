@@ -995,8 +995,12 @@ export class ProfileSecretStore {
     if (!secrets) return { headers: {}, warnings: [] };
 
     const headers: Record<string, string> = {};
-    if (secrets.oidc?.accessToken) headers.authorization = `Bearer ${secrets.oidc.accessToken}`;
-    else if (secrets.apiToken) headers.authorization = `Token ${secrets.apiToken}`;
+    // Stored OIDC provider tokens are legacy migration input and must never be
+    // presented to Paperless. New OIDC profiles store the exchanged DRF token
+    // in `apiToken`, just like other Paperless token-authenticated profiles.
+    if (secrets.apiToken && !secrets.oidc) {
+      headers.authorization = `Token ${secrets.apiToken}`;
+    }
     const custom = validateCustomHeaders(secrets.customHeaders ?? {});
     Object.assign(headers, custom.headers);
     return { headers, warnings: custom.warnings };

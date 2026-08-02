@@ -106,7 +106,11 @@ async function credentialsForBackground(profileId: string): Promise<BackgroundCr
   if (after.revision !== before.revision) return null;
   const fingerprint = connectionProfileAuthFingerprint(profile);
   if (secret.connectionFingerprint !== fingerprint) return null;
-  const token = secret.apiToken ?? secret.oidc?.accessToken ?? '';
+  // Legacy records contain an identity-provider access token, not a
+  // Paperless API token. Never replay that credential to Paperless; reconnect
+  // migrates the profile through the headless exchange first.
+  if (secret.oidc) return null;
+  const token = secret.apiToken ?? '';
   if (!token && !Object.keys(secret.customHeaders ?? {}).length) return null;
   return {
     authoritySecrets: secret,
@@ -115,7 +119,7 @@ async function credentialsForBackground(profileId: string): Promise<BackgroundCr
       profileId,
       serverUrl: profile.serverUrl,
       token,
-      authorizationScheme: secret.oidc ? 'Bearer' : 'Token',
+      authorizationScheme: 'Token',
       customHeaders: secret.customHeaders,
     },
   };
@@ -129,14 +133,25 @@ async function runProfile(profileId: string) {
   const { credentials, connectionFingerprint, authoritySecrets } = credentialContext;
   const executionGuard = async () => {
     if (await profileRemovalPending()) return false;
-    const snapshot = await profiles.getSnapshot();
-    const profile = snapshot.profiles.find((item) => item.id === profileId);
+    const before = await profiles.getSnapshot();
+    const profile = before.profiles.find((item) => item.id === profileId);
     if (!profile || connectionProfileAuthFingerprint(profile) !== connectionFingerprint) return false;
     const currentSecrets = await secrets.read(profileId);
+    const after = await profiles.getSnapshot();
+    if (after.revision !== before.revision) return false;
+    const currentProfile = after.profiles.find((item) => item.id === profileId);
+    if (
+      !currentProfile
+      || connectionProfileAuthFingerprint(currentProfile) !== connectionFingerprint
+    ) return false;
+    // Secret/profile reads above are asynchronous. Recheck the durable removal
+    // journal at the last await boundary so a removal that began during those
+    // reads fences the next transport before it receives captured authority.
+    if (await profileRemovalPending()) return false;
     return !!currentSecrets
       && currentSecrets.connectionFingerprint === connectionFingerprint
       && profileSecretsAuthorizeSameContext(authoritySecrets, currentSecrets)
-      && credentialsMatchStoredProfile(credentials, profile, currentSecrets);
+      && credentialsMatchStoredProfile(credentials, currentProfile, currentSecrets);
   };
   const coordinator = new OfflineSyncCoordinator({
     repository,
