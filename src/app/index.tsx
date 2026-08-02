@@ -7,6 +7,7 @@ import {
   FileUp,
   Search,
   Sparkles,
+  ListChecks,
   UserRound,
 } from 'lucide-react-native';
 import { useState } from 'react';
@@ -20,17 +21,22 @@ import { PaperThumbnail } from '@/components/paper-thumbnail';
 import { SectionHeading } from '@/components/section-heading';
 import { fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
+import { useI18n } from '@/context/ui-preferences-context';
+import { presentRuntimeError } from '@/i18n/error-presentation';
 import { useRouter } from '@/lib/router';
+import { presentSyncStatus, type SyncStatusTone } from '@/lib/sync-status-presentation';
 
-function greeting() {
-  const hour = new Date().getHours();
-  if (hour < 12) return 'Good morning';
-  if (hour < 18) return 'Good afternoon';
-  return 'Good evening';
+function syncToneColor(tone: SyncStatusTone) {
+  if (tone === 'success') return palette.limeDark;
+  if (tone === 'progress') return palette.inkSoft;
+  if (tone === 'warning') return palette.apricot;
+  if (tone === 'danger') return palette.danger;
+  return palette.faint;
 }
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { t, formatDate, formatNumber } = useI18n();
   const {
     documents,
     totalDocuments,
@@ -38,30 +44,52 @@ export default function HomeScreen() {
     connected,
     isSyncing,
     lastSynced,
+    syncState,
+    online,
     refresh,
-    importDocument,
+    importDocuments,
+    prepareDocuments,
     connectionError,
+    tasks,
   } = useApp();
   const [query, setQuery] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const syncStatus = presentSyncStatus({ connected, lastSynced, online, syncState });
+  const syncStatusText = t(
+    syncStatus.messageKey,
+    syncStatus.lastSuccessfulSyncAt
+      ? { time: formatDate(syncStatus.lastSuccessfulSyncAt, { dateStyle: 'short', timeStyle: 'short' }) }
+      : undefined,
+  );
 
   async function pickDocument() {
     const result = await DocumentPicker.getDocumentAsync({
       copyToCacheDirectory: true,
-      multiple: false,
+      multiple: true,
       type: ['application/pdf', 'image/*', 'text/*'],
     });
     if (result.canceled) return;
-    const file = result.assets[0];
     setImportError(null);
     setIsImporting(true);
     try {
-      await importDocument({ uri: file.uri, name: file.name, mimeType: file.mimeType });
+      const files = result.assets.map((file) => ({
+        uri: file.uri,
+        name: file.name,
+        mimeType: file.mimeType,
+        size: file.size,
+      }));
+      const intake = connected
+        ? await prepareDocuments(files, 'picker')
+        : await importDocuments(files, { source: 'picker' });
       await hapticFeedback('confirm');
-      router.push('/inbox');
+      if (connected && intake.batchId) {
+        router.push({ pathname: '/intake', params: { batchId: intake.batchId } });
+      } else {
+        router.push('/inbox');
+      }
     } catch (error) {
-      setImportError(error instanceof Error ? error.message : 'Could not import this document.');
+      setImportError(presentRuntimeError(error, t('home.importError')));
       await hapticFeedback('error');
     } finally {
       setIsImporting(false);
@@ -73,6 +101,15 @@ export default function HomeScreen() {
     router.push(value ? { pathname: '/documents', params: { q: value } } : '/documents');
   }
 
+  const hour = new Date().getHours();
+  const greeting = t(
+    hour < 12
+      ? 'home.greetingMorning'
+      : hour < 18
+        ? 'home.greetingAfternoon'
+        : 'home.greetingEvening',
+  );
+
   return (
     <AppShell onRefresh={() => void refresh().catch(() => {})} refreshing={isSyncing}>
       <View style={styles.topbar}>
@@ -80,33 +117,33 @@ export default function HomeScreen() {
           <FolioLogo />
           <View>
             <Text style={styles.brandName}>folio</Text>
-            <Text style={styles.brandSub}>for Paperless</Text>
+            <Text style={styles.brandSub}>{t('home.forPaperless')}</Text>
           </View>
         </View>
         <Pressable
-          accessibilityLabel="Open settings"
+          accessibilityLabel={t('home.openSettings')}
           onPress={() => router.push('/settings')}
           style={styles.avatar}>
           <UserRound color={palette.ink} size={20} />
-          <View style={[styles.statusDot, connected && styles.statusDotConnected]} />
+          <View style={[styles.statusDot, { backgroundColor: syncToneColor(syncStatus.tone) }]} />
         </Pressable>
       </View>
 
       <View style={styles.intro}>
-        <Text style={styles.eyebrow}>{greeting()}</Text>
-        <Text style={styles.heroTitle}>Paperwork,{'\n'}minus the work.</Text>
+        <Text style={styles.eyebrow}>{greeting}</Text>
+        <Text style={styles.heroTitle}>{t('home.heroTitle')}</Text>
         <Text style={styles.heroCopy}>
-          Everything important, searchable and in its place.
+          {t('home.heroCopy')}
         </Text>
       </View>
 
       <View style={styles.search}>
         <Search color={palette.muted} size={20} />
         <TextInput
-          accessibilityLabel="Search your documents"
+          accessibilityLabel={t('home.searchLabel')}
           onChangeText={setQuery}
           onSubmitEditing={submitSearch}
-          placeholder="Search titles, text, tags…"
+          placeholder={t('home.searchPlaceholder')}
           placeholderTextColor={palette.faint}
           returnKeyType="search"
           style={styles.searchInput}
@@ -121,22 +158,24 @@ export default function HomeScreen() {
         onPress={() => router.push('/inbox')}
         style={styles.inboxPressable}>
         <LinearGradient
-          colors={[palette.ink, '#2B3A30']}
+          colors={[palette.accentInk, palette.inverseSurface]}
           end={{ x: 1, y: 1 }}
           style={styles.inboxCard}>
           <View style={styles.inboxCopy}>
             <View style={styles.inboxPill}>
               <Sparkles color={palette.ink} size={13} />
-              <Text style={styles.inboxPillText}>SMART INBOX</Text>
+              <Text style={styles.inboxPillText}>{t('home.smartInbox')}</Text>
             </View>
             <Text style={styles.inboxTitle}>
               {inboxDocuments.length
-                ? `${inboxDocuments.length} ${inboxDocuments.length === 1 ? 'document' : 'documents'} need a look`
-                : 'Your inbox is clear'}
+                ? inboxDocuments.length === 1
+                  ? t('home.inboxOne')
+                  : t('home.inboxMany', { count: formatNumber(inboxDocuments.length) })
+                : t('home.inboxClear')}
             </Text>
             <View style={styles.reviewLink}>
               <Text style={styles.reviewLinkText}>
-                {inboxDocuments.length ? 'Review now' : 'See archive'}
+                {inboxDocuments.length ? t('home.reviewNow') : t('home.seeArchive')}
               </Text>
               <ArrowRight color={palette.lime} size={17} />
             </View>
@@ -161,7 +200,7 @@ export default function HomeScreen() {
             ))}
             {!inboxDocuments.length && (
               <View style={styles.completeMark}>
-                <CheckCircle2 color={palette.ink} size={34} />
+                <CheckCircle2 color={palette.accentInk} size={34} />
               </View>
             )}
           </View>
@@ -172,12 +211,12 @@ export default function HomeScreen() {
         <Pressable
           onPress={() => router.push('/scan')}
           style={[styles.quickAction, styles.scanAction]}>
-          <View style={[styles.quickIcon, { backgroundColor: palette.ink }]}>
+          <View style={[styles.quickIcon, { backgroundColor: palette.accentInk }]}>
             <Camera color={palette.lime} size={21} />
           </View>
           <View style={styles.quickText}>
-            <Text style={styles.quickTitle}>Scan paper</Text>
-            <Text style={styles.quickSubtitle}>Camera to inbox</Text>
+            <Text style={styles.quickTitle}>{t('home.scanPaper')}</Text>
+            <Text style={styles.quickSubtitle}>{t('home.scanSubtitle')}</Text>
           </View>
           <ArrowRight color={palette.ink} size={18} />
         </Pressable>
@@ -194,8 +233,8 @@ export default function HomeScreen() {
             )}
           </View>
           <View style={styles.quickText}>
-            <Text style={styles.quickTitle}>Import file</Text>
-            <Text style={styles.quickSubtitle}>PDF or image</Text>
+            <Text style={styles.quickTitle}>{t('home.importFile')}</Text>
+            <Text style={styles.quickSubtitle}>{t('home.importSubtitle')}</Text>
           </View>
           <ArrowRight color={palette.ink} size={18} />
         </Pressable>
@@ -207,30 +246,52 @@ export default function HomeScreen() {
         </View>
       )}
 
+      <Pressable onPress={() => router.push('/tasks')} style={styles.taskCenterCard}>
+        <View style={styles.taskCenterIcon}>
+          <ListChecks color={palette.ink} size={20} />
+        </View>
+        <View style={styles.taskCenterCopy}>
+          <Text style={styles.taskCenterTitle}>{t('home.taskCenter')}</Text>
+          <Text style={styles.taskCenterSubtitle}>
+            {t('home.taskCenterSummary', {
+              active: formatNumber(tasks.filter((task) => !['ready', 'failed', 'canceled'].includes(task.stage)).length),
+              failed: formatNumber(tasks.filter((task) => task.stage === 'failed').length),
+            })}
+          </Text>
+        </View>
+        <ArrowRight color={palette.ink} size={18} />
+      </Pressable>
+
       <View style={styles.statsCard}>
         <View>
-          <Text style={styles.statsValue}>{connected ? totalDocuments : documents.length}</Text>
+          <Text style={styles.statsValue}>
+            {formatNumber(connected ? totalDocuments : documents.length)}
+          </Text>
           <Text style={styles.statsLabel}>
-            {connected ? 'documents in library' : 'sample documents'}
+            {connected ? t('home.libraryDocuments') : t('home.sampleDocuments')}
           </Text>
         </View>
         <View style={styles.statsDivider} />
         <View>
-          <Text style={styles.statsValue}>{inboxDocuments.length}</Text>
-          <Text style={styles.statsLabel}>awaiting review</Text>
+          <Text style={styles.statsValue}>{formatNumber(inboxDocuments.length)}</Text>
+          <Text style={styles.statsLabel}>{t('home.awaitingReview')}</Text>
         </View>
-        <View style={styles.syncState}>
-          <View style={[styles.syncDot, connected && styles.syncDotConnected]} />
-          <Text style={styles.syncText}>{connected ? `Synced ${lastSynced}` : 'Demo workspace'}</Text>
+        <View
+          accessibilityLabel={syncStatusText}
+          accessibilityLiveRegion="polite"
+          accessible
+          style={styles.syncState}>
+          <View style={[styles.syncDot, { backgroundColor: syncToneColor(syncStatus.tone) }]} />
+          <Text numberOfLines={2} style={styles.syncText}>{syncStatusText}</Text>
         </View>
       </View>
 
       <View style={styles.recentSection}>
         <SectionHeading
-          title="Recently added"
+          title={t('home.recentlyAdded')}
           action={
             <Pressable onPress={() => router.push('/documents')}>
-              <Text style={styles.seeAll}>See all</Text>
+              <Text style={styles.seeAll}>{t('home.seeAll')}</Text>
             </Pressable>
           }
         />
@@ -245,6 +306,36 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  taskCenterCard: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 14,
+    borderRadius: radii.md,
+    backgroundColor: palette.paper,
+  },
+  taskCenterIcon: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    backgroundColor: palette.sky,
+  },
+  taskCenterCopy: { flex: 1 },
+  taskCenterTitle: {
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  taskCenterSubtitle: {
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 11,
+    marginTop: 2,
+  },
   topbar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -292,9 +383,6 @@ const styles = StyleSheet.create({
     backgroundColor: palette.faint,
     borderWidth: 2,
     borderColor: palette.canvas,
-  },
-  statusDotConnected: {
-    backgroundColor: '#64AE72',
   },
   intro: {
     marginTop: 38,
@@ -387,7 +475,7 @@ const styles = StyleSheet.create({
   },
   inboxTitle: {
     maxWidth: 230,
-    color: palette.paper,
+    color: palette.onDark,
     fontFamily: fonts.serif,
     fontSize: 26,
     lineHeight: 30,
@@ -430,7 +518,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderRadius: radii.sm,
-    backgroundColor: '#F5E2DD',
+    backgroundColor: palette.rose,
     marginTop: 12,
   },
   errorText: {
@@ -484,9 +572,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 18,
-    padding: 18,
+    paddingBottom: 18,
+    paddingHorizontal: 18,
+    paddingTop: 32,
     borderRadius: radii.md,
-    backgroundColor: '#E8E3D8',
+    backgroundColor: palette.paper,
     overflow: 'hidden',
   },
   statsValue: {
@@ -510,10 +600,12 @@ const styles = StyleSheet.create({
   },
   syncState: {
     position: 'absolute',
+    left: 12,
     right: 12,
     top: 10,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: 5,
   },
   syncDot: {
@@ -522,14 +614,13 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: palette.faint,
   },
-  syncDotConnected: {
-    backgroundColor: '#64AE72',
-  },
   syncText: {
+    flexShrink: 1,
     color: palette.muted,
     fontFamily: fonts.sans,
     fontSize: 9,
     fontWeight: '600',
+    textAlign: 'right',
   },
   recentSection: {
     marginTop: 30,
