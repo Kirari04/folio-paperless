@@ -33,7 +33,7 @@ function NativeIncomingShareGateway() {
   const { t } = useI18n();
   const {
     activeProfile,
-    connected,
+    profileConfigured,
     dismissIntakeRejectionBatch,
     importDocuments,
     prepareDocuments,
@@ -99,10 +99,10 @@ function NativeIncomingShareGateway() {
     try {
       // This component is mounted below the biometric gate. A profile switch
       // must finish and render as active before this closure may stage files.
-      const result = connected
+      const result = profileConfigured
         ? await prepareDocuments(candidates, 'share')
         : await importDocuments(candidates, { source: 'share' });
-      if (connected && !result.accepted.length) {
+      if (profileConfigured && !result.accepted.length) {
         setRejectedItems(result.rejected.map((item, index) => ({
           id: `${result.batchId ?? 'share'}-${index}`,
           name: sanitizeIntakeFilename(item.candidate.name),
@@ -117,9 +117,9 @@ function NativeIncomingShareGateway() {
       setRejectedItems([]);
       setRejectionBatchId(null);
       await hapticFeedback('confirm');
-      if (connected && result.accepted[0]) {
+      if (profileConfigured && result.accepted[0]) {
         router.push({ pathname: '/intake', params: { batchId: result.accepted[0].batchId } });
-      } else if (!connected) {
+      } else if (!profileConfigured) {
         router.push('/inbox');
       }
     } catch (nextError) {
@@ -129,7 +129,7 @@ function NativeIncomingShareGateway() {
       handling.current = false;
       setStaging(false);
     }
-  }, [activeProfile?.id, clearSharedPayloads, connected, dismissIntakeRejectionBatch, importDocuments, prepareDocuments, rejectionBatchId, resolvedSharedPayloads, router, t]);
+  }, [activeProfile?.id, clearSharedPayloads, dismissIntakeRejectionBatch, importDocuments, prepareDocuments, profileConfigured, rejectionBatchId, resolvedSharedPayloads, router, t]);
 
   async function selectDestination(profileId: string) {
     if (staging || switchingProfileId) return;
@@ -180,7 +180,10 @@ function NativeIncomingShareGateway() {
     setCompletedSwitchId(null);
   }
 
-  const message = error || resolveError?.message;
+  // Native providers may include private paths, authority names, filenames,
+  // and platform internals in their exception text. Keep that value outside
+  // the protected UI and present only Folio-owned localized copy.
+  const message = error || (resolveError ? t('share.stagingError') : null);
   return (
     <>
       <Modal
@@ -223,7 +226,7 @@ function NativeIncomingShareGateway() {
 
             {!!incomingShareCandidates(resolvedSharedPayloads).length && !rejectedItems.length && (
               <ScrollView contentContainerStyle={styles.profileList} showsVerticalScrollIndicator={false}>
-                {connected ? profiles.map((profile) => {
+                {profileConfigured ? profiles.map((profile) => {
                   const active = profile.id === activeProfile?.id;
                   const busy = switchingProfileId === profile.id || (staging && active);
                   return (
