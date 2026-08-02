@@ -29,6 +29,8 @@ function SavedViewsScreen() {
     activeProfile,
     catalog,
     connected,
+    connectionError,
+    profileConfigured,
     publishSavedView,
     publishSavedViewDeletion,
     refresh,
@@ -176,8 +178,10 @@ function SavedViewsScreen() {
             <Text style={styles.errorBannerText}>{error}</Text>
           </View>
         )}
-        {!connected ? (
+        {!profileConfigured ? (
           <StateCard icon={<CircleAlert color={palette.muted} size={25} />} title={t('savedViews.connect')} copy={t('savedViews.demoUnavailable')} />
+        ) : !connected ? (
+          <StateCard icon={<CircleAlert color={palette.danger} size={25} />} title={t('savedViews.unavailable')} copy={connectionError ?? t('appError.authMissing')} />
         ) : advanced.phase === 'loading' || loading ? (
           <StateCard icon={<ActivityIndicator color={palette.ink} />} title={t('savedViews.loading')} copy={t('savedViews.checking')} />
         ) : error && !views.length || advancedError ? (

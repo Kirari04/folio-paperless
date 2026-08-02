@@ -197,19 +197,7 @@ function persistedBulkRequest(operation: PaperlessBulkOperation, remoteDocumentI
     } as const;
   }
   if (operation.kind === 'setOwner') {
-    return {
-      path: '/api/documents/bulk_edit/',
-      method: 'POST',
-      body: {
-        documents: remoteDocumentIds,
-        method: 'set_permissions',
-        parameters: {
-          owner: operation.value,
-          set_permissions: { view: { users: [], groups: [] }, change: { users: [], groups: [] } },
-          merge: true,
-        },
-      },
-    } as const;
+    throw new Error('Owner retries require verified per-document updates.');
   }
   const methods = {
     setCorrespondent: 'set_correspondent',
@@ -258,11 +246,71 @@ export async function submitPersistentBulkTask(
   ) {
     throw new Error('A bulk retry requires unique failed remote targets.');
   }
-  const request = persistedBulkRequest(task.bulk.operation, remoteDocumentIds as number[]);
   const requestImplementation = options.request ?? (async (path: string, init: RequestInit) => {
     const { requestPaperlessRawResponse } = await import('./paperless.ts');
     return requestPaperlessRawResponse(credentials, path, init);
   });
+  if (task.bulk.operation.kind === 'setOwner') {
+    const expectedOwner = task.bulk.operation.value;
+    for (const remoteId of remoteDocumentIds as number[]) {
+      const path = `/api/documents/${remoteId}/`;
+      const patchResponse = await requestImplementation(path, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ owner: expectedOwner }),
+      });
+      const patchText = await patchResponse.text();
+      let patchBody: unknown = patchText;
+      try {
+        patchBody = patchText ? JSON.parse(patchText) : null;
+      } catch {
+        // The bounded raw text is retained for the failure below.
+      }
+      if (!patchResponse.ok) {
+        throw Object.assign(new Error(`Paperless rejected the owner retry (${patchResponse.status}).`), {
+          status: patchResponse.status,
+        });
+      }
+      const patchConfirmsOwner = !!patchBody
+        && typeof patchBody === 'object'
+        && 'id' in patchBody
+        && patchBody.id === remoteId
+        && 'owner' in patchBody
+        && (patchBody.owner ?? null) === expectedOwner;
+
+      const readbackResponse = await requestImplementation(path, { method: 'GET' });
+      const readbackText = await readbackResponse.text();
+      let readbackBody: unknown = readbackText;
+      try {
+        readbackBody = readbackText ? JSON.parse(readbackText) : null;
+      } catch {
+        // A malformed successful response fails the exact check below.
+      }
+      if (!readbackResponse.ok) {
+        if (
+          patchConfirmsOwner
+          && (readbackResponse.status === 403 || readbackResponse.status === 404)
+        ) continue;
+        throw Object.assign(new Error(`Paperless could not verify the owner retry (${readbackResponse.status}).`), {
+          status: readbackResponse.status,
+        });
+      }
+      if (
+        !readbackBody
+        || typeof readbackBody !== 'object'
+        || !('id' in readbackBody)
+        || readbackBody.id !== remoteId
+        || !('owner' in readbackBody)
+        || (readbackBody.owner ?? null) !== expectedOwner
+      ) {
+        throw Object.assign(new Error('Paperless owner retry readback did not match the request.'), {
+          status: 409,
+        });
+      }
+    }
+    return { summary: 'Paperless completed and verified the owner operation.' };
+  }
+  const request = persistedBulkRequest(task.bulk.operation, remoteDocumentIds as number[]);
   const response = await requestImplementation(request.path, {
     method: request.method,
     headers: { 'Content-Type': 'application/json' },

@@ -25,6 +25,11 @@ const [metadataSource, savedViewsSource, trashSource] = await Promise.all([
   '../src/app/saved-views.tsx',
   '../src/app/trash.tsx',
 ].map((path) => readFile(new URL(path, import.meta.url), 'utf8')));
+const [homeSource, documentsSource, appShellSource] = await Promise.all([
+  '../src/app/index.tsx',
+  '../src/app/documents.tsx',
+  '../src/components/app-shell.tsx',
+].map((path) => readFile(new URL(path, import.meta.url), 'utf8')));
 
 test('AppProvider preloads profile-scoped state before publishing the active profile', () => {
   const start = appContextSource.indexOf('const switchProfile = useCallback');
@@ -62,6 +67,18 @@ test('cold OIDC bootstrap publishes cached workspace before refresh network I/O'
   assert.ok(refresh < remoteSync);
   assert.match(source, /catch \(error\) \{[\s\S]*setConnectionError[\s\S]*return;[\s\S]*await sync/);
   assert.doesNotMatch(source.slice(workspacePublish, refresh), /setDocuments\(demoWorkspace\.documents\)/);
+});
+
+test('a reconnect-required profile keeps its cache out of demo semantics and accepts durable intake', () => {
+  assert.match(appContextSource, /profileConfigured: Boolean\(activeProfile\)/);
+  assert.match(
+    appContextSource,
+    /const profileId = credentials\?\.profileId \?\? activeProfileIdRef\.current;[\s\S]*if \(!profileId\) \{[\s\S]*localDocuments/,
+  );
+  assert.match(appContextSource, /!options\.deferSubmission && credentials\?\.profileId === profileId/);
+  assert.match(homeSource, /profileConfigured[\s\S]*home\.libraryDocuments/);
+  assert.match(documentsSource, /!profileConfigured && <DemoModeBanner/);
+  assert.match(appShellSource, /!profileConfigured && showDemoBanner/);
 });
 
 test('profile-owned metadata, saved-view, and trash screens remount at the connection boundary', () => {
@@ -109,6 +126,38 @@ test('profile credentials fail closed when connection metadata is rebound to ano
   assert.ok(start >= 0 && end > start);
   assert.ok(mismatchCheck >= 0 && mismatchCheck < tokenRead);
   assert.match(source, /secrets\.connectionFingerprint !== fingerprint\)[\s\S]*throw new Error/);
+});
+
+test('foreground OIDC credentials accept only Paperless tokens and fail legacy IdP secrets into reconnect', () => {
+  const start = appContextSource.indexOf('async function credentialsForProfile');
+  const end = appContextSource.indexOf('async function loadProfileOwnership', start);
+  const source = appContextSource.slice(start, end);
+
+  assert.match(
+    source,
+    /profile\.auth\.kind === 'oidc'[\s\S]*secrets\.oidc \|\| !secrets\.apiToken[\s\S]*profiles\.oidcReconnect/,
+  );
+  assert.match(source, /const token = secrets\.apiToken \?\? ''/);
+  assert.match(source, /authorizationScheme: 'Token'/);
+  assert.doesNotMatch(source, /secrets\.oidc\?\.accessToken|authorizationScheme: 'Bearer'/);
+});
+
+test('OIDC sign-out clears only the selected profile authority before revoking its runtime', () => {
+  const start = appContextSource.indexOf('const revokeProfileOidc = useCallback');
+  const end = appContextSource.indexOf('const removeProfile = useCallback', start);
+  const source = appContextSource.slice(start, end);
+  const durableClear = source.indexOf('await profileSecrets.write(profileId, remainingSecrets)');
+  const generationFence = source.indexOf('profileGeneration.current += 1');
+  const runtimeRevoke = source.indexOf('publishCredentials(null)');
+  const metadataUpdate = source.indexOf('await connectionProfiles.update(updated)');
+
+  assert.match(source, /!secrets\.apiToken && !secrets\.oidc/);
+  assert.match(source, /apiToken: _apiToken,[\s\S]*oidc: _oidc,[\s\S]*\.\.\.remainingSecrets/);
+  assert.match(source, /revokeOidcSession[\s\S]*\.catch\(\(\) => result\)/);
+  assert.ok(durableClear >= 0 && durableClear < generationFence);
+  assert.ok(generationFence < runtimeRevoke);
+  assert.ok(runtimeRevoke < metadataUpdate);
+  assert.doesNotMatch(source, /if \(!secrets\?\.oidc\)/);
 });
 
 test('foreground upload work remains bound to one published credential generation', () => {

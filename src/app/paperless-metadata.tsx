@@ -38,6 +38,8 @@ function PaperlessMetadataScreen() {
   const {
     activeProfile,
     connected,
+    connectionError,
+    profileConfigured,
     publishCatalogDeletion,
     publishCatalogObject,
     refresh,
@@ -262,8 +264,10 @@ function PaperlessMetadataScreen() {
             <Text style={styles.errorBannerText}>{error}</Text>
           </View>
         )}
-        {!connected ? (
+        {!profileConfigured ? (
           <State icon={<CircleAlert color={palette.muted} size={25} />} title={t('metadata.connect')} copy={t('metadata.demoUnavailable')} />
+        ) : !connected ? (
+          <State icon={<CircleAlert color={palette.danger} size={25} />} title={t('metadata.unavailable')} copy={connectionError ?? t('appError.authMissing')} />
         ) : advanced.phase === 'loading' || loading && !loaded.has(resource) ? (
           <State icon={<ActivityIndicator color={palette.ink} />} title={t('metadata.loading')} copy={t('metadata.checking')} />
         ) : error && !loaded.has(resource) || advancedError ? (
