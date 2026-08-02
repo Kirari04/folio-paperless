@@ -24,6 +24,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
 import { fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
+import { useI18n } from '@/context/ui-preferences-context';
 
 export type KeyboardSheetHandle = {
   close: () => void;
@@ -54,6 +55,7 @@ export const KeyboardSheet = forwardRef<KeyboardSheetHandle, KeyboardSheetProps>
     forwardedRef,
   ) {
     const reducedMotion = useReducedMotion();
+    const { t } = useI18n();
     const transition = useRef(new Animated.Value(reducedMotion ? 1 : 0)).current;
     const closing = useRef(false);
     const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -136,7 +138,7 @@ export const KeyboardSheet = forwardRef<KeyboardSheetHandle, KeyboardSheetProps>
             }) }]}
           />
           <NativePressable
-            accessibilityLabel={`Close ${accessibilityLabel}`}
+            accessibilityLabel={t('common.closeLabel', { label: accessibilityLabel })}
             onPress={close}
             style={StyleSheet.absoluteFill}
           />
@@ -166,7 +168,7 @@ export const KeyboardSheet = forwardRef<KeyboardSheetHandle, KeyboardSheetProps>
                   {!!subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
                 </View>
                 <Pressable
-                  accessibilityLabel={`Close ${accessibilityLabel}`}
+                  accessibilityLabel={t('common.closeLabel', { label: accessibilityLabel })}
                   onPress={close}
                   style={styles.closeButton}>
                   <X color={palette.ink} size={20} />
@@ -192,7 +194,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: 'rgba(10, 18, 13, 0.56)',
+    backgroundColor: palette.scrim,
   },
   sheetFrame: {
     width: '100%',

@@ -1,19 +1,25 @@
 import {
   Bookmark,
+  Check,
+  CheckSquare2,
   Filter,
+  FolderTree,
   LayoutGrid,
   List,
+  MoreHorizontal,
   RotateCcw,
+  Save,
   Search,
   SlidersHorizontal,
   X,
 } from 'lucide-react-native';
 import { FlashList } from '@shopify/flash-list';
-import type { ListRenderItemInfo, ViewToken } from '@shopify/flash-list';
-import { Image } from 'expo-image';
+import type { ListRenderItemInfo } from '@shopify/flash-list';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  BackHandler,
   Keyboard,
   RefreshControl,
   ScrollView,
@@ -25,6 +31,8 @@ import {
 } from 'react-native';
 
 import { AppShell } from '@/components/app-shell';
+import { BulkActionSheet, type BulkActionRequest } from '@/components/bulk-action-sheet';
+import { ChoiceSheet } from '@/components/choice-sheet';
 import { DemoModeBanner } from '@/components/demo-mode-banner';
 import { LibraryFilterSheet } from '@/components/library-filter-sheet';
 import { LibrarySortSheet } from '@/components/library-sort-sheet';
@@ -32,30 +40,64 @@ import { MotionPressable as Pressable, hapticFeedback } from '@/components/motio
 import { PaperThumbnail } from '@/components/paper-thumbnail';
 import { bottomNavHeight, fonts, maxContentWidth, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
+import { useI18n, type TranslationKey } from '@/i18n';
+import { presentRuntimeError } from '@/i18n/error-presentation';
 import {
   cloneLibraryFilters,
   emptyLibraryFilters,
   libraryFilterCount,
-  librarySortLabels,
   matchesLibraryFilters,
   savedViewToLibraryState,
   sortLibraryDocuments,
 } from '@/lib/library-filters';
-import { getPaperlessDocumentUrl, paperlessFileHeaders } from '@/lib/paperless';
+import {
+  buildBulkCandidates,
+  executeBulkDocumentOperation,
+  selectShownDocuments,
+  summarizeLibrarySelection,
+  toggleStableSelection,
+} from '@/lib/bulk-document-controller';
+import {
+  reconcileConfirmedBulkDocuments,
+  reconcileConfirmedBulkThenRefresh,
+} from '@/lib/bulk-document-reconciliation';
+import { exportSelectedDocuments } from '@/lib/bulk-document-export';
+import { selectBulkEligible } from '@/lib/paperless-advanced';
+import {
+  buildSavedViewEdit,
+  folioSavedViewMode,
+  hasUnsupportedSavedViewRules,
+  paperlessSavedViewDisplayMode,
+  reconcileLibraryFiltersWithCatalog,
+  serializeLibrarySavedViewState,
+  type PaperlessQueryRuleType,
+} from '@/lib/saved-view-controller';
 import { useNavigationRoute, useRouter } from '@/lib/router';
+import { usePaperlessAdvanced } from '@/lib/use-paperless-advanced';
+import {
+  SavedViewEditorSheet,
+  type SavedViewPresentationEdit,
+} from '@/components/saved-view-editor-sheet';
 import {
   DocumentItem,
   LibraryFilters,
   LibrarySortOrder,
   PaperlessCatalog,
   PaperlessSavedViewRule,
+  PaperlessOption,
 } from '@/types/document';
+import type {
+  PaperlessBulkOperation,
+  PaperlessBulkResult,
+} from '@/types/paperless-advanced';
 
 export default function DocumentsRoute() {
   const route = useNavigationRoute();
+  const { activeProfile, credentials } = useApp();
   const active = route.pathname === '/documents';
   return (
     <DocumentsScreen
+      key={activeProfile?.id ?? credentials?.profileId ?? 'no-profile'}
       routeKey={active ? route.key : undefined}
       routeQuery={active ? route.params.q : undefined}
     />
@@ -70,16 +112,22 @@ const DocumentsScreen = memo(function DocumentsScreen({
   routeQuery?: string;
 }) {
   const router = useRouter();
+  const { formatNumber, t } = useI18n();
   const { width } = useWindowDimensions();
   const {
     connected,
     credentials,
+    activeProfile,
     documents,
     catalog,
     totalDocuments,
     isSyncing,
+    online,
     refresh,
+    publishSavedView,
     searchLibrary,
+    trackPaperlessBulkOperation,
+    reconcilePaperlessBulkOperation,
   } = useApp();
   const [queryState, setQueryState] = useState({
     acceptedRouteKey: routeKey,
@@ -98,7 +146,26 @@ const DocumentsScreen = memo(function DocumentsScreen({
   const [sortSheetOpen, setSortSheetOpen] = useState(false);
   const [activeSavedView, setActiveSavedView] = useState<string | null>(null);
   const [presetRefined, setPresetRefined] = useState(false);
+  const [queryRuleType, setQueryRuleType] = useState<PaperlessQueryRuleType>(49);
   const [extraRules, setExtraRules] = useState<PaperlessSavedViewRule[]>([]);
+  const [sourceRules, setSourceRules] = useState<PaperlessSavedViewRule[]>([]);
+  const [sourceRuleStateSignature, setSourceRuleStateSignature] = useState<string | undefined>();
+  const [savedViewExtra, setSavedViewExtra] = useState<Readonly<Record<string, unknown>>>({});
+  const [savedViewPresentation, setSavedViewPresentation] = useState<{
+    pageSize: number;
+    displayMode?: string;
+    displayFields: string[];
+  } | undefined>();
+  const [savedViewSort, setSavedViewSort] = useState<{
+    sortField: string;
+    sortReverse: boolean;
+    projectedSortOrder: LibrarySortOrder;
+  } | undefined>();
+  const updateQuery = useCallback((value: string) => {
+    setQuery(value);
+    setQueryRuleType(49);
+    if (activeSavedView) setPresetRefined(true);
+  }, [activeSavedView, setQuery]);
   const [remoteResult, setRemoteResult] = useState<{
     documents: DocumentItem[];
     signature: string;
@@ -109,15 +176,38 @@ const DocumentsScreen = memo(function DocumentsScreen({
     signature: string;
   } | null>(null);
   const [retryKey, setRetryKey] = useState(0);
-  const credentialsRef = useRef(credentials);
+  const advanced = usePaperlessAdvanced();
+  const savedViewDisplayFieldOptions = useMemo(() => [
+    { value: 'title', label: t('savedViewEditor.fieldTitle') },
+    { value: 'created', label: t('savedViewEditor.fieldCreated') },
+    { value: 'added', label: t('savedViewEditor.fieldAdded') },
+    { value: 'tag', label: t('savedViewEditor.fieldTags') },
+    { value: 'correspondent', label: t('savedViewEditor.fieldCorrespondent') },
+    { value: 'documenttype', label: t('savedViewEditor.fieldDocumentType') },
+    { value: 'storagepath', label: t('savedViewEditor.fieldStoragePath') },
+    { value: 'note', label: t('savedViewEditor.fieldNotes') },
+    { value: 'owner', label: t('savedViewEditor.fieldOwner') },
+    { value: 'shared', label: t('savedViewEditor.fieldShared') },
+    { value: 'asn', label: t('savedViewEditor.fieldAsn') },
+    { value: 'pagecount', label: t('savedViewEditor.fieldPageCount') },
+    ...catalog.customFields.flatMap((field) => field.remoteId === undefined ? [] : [{
+      value: `custom_field_${field.remoteId}`,
+      label: field.name,
+    }]),
+  ], [catalog.customFields, t]);
+  const [selectionActive, setSelectionActive] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResult, setBulkResult] = useState<Pick<PaperlessBulkResult, 'failed' | 'pending' | 'skipped' | 'succeeded'> | null>(null);
+  const [lastBulkOperation, setLastBulkOperation] = useState<PaperlessBulkOperation | { kind: 'export'; representation: 'original' | 'archive' } | null>(null);
+  const [choiceRequest, setChoiceRequest] = useState<BulkActionRequest | null>(null);
+  const [savedViewEditor, setSavedViewEditor] = useState<{ mode: 'create'; initialName: string } | null>(null);
   const remoteRequestId = useRef(0);
-  const prefetchedDocumentIds = useRef(new Set<string>());
+  const bulkRunActive = useRef(false);
   const prewarmedFirstDocumentId = useRef<string | null>(null);
-
-  useEffect(() => {
-    credentialsRef.current = credentials;
-    prefetchedDocumentIds.current.clear();
-  }, [credentials]);
+  const activeProfileId = activeProfile?.id ?? credentials?.profileId ?? null;
+  const activeProfileIdRef = useRef(activeProfileId);
 
   useEffect(() => {
     const firstDocument = documents.find((document) => document.status !== 'processing');
@@ -128,30 +218,6 @@ const DocumentsScreen = memo(function DocumentsScreen({
     }, 450);
     return () => clearTimeout(timer);
   }, [documents, router]);
-
-  const prefetchVisiblePreviews = useCallback(
-    ({ viewableItems }: { viewableItems: ViewToken<DocumentItem>[] }) => {
-      const currentCredentials = credentialsRef.current;
-      if (!currentCredentials) return;
-      const nextDocuments = viewableItems
-        .map((token) => token.item)
-        .filter((document): document is DocumentItem => Boolean(
-          document?.remoteId && !prefetchedDocumentIds.current.has(document.id),
-        ));
-      if (!nextDocuments.length) return;
-      nextDocuments.forEach((document) => prefetchedDocumentIds.current.add(document.id));
-      void Image.prefetch(
-        nextDocuments.map((document) =>
-          getPaperlessDocumentUrl(currentCredentials, document.remoteId!, 'thumb'),
-        ),
-        {
-          cachePolicy: 'memory-disk',
-          headers: paperlessFileHeaders(currentCredentials.token),
-        },
-      );
-    },
-    [],
-  );
 
   const deferredQuery = useDeferredValue(query);
   const searchIndex = useMemo(
@@ -195,8 +261,16 @@ const DocumentsScreen = memo(function DocumentsScreen({
     !!deferredQuery.trim() || activeFilterCount > 0 || extraRules.length > 0
   );
   const requestSignature = useMemo(
-    () => JSON.stringify({ query: deferredQuery.trim(), filters, extraRules }),
-    [deferredQuery, extraRules, filters],
+    () => JSON.stringify({
+      profileId: activeProfileId,
+      query: deferredQuery.trim(),
+      queryRuleType,
+      filters,
+      extraRules,
+      savedViewId: activeSavedView,
+      savedViewModified: presetRefined,
+    }),
+    [activeProfileId, activeSavedView, deferredQuery, extraRules, filters, presetRefined, queryRuleType],
   );
 
   useEffect(() => {
@@ -205,7 +279,14 @@ const DocumentsScreen = memo(function DocumentsScreen({
 
     const timer = setTimeout(() => {
       setRemoteState({ phase: 'loading', signature: requestSignature });
-      void searchLibrary({ query: deferredQuery.trim(), filters, extraRules })
+      void searchLibrary({
+        query: deferredQuery.trim(),
+        queryRuleType,
+        filters,
+        extraRules,
+        savedViewId: activeSavedView ?? undefined,
+        savedViewModified: presetRefined,
+      })
         .then((result) => {
           if (remoteRequestId.current !== requestId) return;
           setRemoteResult({ documents: result.documents, signature: requestSignature });
@@ -214,9 +295,7 @@ const DocumentsScreen = memo(function DocumentsScreen({
         .catch((error) => {
           if (remoteRequestId.current !== requestId) return;
           setRemoteState({
-            message: error instanceof Error
-              ? error.message
-              : 'Could not refresh these filtered results.',
+            message: presentRuntimeError(error, t('library.refreshFilteredError')),
             phase: 'error',
             signature: requestSignature,
           });
@@ -224,7 +303,7 @@ const DocumentsScreen = memo(function DocumentsScreen({
         });
     }, deferredQuery.trim() ? 320 : 30);
     return () => clearTimeout(timer);
-  }, [deferredQuery, extraRules, filters, remoteRequired, requestSignature, retryKey, searchLibrary]);
+  }, [activeSavedView, deferredQuery, extraRules, filters, presetRefined, queryRuleType, remoteRequired, requestSignature, retryKey, searchLibrary, t]);
 
   const remoteDocuments = remoteRequired && remoteResult?.signature === requestSignature
     ? remoteResult.documents
@@ -233,13 +312,74 @@ const DocumentsScreen = memo(function DocumentsScreen({
     && remoteState.phase === 'loading';
   const remoteError = remoteRequired && remoteState?.signature === requestSignature
     && remoteState.phase === 'error'
-    ? remoteState.message || 'Could not refresh these filtered results.'
+    ? remoteState.message || t('library.refreshFilteredError')
     : null;
   const filteredDocuments = useMemo(
     () => sortLibraryDocuments(remoteDocuments ?? localDocuments, sortOrder),
     [localDocuments, remoteDocuments, sortOrder],
   );
+  const allKnownDocuments = useMemo(() => {
+    const items = new Map(documents.map((document) => [document.id, document]));
+    for (const document of remoteDocuments ?? []) items.set(document.id, document);
+    return [...items.values()];
+  }, [documents, remoteDocuments]);
+  const selection = useMemo(
+    () => summarizeLibrarySelection(selectedIds, filteredDocuments),
+    [filteredDocuments, selectedIds],
+  );
+  const eligibleSelection = useMemo(
+    () => selectBulkEligible(buildBulkCandidates(allKnownDocuments, selectedIds)).eligible,
+    [allKnownDocuments, selectedIds],
+  );
   const searchPending = query !== deferredQuery || remoteLoading;
+
+  const exitSelection = useCallback(() => {
+    setSelectionActive(false);
+    setSelectedIds(new Set());
+    setBulkOpen(false);
+    setBulkResult(null);
+  }, []);
+
+  useEffect(() => {
+    if (!selectionActive) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      exitSelection();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [exitSelection, selectionActive]);
+
+  useEffect(() => {
+    if (!connected) return;
+    const timer = setTimeout(() => {
+      const selectedView = activeSavedView
+        ? catalog.savedViews.find((view) => view.id === activeSavedView)
+        : null;
+      setFilters((current) => {
+        const reconciled = reconcileLibraryFiltersWithCatalog(current, catalog);
+        return JSON.stringify(reconciled) === JSON.stringify(current) ? current : reconciled;
+      });
+      if (selectedView && !presetRefined) {
+        const newlyOpaque = savedViewToLibraryState(selectedView, catalog).extraRules;
+        setExtraRules((current) => {
+          const identities = new Set(current.map((rule) => JSON.stringify(rule)));
+          const retained = [...current];
+          for (const opaqueRule of newlyOpaque) {
+            const identity = JSON.stringify(opaqueRule);
+            if (!identities.has(identity)) {
+              identities.add(identity);
+              retained.push(opaqueRule);
+            }
+          }
+          return retained.length === current.length ? current : retained;
+        });
+      } else if (activeSavedView) {
+        setActiveSavedView(null);
+        setPresetRefined(false);
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [activeSavedView, catalog, connected, presetRefined]);
 
   function clearAll() {
     setQuery('');
@@ -247,6 +387,12 @@ const DocumentsScreen = memo(function DocumentsScreen({
     setActiveSavedView(null);
     setPresetRefined(false);
     setExtraRules([]);
+    setQueryRuleType(49);
+    setSourceRules([]);
+    setSourceRuleStateSignature(undefined);
+    setSavedViewExtra({});
+    setSavedViewPresentation(undefined);
+    setSavedViewSort(undefined);
   }
 
   function updateFilters(next: LibraryFilters) {
@@ -267,8 +413,15 @@ const DocumentsScreen = memo(function DocumentsScreen({
     setPresetRefined(false);
     setFilters(preset.filters);
     setQuery(preset.query);
+    setQueryRuleType(preset.queryRuleType);
     setExtraRules(preset.extraRules);
+    setSourceRules(preset.sourceRules);
+    setSourceRuleStateSignature(preset.sourceRuleStateSignature);
+    setSavedViewExtra(preset.savedViewExtra);
+    setSavedViewPresentation(preset.savedViewPresentation);
+    setSavedViewSort(preset.savedViewSort);
     setSortOrder(preset.sortOrder);
+    setViewMode(folioSavedViewMode(view.displayMode));
     void hapticFeedback('selection');
   }
 
@@ -313,15 +466,17 @@ const DocumentsScreen = memo(function DocumentsScreen({
     try {
       await refresh();
       setRetryKey((current) => current + 1);
+      return true;
     } catch (error) {
       setRemoteState({
-        message: error instanceof Error ? error.message : 'Could not refresh the library.',
+        message: presentRuntimeError(error, t('library.refreshError')),
         phase: 'error',
         signature: requestSignature,
       });
       await hapticFeedback('error');
+      return false;
     }
-  }, [refresh, requestSignature]);
+  }, [refresh, requestSignature, t]);
 
   const isWide = width > 620;
   const useGrid = viewMode ? viewMode === 'grid' : isWide;
@@ -341,8 +496,14 @@ const DocumentsScreen = memo(function DocumentsScreen({
         grid={false}
         onOpen={openDocument}
         onPreload={preloadDocument}
+        onSelect={(id) => {
+          setSelectionActive(true);
+          setSelectedIds((current) => toggleStableSelection(current, id));
+        }}
+        selected={selectedIds.has(item.id)}
+        selectionActive={selectionActive}
       />,
-    [openDocument, preloadDocument],
+    [openDocument, preloadDocument, selectedIds, selectionActive],
   );
   const renderGridDocument = useCallback(
     ({ index, item }: ListRenderItemInfo<DocumentItem>) =>
@@ -352,14 +513,23 @@ const DocumentsScreen = memo(function DocumentsScreen({
         grid
         onOpen={openDocument}
         onPreload={preloadDocument}
+        onSelect={(id) => {
+          setSelectionActive(true);
+          setSelectedIds((current) => toggleStableSelection(current, id));
+        }}
+        selected={selectedIds.has(item.id)}
+        selectionActive={selectionActive}
       />,
-    [openDocument, preloadDocument],
+    [openDocument, preloadDocument, selectedIds, selectionActive],
   );
   const mimeTypes = useMemo(
     () => [...new Set(documents.map((document) => document.mimeType).filter((value): value is string => Boolean(value)))].sort(),
     [documents],
   );
-  const criteria = useMemo(() => libraryCriteria(filters, catalog), [catalog, filters]);
+  const criteria = useMemo(
+    () => libraryCriteria(filters, catalog, t, formatNumber),
+    [catalog, filters, formatNumber, t],
+  );
   const narrowed = !!query.trim() || activeFilterCount > 0 || extraRules.length > 0;
   const openFilters = useCallback(() => {
     Keyboard.dismiss();
@@ -370,29 +540,353 @@ const DocumentsScreen = memo(function DocumentsScreen({
     setSortSheetOpen(true);
   }, []);
 
+  const runBulkOperation = useCallback(async (
+    operation: PaperlessBulkOperation | { kind: 'export'; representation: 'original' | 'archive' },
+    ids: ReadonlySet<string> = selectedIds,
+  ) => {
+    const operationProfileId = activeProfileId;
+    if (bulkRunActive.current) return;
+    if (advanced.phase !== 'ready') {
+      Alert.alert(t('library.paperlessNotReady'), advanced.phase === 'error' ? advanced.error : t('library.discoveryRunning'));
+      return;
+    }
+    if (!ids.size) return;
+    bulkRunActive.current = true;
+    setBulkBusy(true);
+    setBulkResult(null);
+    setLastBulkOperation(operation);
+    try {
+      if (operation.kind === 'export') {
+        if (!credentials) throw new Error(t('library.connectExport'));
+        if (!operationProfileId) throw new Error(t('library.connectExport'));
+        const result = await exportSelectedDocuments({
+          api: advanced.api,
+          credentials,
+          expectedProfileId: operationProfileId,
+          executionGuard: () => activeProfileIdRef.current === operationProfileId,
+          documents: allKnownDocuments,
+          selectedIds: ids,
+          representation: operation.representation,
+        });
+        if (activeProfileIdRef.current !== operationProfileId) return;
+        setBulkResult({ ...result, pending: [] });
+        const succeeded = new Set(result.succeeded);
+        setSelectedIds((current) => new Set([...current].filter((id) => {
+          const document = allKnownDocuments.find((item) => item.id === id);
+          return !document?.remoteId || !succeeded.has(document.remoteId);
+        })));
+      } else {
+        if (!operationProfileId) throw new Error(t('library.paperlessNotReady'));
+        const result = await executeBulkDocumentOperation({
+          api: advanced.api,
+          expectedProfileId: operationProfileId,
+          executionGuard: () => activeProfileIdRef.current === operationProfileId,
+          documents: allKnownDocuments,
+          selectedIds: ids,
+          operation,
+        });
+        if (activeProfileIdRef.current !== operationProfileId) return;
+        if (!result.supported) throw new Error(result.detail ?? t('library.bulkUnavailable'));
+        setBulkResult(result.value);
+        const bulkTargets = buildBulkCandidates(allKnownDocuments, ids).map((candidate) => ({
+          localId: candidate.localId,
+          ...(candidate.remoteId ? { remoteDocumentId: candidate.remoteId } : {}),
+        }));
+        await trackPaperlessBulkOperation({
+          result: result.value,
+          targets: bulkTargets,
+        });
+        if (result.value.succeeded.length) {
+          const succeeded = new Set(result.value.succeeded);
+          setSelectedIds((current) => new Set([...current].filter((id) => {
+            const document = allKnownDocuments.find((item) => item.id === id);
+            return !document?.remoteId || !succeeded.has(document.remoteId);
+          })));
+          try {
+            await reconcileConfirmedBulkThenRefresh({
+              refresh: refreshLibrary,
+              reconcile: async () => {
+                const reconciliation = await reconcilePaperlessBulkOperation({
+                  expectedProfileId: operationProfileId,
+                  result: result.value,
+                  targets: bulkTargets,
+                });
+                if (!reconciliation || activeProfileIdRef.current !== operationProfileId) return;
+                setRemoteResult((current) => current ? {
+                  ...current,
+                  documents: reconcileConfirmedBulkDocuments(current.documents, reconciliation),
+                } : current);
+              },
+            });
+          } catch (error) {
+            if (activeProfileIdRef.current === operationProfileId) {
+              Alert.alert(
+                t('library.refreshError'),
+                presentRuntimeError(error, t('library.refreshError')),
+              );
+            }
+          }
+        }
+      }
+      await hapticFeedback('confirm');
+      setTimeout(() => setBulkOpen(true), 280);
+    } catch (error) {
+      Alert.alert(t('library.bulkFailed'), presentRuntimeError(error, t('library.paperlessActionFailed')));
+      await hapticFeedback('error');
+    } finally {
+      bulkRunActive.current = false;
+      if (activeProfileIdRef.current === operationProfileId) setBulkBusy(false);
+    }
+  }, [activeProfileId, advanced, allKnownDocuments, credentials, reconcilePaperlessBulkOperation, refreshLibrary, selectedIds, t, trackPaperlessBulkOperation]);
+
+  function exactEligibility(ids: ReadonlySet<string> = selectedIds) {
+    return selectBulkEligible(buildBulkCandidates(allKnownDocuments, ids)).eligible.length;
+  }
+
+  function confirmBulk(
+    title: string,
+    message: string,
+    operation: PaperlessBulkOperation | { kind: 'export'; representation: 'original' | 'archive' },
+    destructive = false,
+  ) {
+    const count = operation.kind === 'export'
+      ? new Set(allKnownDocuments.filter((document) => (
+        selectedIds.has(document.id)
+        && !!document.remoteId
+        && document.status !== 'processing'
+        && !document.taskId
+      )).map((document) => document.remoteId!)).size
+      : exactEligibility();
+    if (!count) {
+      Alert.alert(t('library.nothingEligible'), t('library.nothingEligibleCopy'));
+      return;
+    }
+    Alert.alert(title, `${message}\n\n${t('library.eligibleCount', { count: formatNumber(count) })}`, [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: destructive ? t('library.continue') : t('library.confirm'), style: destructive ? 'destructive' : 'default', onPress: () => void runBulkOperation(operation) },
+    ]);
+  }
+
+  async function requestBulkAction(request: BulkActionRequest) {
+    setBulkOpen(false);
+    if (
+      request.kind === 'tags'
+      || request.kind === 'setCorrespondent'
+      || request.kind === 'setDocumentType'
+      || request.kind === 'setStoragePath'
+      || request.kind === 'setOwner'
+    ) {
+      setChoiceRequest(request);
+      return;
+    }
+    if (request.kind === 'file') {
+      if (advanced.phase !== 'ready') return;
+      try {
+        const tags = await advanced.api.listCatalog('tags', 'page_size=1000');
+        if (!tags.supported) throw new Error(tags.detail ?? t('library.tagsUnavailable'));
+        const inboxTagIds = tags.value.results.filter((tag) => tag.isInboxTag).map((tag) => tag.id);
+        if (!inboxTagIds.length) throw new Error(t('library.noInboxTag'));
+        confirmBulk(t('library.fileSelectedTitle'), t('library.fileSelectedBody'), { kind: 'file', inboxTagIds });
+      } catch (error) {
+        Alert.alert(t('library.inboxTagUnavailable'), presentRuntimeError(error, t('library.inboxTagLoadError')));
+      }
+      return;
+    }
+    if (request.kind === 'reprocess') {
+      confirmBulk(t('library.reprocessTitle'), t('library.reprocessBody'), { kind: 'reprocess' });
+      return;
+    }
+    if (request.kind === 'trash') {
+      confirmBulk(t('library.trashTitle'), t('library.trashBody'), { kind: 'trash' }, true);
+      return;
+    }
+    if (request.kind !== 'export') return;
+    const label = request.representation === 'archive' ? t('library.archiveFiles') : t('library.originalFiles');
+    confirmBulk(
+      t('library.exportTitle', { label }),
+      t('library.exportBody'),
+      request,
+    );
+  }
+
+  async function applyChoice(options: PaperlessOption[]) {
+    const request = choiceRequest;
+    if (!request) return;
+    const values = options.map((option) => option.remoteId).filter((id): id is number => id !== undefined);
+    if (values.length !== options.length) throw new Error(t('library.selectedMissing'));
+    if (request.kind === 'tags') {
+      if (!values.length && request.mode !== 'replace') {
+        throw new Error(t('library.chooseTag', { mode: request.mode }));
+      }
+      const operation: PaperlessBulkOperation = { kind: 'tags', mode: request.mode, tagIds: values };
+      if (request.mode === 'replace') {
+        confirmBulk(t('library.replaceTagsTitle'), t('library.replaceTagsBody'), operation, true);
+      } else {
+        await runBulkOperation(operation);
+      }
+      return;
+    }
+    if (request.kind === 'setCorrespondent' || request.kind === 'setDocumentType' || request.kind === 'setStoragePath' || request.kind === 'setOwner') {
+      await runBulkOperation({ kind: request.kind, value: values[0] ?? null });
+    }
+  }
+
+  function retryBulkFailures() {
+    if (!lastBulkOperation || !bulkResult) return;
+    const remoteFailures = new Set(bulkResult.failed.map((failure) => failure.remoteId).filter((id): id is number => !!id));
+    const localFailures = new Set(bulkResult.failed.map((failure) => failure.localId).filter((id): id is string => !!id));
+    const retryIds = new Set(allKnownDocuments.filter((document) => localFailures.has(document.id) || (!!document.remoteId && remoteFailures.has(document.remoteId))).map((document) => document.id));
+    if (!retryIds.size) return;
+    setSelectedIds(retryIds);
+    void runBulkOperation(lastBulkOperation, retryIds);
+  }
+
+  async function saveCurrentView(name: string, presentation?: SavedViewPresentationEdit) {
+    if (advanced.phase !== 'ready') throw new Error(t('library.paperlessNotReady'));
+    if (!activeProfileId) throw new Error(t('library.paperlessNotReady'));
+    const state = {
+      query,
+      queryRuleType,
+      filters,
+      sortOrder,
+      catalog,
+      extraRules,
+      sourceRules,
+      sourceRuleStateSignature,
+      savedViewExtra,
+      savedViewPresentation,
+      savedViewSort,
+      viewMode: useGrid ? 'grid' as const : 'list' as const,
+    };
+    const result = await advanced.api.createSavedView({
+      ...buildSavedViewEdit(name, state),
+      ...presentation,
+    });
+    if (!result.supported) throw new Error(result.detail ?? t('library.createViewUnavailable'));
+    await publishSavedView(activeProfileId, result.value);
+    await refreshLibrary();
+    await hapticFeedback('confirm');
+  }
+
+  async function updateCurrentView() {
+    if (advanced.phase !== 'ready' || !activeSavedView || !activeProfileId) return;
+    const legacy = catalog.savedViews.find((view) => view.id === activeSavedView);
+    if (!legacy?.remoteId) {
+      Alert.alert(t('library.savedViewUnavailable'), t('library.savedViewMissingIdentity'));
+      return;
+    }
+    if (extraRules.length) {
+      Alert.alert(t('library.unsupportedRules'), t('library.unsupportedRulesCopy'));
+      return;
+    }
+    try {
+      const listed = await advanced.api.listSavedViews();
+      if (!listed.supported) throw new Error(listed.detail ?? t('library.savedViewsUnavailable'));
+      const current = listed.value.results.find((view) => view.id === legacy.remoteId);
+      if (!current) throw new Error(t('library.savedViewMissing'));
+      if (hasUnsupportedSavedViewRules(current.filterRules)) {
+        Alert.alert(t('library.unsupportedRules'), t('library.manageUnsupportedRules'));
+        return;
+      }
+      const edit = {
+        ...serializeLibrarySavedViewState({
+          query,
+          queryRuleType,
+          filters,
+          sortOrder,
+          catalog,
+          extraRules,
+          sourceRules,
+          sourceRuleStateSignature,
+          savedViewSort,
+        }),
+        displayMode: savedViewPresentation?.displayMode
+          && folioSavedViewMode(savedViewPresentation.displayMode) === (useGrid ? 'grid' : 'list')
+          ? savedViewPresentation.displayMode
+          : paperlessSavedViewDisplayMode(useGrid ? 'grid' : 'list'),
+      };
+      const result = await advanced.api.updateSavedView(current, edit, { unknownRulePolicy: 'block' });
+      if (!result.supported) throw new Error(result.detail ?? t('library.updateViewUnavailable'));
+      setPresetRefined(false);
+      await publishSavedView(activeProfileId, result.value);
+      await refreshLibrary();
+      await hapticFeedback('confirm');
+    } catch (error) {
+      Alert.alert(t('library.updateViewFailed'), presentRuntimeError(error, t('library.changeRejected')));
+    }
+  }
+
+  const choiceOptions = choiceRequest?.kind === 'tags'
+    ? catalog.tags
+    : choiceRequest?.kind === 'setCorrespondent'
+      ? catalog.correspondents
+      : choiceRequest?.kind === 'setDocumentType'
+        ? catalog.documentTypes
+        : choiceRequest?.kind === 'setStoragePath'
+          ? catalog.storagePaths
+          : catalog.owners;
+  const choiceTitle = choiceRequest?.kind === 'tags'
+    ? t(choiceRequest.mode === 'add' ? 'library.addTagsChoice' : choiceRequest.mode === 'remove' ? 'library.removeTagsChoice' : 'library.replacementTagsChoice')
+    : choiceRequest?.kind === 'setCorrespondent'
+      ? t('bulk.correspondent')
+      : choiceRequest?.kind === 'setDocumentType'
+        ? t('bulk.documentType')
+        : choiceRequest?.kind === 'setStoragePath'
+          ? t('bulk.storagePath')
+          : t('bulk.owner');
+
   const listHeader = (
     <View style={styles.listHeader}>
       {!connected && <DemoModeBanner />}
       <View style={styles.header}>
-        <Text style={styles.title}>Library</Text>
-        <View accessibilityRole="radiogroup" style={styles.viewToggle}>
-          <Pressable
-            accessibilityLabel="List view"
-            accessibilityRole="radio"
-            accessibilityState={{ checked: !useGrid }}
-            onPress={() => setViewMode('list')}
-            style={[styles.toggleButton, !useGrid && styles.toggleButtonActive]}>
-            <List color={!useGrid ? palette.paper : palette.muted} size={18} />
-          </Pressable>
-          <Pressable
-            accessibilityLabel="Grid view"
-            accessibilityRole="radio"
-            accessibilityState={{ checked: useGrid }}
-            onPress={() => setViewMode('grid')}
-            style={[styles.toggleButton, useGrid && styles.toggleButtonActive]}>
-            <LayoutGrid color={useGrid ? palette.paper : palette.muted} size={17} />
-          </Pressable>
-        </View>
+        {selectionActive ? (
+          <>
+            <View style={styles.selectionCopy}>
+              <Text accessibilityLiveRegion="polite" style={styles.selectionTitle}>{t('library.selectedCount', { count: formatNumber(selection.selected) })}</Text>
+              <Text style={styles.selectionMeta}>{selection.hiddenSelected ? t('library.shownHidden', { shown: formatNumber(selection.shownSelected), hidden: formatNumber(selection.hiddenSelected) }) : t('library.shownCount', { count: formatNumber(selection.shownSelected) })}</Text>
+            </View>
+            <View style={styles.headerTools}>
+              <Pressable accessibilityLabel={t('library.selectShownLabel')} disabled={!selection.shown} onPress={() => setSelectedIds((current) => selectShownDocuments(current, filteredDocuments))} style={styles.selectTextButton}>
+                <Text style={styles.selectText}>{t('library.selectShown')}</Text>
+              </Pressable>
+              <Pressable accessibilityLabel={t('library.exitSelection')} onPress={exitSelection} style={styles.headerIconButton}><X color={palette.ink} size={20} /></Pressable>
+            </View>
+          </>
+        ) : (
+          <>
+            <Text style={styles.title}>{t('library.title')}</Text>
+            <View style={styles.headerTools}>
+              <Pressable accessibilityLabel={t('library.selectDocuments')} disabled={!filteredDocuments.length} onPress={() => setSelectionActive(true)} style={styles.selectTextButton}>
+                <CheckSquare2 color={palette.ink} size={16} />
+                <Text style={styles.selectText}>{t('library.select')}</Text>
+              </Pressable>
+              <View accessibilityRole="radiogroup" style={styles.viewToggle}>
+                <Pressable
+                  accessibilityLabel={t('library.listView')}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: !useGrid }}
+                  onPress={() => {
+                    setViewMode('list');
+                    if (activeSavedView) setPresetRefined(true);
+                  }}
+                  style={[styles.toggleButton, !useGrid && styles.toggleButtonActive]}>
+                  <List color={!useGrid ? palette.paper : palette.muted} size={18} />
+                </Pressable>
+                <Pressable
+                  accessibilityLabel={t('library.gridView')}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: useGrid }}
+                  onPress={() => {
+                    setViewMode('grid');
+                    if (activeSavedView) setPresetRefined(true);
+                  }}
+                  style={[styles.toggleButton, useGrid && styles.toggleButtonActive]}>
+                  <LayoutGrid color={useGrid ? palette.paper : palette.muted} size={17} />
+                </Pressable>
+              </View>
+            </View>
+          </>
+        )}
       </View>
 
       <View style={styles.search}>
@@ -400,9 +894,9 @@ const DocumentsScreen = memo(function DocumentsScreen({
         <TextInput
           autoCapitalize="none"
           autoCorrect={false}
-          onChangeText={setQuery}
-          accessibilityLabel="Search all documents"
-          placeholder={connected ? 'Search every document' : 'Search titles, correspondents, tags…'}
+          onChangeText={updateQuery}
+          accessibilityLabel={t('library.searchLabel')}
+          placeholder={connected ? t('library.searchConnected') : t('library.searchDemo')}
           placeholderTextColor={palette.faint}
           returnKeyType="search"
           style={styles.searchInput}
@@ -412,33 +906,63 @@ const DocumentsScreen = memo(function DocumentsScreen({
           {searchPending && <ActivityIndicator color={palette.muted} size="small" />}
           {!!query && (
             <Pressable
-              accessibilityLabel="Clear search"
+              accessibilityLabel={t('library.clearSearch')}
               haptic="light"
-              onPress={() => setQuery('')}
+              onPress={() => updateQuery('')}
               style={styles.iconButton}>
               <X color={palette.muted} size={18} />
             </Pressable>
           )}
           <Pressable
-            accessibilityLabel={`Open filters${effectiveFilterCount ? `, ${effectiveFilterCount} active` : ''}`}
+            accessibilityLabel={effectiveFilterCount
+              ? t('library.openFiltersActive', { count: formatNumber(effectiveFilterCount) })
+              : t('library.openFilters')}
             haptic="medium"
             onPress={openFilters}
             style={[styles.filterButton, effectiveFilterCount > 0 && styles.filterButtonActive]}>
-            <Filter color={palette.ink} size={18} />
+            <Filter color={effectiveFilterCount ? palette.accentInk : palette.ink} size={18} />
             {!!effectiveFilterCount && (
               <View style={styles.filterBadge}>
-                <Text style={styles.filterBadgeText}>{effectiveFilterCount}</Text>
+                <Text style={styles.filterBadgeText}>{formatNumber(effectiveFilterCount)}</Text>
               </View>
             )}
           </Pressable>
         </View>
       </View>
 
+      {connected && !selectionActive && (
+        <ScrollView horizontal contentContainerStyle={styles.managementActions} showsHorizontalScrollIndicator={false}>
+          {(narrowed || sortOrder !== 'added-desc') && (
+            <Pressable accessibilityState={{ disabled: advanced.phase !== 'ready' }} disabled={advanced.phase !== 'ready'} onPress={() => {
+              const currentName = catalog.savedViews.find((view) => view.id === activeSavedView)?.name;
+              setSavedViewEditor({ mode: 'create', initialName: currentName ? t('savedViews.copyName', { name: currentName }) : query.trim() || t('library.mySavedView') });
+            }} style={styles.managementButton}>
+              <Save color={palette.ink} size={15} />
+              <Text style={styles.managementButtonText}>{activeSavedView && presetRefined ? t('library.saveAsNew') : t('library.saveView')}</Text>
+            </Pressable>
+          )}
+          {activeSavedView && presetRefined && (
+            <Pressable accessibilityState={{ disabled: advanced.phase !== 'ready' }} disabled={advanced.phase !== 'ready'} onPress={() => void updateCurrentView()} style={styles.managementButtonStrong}>
+              <Save color={palette.accentInk} size={15} />
+              <Text style={styles.managementButtonStrongText}>{t('library.updateView')}</Text>
+            </Pressable>
+          )}
+          <Pressable onPress={() => router.push('/saved-views')} style={styles.managementButton}>
+            <Bookmark color={palette.ink} size={15} />
+            <Text style={styles.managementButtonText}>{t('library.manageViews')}</Text>
+          </Pressable>
+          <Pressable onPress={() => router.push('/paperless-metadata')} style={styles.managementButton}>
+            <FolderTree color={palette.ink} size={15} />
+            <Text style={styles.managementButtonText}>{t('metadata.title')}</Text>
+          </Pressable>
+        </ScrollView>
+      )}
+
       {!!catalog.savedViews.length && (
         <View style={styles.savedViewsBlock}>
           <View style={styles.savedViewsLabelRow}>
             <Bookmark color={palette.ink} size={15} />
-            <Text style={styles.savedViewsLabel}>SAVED PRESETS</Text>
+            <Text style={styles.savedViewsLabel}>{t('library.savedPresets')}</Text>
           </View>
           <ScrollView
             horizontal
@@ -453,9 +977,11 @@ const DocumentsScreen = memo(function DocumentsScreen({
                   accessibilityState={{ selected: active }}
                   key={view.id}
                   onPress={() => selectSavedView(view.id)}
+                  onLongPress={() => router.push({ pathname: '/saved-views', params: { id: view.remoteId } })}
+                  accessibilityHint={t('library.manageViewHint')}
                   style={[styles.savedView, active && styles.savedViewActive]}>
                   <Text numberOfLines={1} style={[styles.savedViewText, active && styles.savedViewTextActive]}>
-                    {view.name}{active && presetRefined ? ' · refined' : ''}
+                    {view.name}{active && presetRefined ? ` · ${t('library.refined')}` : ''}
                   </Text>
                 </Pressable>
               );
@@ -465,7 +991,7 @@ const DocumentsScreen = memo(function DocumentsScreen({
       )}
 
       <View style={styles.quickBlock}>
-        <Text style={styles.quickLabel}>QUICK FILTERS</Text>
+        <Text style={styles.quickLabel}>{t('library.quickFilters')}</Text>
         <ScrollView
           horizontal
           contentContainerStyle={styles.quickFilters}
@@ -474,27 +1000,27 @@ const DocumentsScreen = memo(function DocumentsScreen({
           <QuickFilter
             active={false}
             icon
-            label="All filters"
+            label={t('library.allFilters')}
             onPress={openFilters}
           />
           <QuickFilter
             active={filters.status === 'inbox'}
-            label="Inbox"
+            label={t('library.inbox')}
             onPress={() => toggleQuickFilter('inbox')}
           />
           <QuickFilter
             active={filters.status === 'untagged'}
-            label="Untagged"
+            label={t('library.untagged')}
             onPress={() => toggleQuickFilter('untagged')}
           />
           <QuickFilter
             active={filters.mimeTypes.includes('application/pdf')}
-            label="PDFs"
+            label={t('library.pdfs')}
             onPress={() => toggleQuickFilter('pdf')}
           />
           <QuickFilter
             active={filters.createdAfter === thisYear.after && filters.createdBefore === thisYear.before}
-            label="This year"
+            label={t('library.thisYear')}
             onPress={() => toggleQuickFilter('year')}
           />
         </ScrollView>
@@ -503,9 +1029,9 @@ const DocumentsScreen = memo(function DocumentsScreen({
       {!!(criteria.length || extraRules.length) && (
         <View style={styles.appliedBlock}>
           <View style={styles.appliedHeader}>
-            <Text style={styles.appliedLabel}>APPLIED</Text>
-            <Pressable accessibilityLabel="Clear all filters" onPress={clearAll} style={styles.clearAllButton}>
-              <Text style={styles.clearAllText}>Clear all</Text>
+            <Text style={styles.appliedLabel}>{t('library.applied')}</Text>
+            <Pressable accessibilityLabel={t('library.clearAllFilters')} onPress={clearAll} style={styles.clearAllButton}>
+              <Text style={styles.clearAllText}>{t('library.clearAll')}</Text>
             </Pressable>
           </View>
           <ScrollView
@@ -514,21 +1040,23 @@ const DocumentsScreen = memo(function DocumentsScreen({
             showsHorizontalScrollIndicator={false}>
             {!!extraRules.length && (
               <Pressable
-                accessibilityLabel={`Remove ${extraRules.length} advanced preset ${extraRules.length === 1 ? 'rule' : 'rules'}`}
+                accessibilityLabel={extraRules.length === 1
+                  ? t('library.removeAdvancedRuleOne')
+                  : t('library.removeAdvancedRuleMany', { count: formatNumber(extraRules.length) })}
                 onPress={() => {
                   setExtraRules([]);
                   if (activeSavedView) setPresetRefined(true);
                 }}
                 style={styles.appliedFilter}>
                 <Text numberOfLines={1} style={styles.appliedFilterText}>
-                  Advanced preset rules · {extraRules.length}
+                  {t('library.advancedRules', { count: formatNumber(extraRules.length) })}
                 </Text>
                 <X color={palette.ink} size={13} />
               </Pressable>
             )}
             {criteria.map((criterion) => (
               <Pressable
-                accessibilityLabel={`Remove ${criterion.label} filter`}
+                accessibilityLabel={t('library.removeFilter', { label: criterion.label })}
                 key={criterion.key}
                 onPress={() => clearCriterion(criterion.key)}
                 style={styles.appliedFilter}>
@@ -540,15 +1068,29 @@ const DocumentsScreen = memo(function DocumentsScreen({
         </View>
       )}
 
+      {!!activeSavedView && !!extraRules.length && (
+        <View style={styles.unsupportedRules}>
+          <Text style={styles.unsupportedRulesTitle}>{t('library.unsupportedRules')}</Text>
+          <Text style={styles.unsupportedRulesCopy}>{t('library.unsupportedRulesCopy')}</Text>
+        </View>
+      )}
+
+      {!!activeSavedView && !!extraRules.length && online === false && !!remoteDocuments && (
+        <View accessibilityLiveRegion="polite" style={styles.unsupportedRules}>
+          <Text style={styles.unsupportedRulesTitle}>{t('library.savedViewCached')}</Text>
+          <Text style={styles.unsupportedRulesCopy}>{t('library.savedViewCachedCopy')}</Text>
+        </View>
+      )}
+
       {!!remoteError && (
         <View accessibilityLiveRegion="polite" style={styles.errorBanner}>
           <View style={styles.errorCopy}>
-            <Text style={styles.errorTitle}>Showing local matches</Text>
+            <Text style={styles.errorTitle}>{t('library.localMatches')}</Text>
             <Text numberOfLines={2} style={styles.errorText}>{remoteError}</Text>
           </View>
           <Pressable onPress={() => setRetryKey((current) => current + 1)} style={styles.retryButton}>
             <RotateCcw color={palette.ink} size={15} />
-            <Text style={styles.retryText}>Retry</Text>
+            <Text style={styles.retryText}>{t('library.retry')}</Text>
           </Pressable>
         </View>
       )}
@@ -556,20 +1098,42 @@ const DocumentsScreen = memo(function DocumentsScreen({
       <View style={styles.resultHeader}>
         <Text accessibilityLiveRegion="polite" style={styles.resultCount}>
           {remoteLoading
-            ? `${filteredDocuments.length} shown · searching Paperless…`
+            ? t('library.shownSearching', { shown: formatNumber(filteredDocuments.length) })
             : narrowed
-              ? `${filteredDocuments.length} of ${totalDocuments} ${totalDocuments === 1 ? 'document' : 'documents'}`
-              : `${filteredDocuments.length} ${filteredDocuments.length === 1 ? 'document' : 'documents'}`}
+              ? t(totalDocuments === 1 ? 'library.countOfOne' : 'library.countOfMany', {
+                  shown: formatNumber(filteredDocuments.length),
+                  total: formatNumber(totalDocuments),
+                })
+              : filteredDocuments.length === 1
+                ? t('library.countOne')
+                : t('library.countMany', { count: formatNumber(filteredDocuments.length) })}
         </Text>
         <Pressable
-          accessibilityLabel={`Sort order: ${librarySortLabels[sortOrder]}`}
+          accessibilityLabel={t('library.sortOrder', { order: librarySortLabel(t, sortOrder) })}
           haptic="light"
           onPress={openSort}
           style={styles.resultSortButton}>
           <SlidersHorizontal color={palette.muted} size={13} />
-          <Text numberOfLines={1} style={styles.resultSort}>{librarySortLabels[sortOrder]}</Text>
+          <Text numberOfLines={1} style={styles.resultSort}>{librarySortLabel(t, sortOrder)}</Text>
         </Pressable>
       </View>
+      {selectionActive && (
+        <View style={styles.selectionBar}>
+          <View style={styles.selectionBarCopy}>
+            <Text style={styles.selectionBarTitle}>{t('library.eligibleShort', { count: formatNumber(eligibleSelection.length) })}</Text>
+            <Text numberOfLines={2} style={styles.selectionBarMeta}>{t('library.skippedCopy')}</Text>
+          </View>
+          {!!selection.selected && (
+            <Pressable onPress={() => setSelectedIds(new Set())} style={styles.clearSelectionButton}>
+              <Text style={styles.clearSelectionText}>{t('library.clear')}</Text>
+            </Pressable>
+          )}
+          <Pressable accessibilityLabel={t('library.openBulkActions')} accessibilityState={{ disabled: !selection.selected || advanced.phase !== 'ready' }} disabled={!selection.selected || advanced.phase !== 'ready'} onPress={() => { setBulkResult(null); setBulkOpen(true); }} style={[styles.bulkButton, (!selection.selected || advanced.phase !== 'ready') && styles.disabledButton]}>
+            <MoreHorizontal color={palette.accentInk} size={18} />
+            <Text style={styles.bulkButtonText}>{t('library.actions')}</Text>
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 
@@ -601,25 +1165,25 @@ const DocumentsScreen = memo(function DocumentsScreen({
                   <View style={styles.empty}>
                     <View style={styles.emptyIcon}>
                       {narrowed
-                        ? <Filter color={palette.ink} size={26} />
-                        : <Search color={palette.ink} size={26} />}
+                        ? <Filter color={palette.accentInk} size={26} />
+                        : <Search color={palette.accentInk} size={26} />}
                     </View>
                     <Text style={styles.emptyTitle}>
-                      {narrowed ? 'No documents match' : 'Your library is empty'}
+                      {narrowed ? t('library.noMatch') : t('library.empty')}
                     </Text>
                     <Text style={styles.emptyCopy}>
                       {narrowed
-                        ? 'Adjust the active criteria or clear them to return to your full library.'
-                        : 'Scanned and imported documents will appear here.'}
+                        ? t('library.noMatchCopy')
+                        : t('library.emptyCopy')}
                     </Text>
                     {narrowed && (
                       <View style={styles.emptyActions}>
                         <Pressable onPress={openFilters} style={styles.emptyPrimary}>
-                          <Filter color={palette.ink} size={16} />
-                          <Text style={styles.emptyPrimaryText}>Edit filters</Text>
+                          <Filter color={palette.accentInk} size={16} />
+                          <Text style={styles.emptyPrimaryText}>{t('library.editFilters')}</Text>
                         </Pressable>
                         <Pressable onPress={clearAll} style={styles.emptySecondary}>
-                          <Text style={styles.emptySecondaryText}>Clear all</Text>
+                          <Text style={styles.emptySecondaryText}>{t('library.clearAll')}</Text>
                         </Pressable>
                       </View>
                     )}
@@ -628,7 +1192,6 @@ const DocumentsScreen = memo(function DocumentsScreen({
                 ListHeaderComponent={listHeader}
                 maintainVisibleContentPosition={{ disabled: true }}
                 numColumns={2}
-                onViewableItemsChanged={prefetchVisiblePreviews}
                 overrideItemLayout={grid ? singleColumnSpan : fullWidthSpan}
                 refreshControl={
                   <RefreshControl
@@ -666,6 +1229,60 @@ const DocumentsScreen = memo(function DocumentsScreen({
         sortOrder={sortOrder}
         visible={sortSheetOpen}
       />
+      <BulkActionSheet
+        busy={bulkBusy}
+        capabilities={advanced.phase === 'ready' ? advanced.capabilities : null}
+        onClose={() => setBulkOpen(false)}
+        onRequest={(request) => void requestBulkAction(request)}
+        onRetryFailed={retryBulkFailures}
+        result={bulkResult}
+        selection={selection}
+        visible={bulkOpen}
+      />
+      <ChoiceSheet
+        allowNone={choiceRequest?.kind !== 'tags'}
+        multiple={choiceRequest?.kind === 'tags'}
+        onClose={() => setChoiceRequest(null)}
+        onConfirm={applyChoice}
+        options={choiceOptions}
+        selectedIds={[]}
+        title={choiceTitle}
+        visible={!!choiceRequest}
+      />
+      {!!savedViewEditor && (
+        <SavedViewEditorSheet
+          displayFieldOptions={savedViewDisplayFieldOptions}
+          initialName={savedViewEditor.initialName}
+          initialPresentation={{
+            displayMode: savedViewPresentation?.displayMode
+              ?? paperlessSavedViewDisplayMode(useGrid ? 'grid' : 'list'),
+            pageSize: savedViewPresentation?.pageSize ?? 50,
+            displayFields: savedViewPresentation?.displayFields ?? [],
+            ...(typeof savedViewExtra.show_on_dashboard === 'boolean'
+              ? { showOnDashboard: savedViewExtra.show_on_dashboard }
+              : {}),
+            ...(typeof savedViewExtra.show_in_sidebar === 'boolean'
+              ? { showInSidebar: savedViewExtra.show_in_sidebar }
+              : {}),
+          }}
+          mode="create"
+          onClose={() => setSavedViewEditor(null)}
+          onSave={saveCurrentView}
+          presentationCapabilities={{
+            displayMode: advanced.phase === 'ready'
+              && advanced.capabilities.features.savedViews.fields?.displayMode.supported === true,
+            pageSize: advanced.phase === 'ready'
+              && advanced.capabilities.features.savedViews.fields?.pageSize.supported === true,
+            displayFields: advanced.phase === 'ready'
+              && advanced.capabilities.features.savedViews.fields?.displayFields.supported === true,
+            showOnDashboard: advanced.phase === 'ready'
+              && advanced.capabilities.features.savedViews.fields?.showOnDashboard.supported === true,
+            showInSidebar: advanced.phase === 'ready'
+              && advanced.capabilities.features.savedViews.fields?.showInSidebar.supported === true,
+          }}
+          visible
+        />
+      )}
     </AppShell>
   );
 });
@@ -685,24 +1302,51 @@ type FilterCriterionKey =
   | 'archive';
 
 type FilterCriterion = { key: FilterCriterionKey; label: string };
+type Translator = (key: TranslationKey, values?: Record<string, string | number>) => string;
 
-function libraryCriteria(filters: LibraryFilters, catalog: PaperlessCatalog): FilterCriterion[] {
+const sortTranslationKeys: Record<LibrarySortOrder, TranslationKey> = {
+  'added-desc': 'sort.addedDesc',
+  'added-asc': 'sort.addedAsc',
+  'created-desc': 'sort.createdDesc',
+  'created-asc': 'sort.createdAsc',
+  'title-asc': 'sort.titleAsc',
+  'title-desc': 'sort.titleDesc',
+  'correspondent-asc': 'sort.correspondent',
+  'document-type-asc': 'sort.documentType',
+};
+
+function librarySortLabel(t: Translator, sortOrder: LibrarySortOrder) {
+  return t(sortTranslationKeys[sortOrder]);
+}
+
+function libraryCriteria(
+  filters: LibraryFilters,
+  catalog: PaperlessCatalog,
+  t: Translator,
+  formatNumber: (value: number) => string,
+): FilterCriterion[] {
   const criteria: FilterCriterion[] = [];
   if (filters.status !== 'any') {
     criteria.push({
       key: 'status',
-      label: filters.status === 'inbox' ? 'Inbox' : filters.status === 'tagged' ? 'Tagged' : 'Untagged',
+      label: t(filters.status === 'inbox'
+        ? 'library.inbox'
+        : filters.status === 'tagged'
+          ? 'library.tagged'
+          : 'library.untagged'),
     });
   }
   if (filters.correspondentIds.length || filters.correspondentMissing) {
     criteria.push({
       key: 'correspondents',
       label: selectionLabel(
-        'Correspondent',
+        t('library.correspondent'),
         filters.correspondentIds,
         catalog.correspondents,
         filters.correspondentMode,
         filters.correspondentMissing,
+        t,
+        formatNumber,
       ),
     });
   }
@@ -710,27 +1354,35 @@ function libraryCriteria(filters: LibraryFilters, catalog: PaperlessCatalog): Fi
     criteria.push({
       key: 'documentTypes',
       label: selectionLabel(
-        'Type',
+        t('library.type'),
         filters.documentTypeIds,
         catalog.documentTypes,
         filters.documentTypeMode,
         filters.documentTypeMissing,
+        t,
+        formatNumber,
       ),
     });
   }
   if (filters.tagIds.length) {
-    const prefix = filters.tagMode === 'none' ? 'Without tags' : filters.tagMode === 'all' ? 'All tags' : 'Tags';
-    criteria.push({ key: 'tags', label: optionLabel(prefix, filters.tagIds, catalog.tags) });
+    const prefix = t(filters.tagMode === 'none'
+      ? 'library.withoutTags'
+      : filters.tagMode === 'all'
+        ? 'library.allTags'
+        : 'library.tags');
+    criteria.push({ key: 'tags', label: optionLabel(prefix, filters.tagIds, catalog.tags, t, formatNumber) });
   }
   if (filters.storagePathIds.length || filters.storagePathMissing) {
     criteria.push({
       key: 'storagePaths',
       label: selectionLabel(
-        'Storage',
+        t('library.storage'),
         filters.storagePathIds,
         catalog.storagePaths,
         filters.storagePathMode,
         filters.storagePathMissing,
+        t,
+        formatNumber,
       ),
     });
   }
@@ -738,46 +1390,55 @@ function libraryCriteria(filters: LibraryFilters, catalog: PaperlessCatalog): Fi
     criteria.push({
       key: 'owners',
       label: selectionLabel(
-        'Owner',
+        t('library.owner'),
         filters.ownerIds,
         catalog.owners,
         filters.ownerMode,
         filters.ownerMissing,
+        t,
+        formatNumber,
       ),
     });
   }
   if (filters.customFieldIds.length) {
     const options = catalog.customFields.map((field) => ({ id: field.id, name: field.name }));
-    const prefix = filters.customFieldMode === 'none' ? 'Without fields' : filters.customFieldMode === 'all' ? 'All fields' : 'Fields';
-    criteria.push({ key: 'customFields', label: optionLabel(prefix, filters.customFieldIds, options) });
+    const prefix = t(filters.customFieldMode === 'none'
+      ? 'library.withoutFields'
+      : filters.customFieldMode === 'all'
+        ? 'library.allFields'
+        : 'library.fields');
+    criteria.push({
+      key: 'customFields',
+      label: optionLabel(prefix, filters.customFieldIds, options, t, formatNumber),
+    });
   }
   if (filters.mimeTypes.length) {
     criteria.push({
       key: 'mimeTypes',
       label: filters.mimeTypes.length === 1
-        ? filters.mimeTypes[0] === 'application/pdf' ? 'PDFs' : filters.mimeTypes[0]
-        : `${filters.mimeTypes.length} file types`,
+        ? filters.mimeTypes[0] === 'application/pdf' ? t('library.pdfs') : filters.mimeTypes[0]
+        : t('library.fileTypes', { count: formatNumber(filters.mimeTypes.length) }),
     });
   }
   if (filters.createdAfter || filters.createdBefore) {
-    criteria.push({ key: 'created', label: dateLabel('Document date', filters.createdAfter, filters.createdBefore) });
+    criteria.push({ key: 'created', label: dateLabel(t('library.documentDate'), filters.createdAfter, filters.createdBefore, t) });
   }
   if (filters.addedAfter || filters.addedBefore) {
-    criteria.push({ key: 'added', label: dateLabel('Added', filters.addedAfter, filters.addedBefore) });
+    criteria.push({ key: 'added', label: dateLabel(t('library.added'), filters.addedAfter, filters.addedBefore, t) });
   }
   if (filters.modifiedAfter || filters.modifiedBefore) {
-    criteria.push({ key: 'modified', label: dateLabel('Modified', filters.modifiedAfter, filters.modifiedBefore) });
+    criteria.push({ key: 'modified', label: dateLabel(t('library.modified'), filters.modifiedAfter, filters.modifiedBefore, t) });
   }
   if (filters.archiveSerialMin || filters.archiveSerialMax || filters.archiveSerialMissing) {
     criteria.push({
       key: 'archive',
       label: filters.archiveSerialMissing
-        ? 'No archive serial'
+        ? t('library.noArchiveSerial')
         : filters.archiveSerialMin && filters.archiveSerialMax
-          ? `Archive ${filters.archiveSerialMin}–${filters.archiveSerialMax}`
+          ? t('library.archiveRange', { min: filters.archiveSerialMin, max: filters.archiveSerialMax })
           : filters.archiveSerialMin
-            ? `Archive >${filters.archiveSerialMin}`
-            : `Archive <${filters.archiveSerialMax}`,
+            ? t('library.archiveAfter', { value: filters.archiveSerialMin })
+            : t('library.archiveBefore', { value: filters.archiveSerialMax }),
     });
   }
   return criteria;
@@ -786,26 +1447,45 @@ function libraryCriteria(filters: LibraryFilters, catalog: PaperlessCatalog): Fi
 function optionLabel(
   prefix: string,
   ids: string[],
-  options: { id: string; name: string }[],
+  options: { id: string; name: string; pathLabel?: string }[],
+  t: Translator,
+  formatNumber: (value: number) => string,
 ) {
-  if (ids.length === 1) return `${prefix} · ${options.find((option) => option.id === ids[0])?.name || '1 selected'}`;
-  return `${prefix} · ${ids.length}`;
+  if (ids.length === 1) {
+    const option = options.find((item) => item.id === ids[0]);
+    return `${prefix} · ${option?.pathLabel || option?.name || t('library.oneSelected')}`;
+  }
+  return `${prefix} · ${formatNumber(ids.length)}`;
 }
 
 function selectionLabel(
   prefix: string,
   ids: string[],
-  options: { id: string; name: string }[],
+  options: { id: string; name: string; pathLabel?: string }[],
   mode: 'include' | 'exclude',
   missing: boolean,
+  t: Translator,
+  formatNumber: (value: number) => string,
 ) {
-  if (missing) return mode === 'include' ? `No ${prefix.toLocaleLowerCase()}` : `${prefix} assigned`;
-  return optionLabel(mode === 'exclude' ? `Exclude ${prefix.toLocaleLowerCase()}` : prefix, ids, options);
+  if (missing) {
+    return mode === 'include'
+      ? t('library.noneAssigned', { label: prefix.toLocaleLowerCase() })
+      : t('library.assigned', { label: prefix });
+  }
+  return optionLabel(
+    mode === 'exclude' ? t('library.exclude', { label: prefix.toLocaleLowerCase() }) : prefix,
+    ids,
+    options,
+    t,
+    formatNumber,
+  );
 }
 
-function dateLabel(prefix: string, after: string, before: string) {
-  if (after && before) return `${prefix} · ${after}–${before}`;
-  return `${prefix} · ${after ? `after ${after}` : `before ${before}`}`;
+function dateLabel(prefix: string, after: string, before: string, t: Translator) {
+  if (after && before) return t('library.dateRange', { label: prefix, after, before });
+  return after
+    ? t('library.dateAfter', { label: prefix, date: after })
+    : t('library.dateBefore', { label: prefix, date: before });
 }
 
 function clearFilterCriterion(filters: LibraryFilters, key: FilterCriterionKey): LibraryFilters {
@@ -870,25 +1550,40 @@ const LibraryDocument = memo(function LibraryDocument({
   grid,
   onOpen,
   onPreload,
+  onSelect,
+  selected,
+  selectionActive,
 }: {
   column: 'left' | 'right';
   document: DocumentItem;
   grid: boolean;
   onOpen: (id: string) => void;
   onPreload: (id: string) => void;
+  onSelect: (id: string) => void;
+  selected: boolean;
+  selectionActive: boolean;
 }) {
+  const { formatDocumentDate, formatNumber, t } = useI18n();
   return (
     <Pressable
-      accessibilityHint="Opens document details"
+      accessibilityHint={selectionActive ? t('library.toggleSelectionHint') : t('library.openSelectHint', { details: t('library.openDetails') })}
       accessibilityLabel={document.title}
       accessibilityRole="button"
+      accessibilityState={{ selected }}
       haptic="light"
-      onPress={() => onOpen(document.id)}
-      onPressIn={() => onPreload(document.id)}
+      onLongPress={() => onSelect(document.id)}
+      onPress={() => selectionActive ? onSelect(document.id) : onOpen(document.id)}
+      onPressIn={() => { if (!selectionActive) onPreload(document.id); }}
       style={[
         grid ? styles.gridCard : styles.listCard,
         grid && (column === 'left' ? styles.gridCardLeft : styles.gridCardRight),
+        selected && styles.documentSelected,
       ]}>
+      {selectionActive && (
+        <View style={[styles.selectionCheck, selected && styles.selectionCheckActive]}>
+          {selected && <Check color={palette.accentInk} size={14} strokeWidth={3} />}
+        </View>
+      )}
       <PaperThumbnail document={document} width={grid ? 112 : 68} />
       <View style={grid ? styles.gridBody : styles.listBody}>
         <Text numberOfLines={2} style={grid ? styles.gridTitle : styles.documentTitle}>
@@ -898,9 +1593,14 @@ const LibraryDocument = memo(function LibraryDocument({
           {grid ? document.correspondent : `${document.correspondent} · ${document.documentType}`}
         </Text>
         {grid ? (
-          <Text style={styles.date}>{document.added}</Text>
+          <Text style={styles.date}>{formatDocumentDate(document.addedAt ?? document.created)}</Text>
         ) : (
           <View style={styles.tags}>
+            {!!document.duplicateDocumentIds?.length && (
+              <View accessibilityLabel={t('document.duplicateCount', { count: formatNumber(document.duplicateDocumentIds.length) })} style={styles.duplicateTag}>
+                <Text numberOfLines={1} style={styles.duplicateTagText}>{t('document.duplicatesBadge', { count: formatNumber(document.duplicateDocumentIds.length) })}</Text>
+              </View>
+            )}
             {document.tags.slice(0, 2).map((tag) => (
               <View key={tag} style={styles.tag}>
                 <Text numberOfLines={1} style={styles.tagText}>{tag}</Text>
@@ -911,8 +1611,10 @@ const LibraryDocument = memo(function LibraryDocument({
       </View>
       {!grid && (
         <View style={styles.listAside}>
-          <Text style={styles.date}>{document.added}</Text>
-          <Text style={styles.pages}>{document.pageCount} pp.</Text>
+          <Text style={styles.date}>{formatDocumentDate(document.addedAt ?? document.created)}</Text>
+          <Text style={styles.pages}>
+            {t('library.pagesShort', { count: formatNumber(document.pageCount) })}
+          </Text>
         </View>
       )}
     </Pressable>
@@ -960,11 +1662,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: -1.3,
   },
+  headerTools: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  headerIconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: palette.paper },
+  selectTextButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, borderRadius: radii.sm, backgroundColor: palette.paper },
+  selectText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 11, fontWeight: '900' },
+  selectionCopy: { flex: 1, minWidth: 0 },
+  selectionTitle: { color: palette.ink, fontFamily: fonts.serif, fontSize: 28, fontWeight: '700' },
+  selectionMeta: { color: palette.muted, fontFamily: fonts.sans, fontSize: 10, fontWeight: '800', marginTop: 2 },
   viewToggle: {
     flexDirection: 'row',
     padding: 4,
     borderRadius: radii.md,
-    backgroundColor: '#E6E1D6',
+    backgroundColor: palette.paperStrong,
   },
   toggleButton: {
     width: 44,
@@ -998,6 +1707,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
   },
+  managementActions: { flexDirection: 'row', gap: 7, paddingRight: 9, marginTop: 10 },
+  managementButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 11, borderRadius: radii.sm, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.paper },
+  managementButtonText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 10, fontWeight: '900' },
+  managementButtonStrong: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 11, borderRadius: radii.sm, backgroundColor: palette.lime },
+  managementButtonStrongText: { color: palette.accentInk, fontFamily: fonts.sans, fontSize: 10, fontWeight: '900' },
   iconButton: {
     width: 44,
     height: 44,
@@ -1160,7 +1874,7 @@ const styles = StyleSheet.create({
     gap: 7,
     paddingHorizontal: 12,
     borderRadius: radii.pill,
-    backgroundColor: '#E8F2C5',
+    backgroundColor: palette.mint,
   },
   appliedFilterText: {
     color: palette.ink,
@@ -1168,6 +1882,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
   },
+  unsupportedRules: { padding: 12, marginTop: 10, borderRadius: radii.md, backgroundColor: palette.dangerSurface },
+  unsupportedRulesTitle: { color: palette.ink, fontFamily: fonts.sans, fontSize: 11, fontWeight: '900' },
+  unsupportedRulesCopy: { color: palette.inkSoft, fontFamily: fonts.sans, fontSize: 10, lineHeight: 15, marginTop: 3 },
   errorBanner: {
     minHeight: 72,
     flexDirection: 'row',
@@ -1176,7 +1893,7 @@ const styles = StyleSheet.create({
     marginTop: 15,
     padding: 13,
     borderRadius: radii.md,
-    backgroundColor: palette.rose,
+    backgroundColor: palette.dangerSurface,
   },
   errorCopy: {
     flex: 1,
@@ -1240,12 +1957,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     marginLeft: 10,
     borderRadius: radii.sm,
-    backgroundColor: '#E8E3D8',
+    backgroundColor: palette.paperStrong,
   },
   resultSeparator: {
     height: 10,
   },
+  selectionBar: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: 9, padding: 11, marginTop: -4, marginBottom: 12, borderRadius: radii.lg, backgroundColor: palette.inverseSurface },
+  selectionBarCopy: { flex: 1, minWidth: 0 },
+  selectionBarTitle: { color: palette.onDark, fontFamily: fonts.sans, fontSize: 12, fontWeight: '900' },
+  selectionBarMeta: { color: palette.cameraTextMuted, fontFamily: fonts.sans, fontSize: 9, lineHeight: 13, marginTop: 2 },
+  clearSelectionButton: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 8 },
+  clearSelectionText: { color: palette.onDark, fontFamily: fonts.sans, fontSize: 10, fontWeight: '900' },
+  bulkButton: { minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 13, borderRadius: radii.sm, backgroundColor: palette.lime },
+  bulkButtonText: { color: palette.accentInk, fontFamily: fonts.sans, fontSize: 11, fontWeight: '900' },
+  disabledButton: { opacity: 0.42 },
   listCard: {
+    position: 'relative',
     height: 108,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1254,7 +1981,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     backgroundColor: palette.paper,
     borderWidth: 1,
-    borderColor: 'rgba(23,35,27,0.04)',
+    borderColor: palette.line,
   },
   listBody: {
     flex: 1,
@@ -1308,6 +2035,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
   },
   gridCard: {
+    position: 'relative',
     minWidth: 0,
     minHeight: 246,
     padding: 12,
@@ -1315,6 +2043,9 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     backgroundColor: palette.paper,
   },
+  documentSelected: { borderWidth: 2, borderColor: palette.limeDark, backgroundColor: palette.mint },
+  selectionCheck: { position: 'absolute', zIndex: 3, top: 8, right: 8, width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: 12, borderWidth: 2, borderColor: palette.lineStrong, backgroundColor: palette.paper },
+  selectionCheckActive: { borderColor: palette.lime, backgroundColor: palette.lime },
   gridCardLeft: {
     marginRight: 5,
   },
@@ -1323,6 +2054,19 @@ const styles = StyleSheet.create({
   },
   gridBody: {
     gap: 5,
+  },
+  duplicateTag: {
+    maxWidth: 110,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+    backgroundColor: palette.dangerSurface,
+  },
+  duplicateTagText: {
+    color: palette.danger,
+    fontFamily: fonts.sans,
+    fontSize: 9,
+    fontWeight: '800',
   },
   gridTitle: {
     color: palette.ink,
@@ -1377,7 +2121,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.lime,
   },
   emptyPrimaryText: {
-    color: palette.ink,
+    color: palette.accentInk,
     fontFamily: fonts.sans,
     fontSize: 12,
     fontWeight: '900',
