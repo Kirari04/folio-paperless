@@ -182,7 +182,6 @@ import {
 } from '@/lib/auth/fetch-adapter';
 import {
   loginWithExpoOidc,
-  refreshOidcSession,
   revokeOidcSession,
 } from '@/lib/auth/oidc-expo';
 import { prepareNativeMutualTls } from '@/lib/auth/native-mtls-adapter';
@@ -292,6 +291,7 @@ type ImportFile = {
   mimeType?: string | null;
   pageCount?: number;
   size?: number | null;
+  textContent?: string;
 };
 
 type ImportDocumentOptions = {
@@ -326,6 +326,9 @@ type AppContextValue = {
   catalog: PaperlessCatalog;
   totalDocuments: number;
   connected: boolean;
+  /** A real profile owns the current cache even when its credentials require
+   * reconnect. Network authority remains represented by `connected`. */
+  profileConfigured: boolean;
   credentials: PaperlessCredentials | null;
   profiles: ConnectionProfile[];
   profileOwnership: Record<string, ProfileOwnershipSummary>;
@@ -652,6 +655,7 @@ async function credentialsForProfile(
   profile: ConnectionProfile,
   options: { refreshOidc?: boolean } = {},
 ): Promise<PaperlessCredentials> {
+  void options;
   let secrets = await profileSecrets.read(profile.id);
   if (!secrets) throw new Error(translateRuntime('appError.authMissing'));
   const fingerprint = connectionProfileAuthFingerprint(profile);
@@ -670,14 +674,17 @@ async function credentialsForProfile(
       clientIdentityRef: secrets.clientIdentityRef,
     };
   }
-  if (profile.auth.kind === 'oidc' && secrets.oidc && options.refreshOidc !== false) {
-    const refreshed = await refreshOidcSession(profile, secrets.oidc);
-    if (refreshed !== secrets.oidc) {
-      secrets = { ...secrets, oidc: refreshed };
-      await profileSecrets.write(profile.id, secrets);
+  if (profile.auth.kind === 'oidc') {
+    if (secrets.oidc || !secrets.apiToken) {
+      // Pre-exchange profiles contain an IdP token, not Paperless authority.
+      // Keep the legacy secret intact for explicit, reversible reconnect or
+      // local sign-out, but never construct a Bearer request from it.
+      throw new Error(translateRuntime('profiles.oidcReconnect'));
     }
+  } else if (secrets.oidc) {
+    throw new Error(translateRuntime('appError.authMissing'));
   }
-  const token = secrets.apiToken ?? secrets.oidc?.accessToken ?? '';
+  const token = secrets.apiToken ?? '';
   if (!token && !Object.keys(secrets.customHeaders ?? {}).length) {
     throw new Error(translateRuntime('appError.authUnusable'));
   }
@@ -685,7 +692,7 @@ async function credentialsForProfile(
     profileId: profile.id,
     serverUrl: profile.serverUrl,
     token,
-    authorizationScheme: secrets.oidc ? 'Bearer' : 'Token',
+    authorizationScheme: 'Token',
     customHeaders: secrets.customHeaders,
   };
 }
@@ -1815,8 +1822,8 @@ export function AppProvider({ children }: PropsWithChildren) {
 
         const profile = snapshot.profiles.find((item) => item.id === snapshot.activeProfileId);
         if (!profile) return;
-        // Hydrate only local repository state first. In particular, an expired
-        // OIDC session must not put discovery/refresh network I/O in front of
+        // Hydrate only local repository state first. In particular, OIDC
+        // credential validation and legacy reconnect detection must not hide
         // the last good workspace on a cold offline launch.
         const [cached, aliases, savedTasks, savedPresets] = await Promise.all([
           folioRepository.readWorkspace(profile.id),
@@ -1842,7 +1849,16 @@ export function AppProvider({ children }: PropsWithChildren) {
         setSyncState(cached ? 'cached' : 'syncing');
         setIsBootstrapping(false);
 
-        const cachedCredentials = await credentialsForProfile(profile, { refreshOidc: false });
+        let cachedCredentials: PaperlessCredentials;
+        try {
+          cachedCredentials = await credentialsForProfile(profile, { refreshOidc: false });
+        } catch (error) {
+          if (active) {
+            setConnectionError(errorMessage(error));
+            setSyncState(onlineRef.current === false ? 'offline' : cached ? 'error' : 'syncing');
+          }
+          return;
+        }
         if (!active) return;
         publishCredentials(cachedCredentials, { networkReady: false });
         let refreshedCredentials: PaperlessCredentials;
@@ -2472,13 +2488,36 @@ export function AppProvider({ children }: PropsWithChildren) {
       throw new Error(translateRuntime('appError.notOidc'));
     }
     const secrets = await profileSecrets.read(profileId);
-    if (!secrets?.oidc) throw new Error(translateRuntime('appError.oidcSignedOut'));
-    const result = await revokeOidcSession(profile, secrets, { openLogout: true });
-    const { oidc: _oidc, ...remainingSecrets } = secrets;
+    if (!secrets || (!secrets.apiToken && !secrets.oidc)) {
+      throw new Error(translateRuntime('appError.oidcSignedOut'));
+    }
+    let result = { revoked: false, logoutOpened: false };
+    if (secrets.oidc) {
+      // Legacy IdP revocation is best effort. A provider outage must never
+      // prevent the user from durably removing local Paperless authority.
+      result = await revokeOidcSession(profile, secrets, { openLogout: true })
+        .catch(() => result);
+    }
+    const {
+      apiToken: _apiToken,
+      oidc: _oidc,
+      ...remainingSecrets
+    } = secrets;
     await profileSecrets.write(profileId, remainingSecrets);
+    if (activeProfileIdRef.current === profileId) {
+      profileGeneration.current += 1;
+      publishCredentials(null);
+      setConnectionError(translateRuntime('profiles.oidcReconnect'));
+      setSyncState('error');
+    }
     const now = new Date().toISOString();
+    const currentSnapshot = await connectionProfiles.getSnapshot();
+    const currentProfile = currentSnapshot.profiles.find((item) => item.id === profileId);
+    if (!currentProfile || currentProfile.auth.kind !== 'oidc') {
+      return result;
+    }
     const updated: ConnectionProfile = {
-      ...profile,
+      ...currentProfile,
       status: {
         code: 'authentication-error',
         checkedAt: now,
@@ -2488,11 +2527,6 @@ export function AppProvider({ children }: PropsWithChildren) {
     };
     const next = await connectionProfiles.update(updated);
     setProfiles(next.profiles);
-    if (activeProfileIdRef.current === profileId) {
-      publishCredentials(null);
-      setConnectionError(translateRuntime('profiles.oidcReconnect'));
-      setSyncState('error');
-    }
     return result;
   }, [publishCredentials]);
 
@@ -3157,7 +3191,8 @@ export function AppProvider({ children }: PropsWithChildren) {
       if (!files.length) return { accepted: [], rejected: [] };
       setOperationError(null);
 
-      if (!credentials) {
+      const profileId = credentials?.profileId ?? activeProfileIdRef.current;
+      if (!profileId) {
         const now = Date.now();
         const localDocuments = files.map((file, index): DocumentItem => ({
           id: `local-${now}-${index}`,
@@ -3183,8 +3218,6 @@ export function AppProvider({ children }: PropsWithChildren) {
         return { accepted: [], rejected: [] };
       }
 
-      const profileId = credentials.profileId ?? activeProfileIdRef.current;
-      if (!profileId) throw new Error(translateRuntime('appError.selectProfileImport'));
       const batchId = globalThis.crypto?.randomUUID?.() ?? `batch-${Date.now()}`;
       const staged = await stageIntakeBatch(
         files.map((file) => ({
@@ -3192,6 +3225,7 @@ export function AppProvider({ children }: PropsWithChildren) {
           name: file.name,
           mimeType: mimeTypeForImport(file),
           size: file.size,
+          textContent: file.textContent,
         })),
         {
           adapter: Platform.OS === 'web' ? webIntakeStagingAdapter : nativeIntakeStagingAdapter,
@@ -3297,7 +3331,9 @@ export function AppProvider({ children }: PropsWithChildren) {
         ].slice(0, 12));
         setOperationError(staged.rejected.map((item) => item.error.message).join(' '));
       }
-      if (!options.deferSubmission) void runUploadQueue(profileId, credentials);
+      if (!options.deferSubmission && credentials?.profileId === profileId) {
+        void runUploadQueue(profileId, credentials);
+      }
       return { ...staged, accepted, batchId };
     },
     [credentials, runUploadQueue, uploadPresets],
@@ -4028,6 +4064,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       catalog,
       totalDocuments,
       connected: Boolean(credentials),
+      profileConfigured: Boolean(activeProfile),
       credentials,
       profiles,
       profileOwnership,

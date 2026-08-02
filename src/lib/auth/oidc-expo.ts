@@ -245,6 +245,10 @@ export function folioOidcRedirectUri() {
   });
 }
 
+/**
+ * Obtains and validates IdP tokens for the immediate Paperless headless-auth
+ * exchange. The caller must not persist these or use them against `/api/`.
+ */
 export async function loginWithExpoOidc(
   input: {
     issuer: string;
@@ -306,11 +310,7 @@ export async function loginWithExpoOidc(
   });
   return {
     accessToken: tokens.accessToken,
-    ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}),
     idToken: tokens.idToken,
-    ...(tokens.expiresIn
-      ? { expiresAt: new Date(Date.now() + tokens.expiresIn * 1000).toISOString() }
-      : {}),
     subject: claims.sub,
   };
 }

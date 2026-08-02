@@ -67,11 +67,17 @@ export function credentialsMatchStoredProfile(
       && credentialHeadersMatch(credentials.customHeaders, undefined);
   }
 
-  const token = secrets.apiToken ?? secrets.oidc?.accessToken ?? '';
+  // IdP tokens from the pre-headless-exchange implementation are migration
+  // input, never Paperless REST authority. In particular, no worker may treat
+  // one as a Bearer token while an OIDC profile is waiting to reconnect.
+  if (secrets.oidc) return false;
+  if (profile.auth.kind === 'oidc' && !secrets.apiToken) return false;
+
+  const token = secrets.apiToken ?? '';
   const customHeaders = secrets.customHeaders;
   if (!token && Object.keys(customHeaders ?? {}).length === 0) return false;
   return credentials.clientIdentityRef === undefined
     && credentials.token === token
-    && (credentials.authorizationScheme ?? 'Token') === (secrets.oidc ? 'Bearer' : 'Token')
+    && (credentials.authorizationScheme ?? 'Token') === 'Token'
     && credentialHeadersMatch(credentials.customHeaders, customHeaders);
 }

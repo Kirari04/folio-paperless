@@ -44,7 +44,7 @@ final class FolioMtlsIdentityStore {
     guard
       let dictionaries = items as? [[String: Any]],
       let imported = dictionaries.first,
-      let identity = imported[kSecImportItemIdentity as String] as? SecIdentity
+      let identity = secIdentity(imported[kSecImportItemIdentity as String])
     else {
       throw FolioMtlsNativeFailure(
         code: "IDENTITY_MISSING_PRIVATE_KEY",
@@ -74,7 +74,7 @@ final class FolioMtlsIdentityStore {
       throw FolioMtlsNativeFailure(code: "IMPORT", message: "The identity could not be saved in Keychain.")
     }
     do {
-      let chain = normalizedChain(importedChain, leaf: leaf)
+      let chain = try normalizedChain(importedChain, leaf: leaf)
       try saveChain(chain, identifier: identifier)
       guard let stored = try load(reference) else {
         throw FolioMtlsNativeFailure(code: "IDENTITY_NOT_FOUND", message: "The saved identity could not be reopened.")
@@ -111,7 +111,7 @@ final class FolioMtlsIdentityStore {
       guard
         let label = entry[kSecAttrLabel as String] as? String,
         label.hasPrefix(identityPrefix),
-        let identity = entry[kSecValueRef as String] as? SecIdentity
+        let identity = secIdentity(entry[kSecValueRef as String])
       else { return nil }
       let identifier = String(label.dropFirst(identityPrefix.count))
       let reference = referencePrefix + identifier
@@ -130,7 +130,7 @@ final class FolioMtlsIdentityStore {
     var result: CFTypeRef?
     let status = SecItemCopyMatching(query as CFDictionary, &result)
     if status == errSecItemNotFound { return nil }
-    guard status == errSecSuccess, let identity = result as? SecIdentity else {
+    guard status == errSecSuccess, let identity = secIdentity(result) else {
       throw FolioMtlsNativeFailure(code: "IDENTITY_NOT_FOUND", message: "The Keychain identity is unavailable.")
     }
     return try storedIdentity(reference: reference, identifier: identifier, identity: identity)
@@ -182,10 +182,42 @@ final class FolioMtlsIdentityStore {
   private func normalizedChain(
     _ imported: [SecCertificate],
     leaf: SecCertificate
-  ) -> [SecCertificate] {
+  ) throws -> [SecCertificate] {
     let leafData = SecCertificateCopyData(leaf) as Data
-    let remaining = imported.filter { SecCertificateCopyData($0) as Data != leafData }
-    return [leaf] + remaining
+    let leafFields = try FolioMtlsCertificateParser.parse(leafData)
+    var seen = Set<Data>([leafData])
+    var candidates: [(certificate: SecCertificate, fields: FolioMtlsCertificateFields)] = []
+    // URLCredential already receives the leaf through `identity`; its
+    // certificates argument contains only its ordered intermediates. Ignore
+    // roots and unrelated PKCS#12 extras instead of disclosing them to a peer.
+    for certificate in imported {
+      let data = SecCertificateCopyData(certificate) as Data
+      guard seen.insert(data).inserted,
+        let fields = try? FolioMtlsCertificateParser.parse(data)
+      else { continue }
+      candidates.append((certificate, fields))
+    }
+
+    var expectedSubject = leafFields.issuerDer
+    var intermediates: [SecCertificate] = []
+    while true {
+      let matches = candidates.filter { $0.fields.subjectDer == expectedSubject }
+      guard matches.count <= 1 else {
+        throw FolioMtlsNativeFailure(
+          code: "IMPORT",
+          message: "The client certificate chain is ambiguous."
+        )
+      }
+      guard let next = matches.first else { break }
+      if next.fields.subjectDer == next.fields.issuerDer { break }
+      intermediates.append(next.certificate)
+      expectedSubject = next.fields.issuerDer
+      let nextData = SecCertificateCopyData(next.certificate) as Data
+      candidates.removeAll { candidate in
+        SecCertificateCopyData(candidate.certificate) as Data == nextData
+      }
+    }
+    return intermediates
   }
 
   private func saveChain(_ chain: [SecCertificate], identifier: String) throws {
@@ -215,64 +247,42 @@ final class FolioMtlsIdentityStore {
       kSecMatchLimit: kSecMatchLimitOne,
       kSecReturnData: true
     ] as CFDictionary, &result)
-    if status == errSecItemNotFound { return [leaf] }
+    if status == errSecItemNotFound { return [] }
     guard status == errSecSuccess, let data = result as? Data else {
       throw FolioMtlsNativeFailure(code: "IDENTITY_NOT_FOUND", message: "The certificate chain is unavailable.")
     }
     let raw = try PropertyListSerialization.propertyList(from: data, format: nil) as? [Data] ?? []
     let certificates = raw.compactMap { SecCertificateCreateWithData(nil, $0 as CFData) }
-    return certificates.isEmpty ? [leaf] : certificates
+    return try normalizedChain(certificates, leaf: leaf)
   }
 
   private func metadata(certificate: SecCertificate, identityId: String) throws -> [String: Any] {
     let summary = SecCertificateCopySubjectSummary(certificate).map { $0 as String }
-    let subject = distinguishedName(certificate, oid: kSecOIDX509V1SubjectName)
-      ?? summary
-      ?? "Unknown subject"
-    let issuer = distinguishedName(certificate, oid: kSecOIDX509V1IssuerName)
-      ?? "Unknown issuer"
-    guard
-      let notBefore = certificateDate(certificate, oid: kSecOIDX509V1ValidityNotBefore),
-      let expiresAt = certificateDate(certificate, oid: kSecOIDX509V1ValidityNotAfter)
-    else {
+    let fields: FolioMtlsCertificateFields
+    do {
+      fields = try FolioMtlsCertificateParser.parse(SecCertificateCopyData(certificate) as Data)
+    } catch {
       throw FolioMtlsNativeFailure(code: "IMPORT", message: "The certificate validity period is unreadable.")
     }
     return [
       "identityId": identityId,
-      "subject": subject,
-      "issuer": issuer,
-      "notBefore": iso8601(notBefore),
-      "expiresAt": iso8601(expiresAt),
+      "subject": fields.subject ?? summary ?? "Unknown subject",
+      "issuer": fields.issuer ?? "Unknown issuer",
+      "notBefore": iso8601(fields.notBefore),
+      "expiresAt": iso8601(fields.notAfter),
       "fingerprintSha256": fingerprintSha256(certificate),
       "hasPrivateKey": true,
       "source": "managed-native-identity"
     ]
   }
 
-  private func certificateProperty(_ certificate: SecCertificate, oid: CFString) -> [String: Any]? {
-    guard
-      let values = SecCertificateCopyValues(certificate, [oid] as CFArray, nil) as? [String: Any],
-      let property = values[oid as String] as? [String: Any]
-    else { return nil }
-    return property
-  }
-
-  private func certificateDate(_ certificate: SecCertificate, oid: CFString) -> Date? {
-    certificateProperty(certificate, oid: oid)?[kSecPropertyKeyValue as String] as? Date
-  }
-
-  private func distinguishedName(_ certificate: SecCertificate, oid: CFString) -> String? {
-    guard
-      let fields = certificateProperty(certificate, oid: oid)?[kSecPropertyKeyValue as String]
-        as? [[String: Any]]
-    else { return nil }
-    let components = fields.compactMap { field -> String? in
-      let label = field[kSecPropertyKeyLabel as String] as? String
-      let value = field[kSecPropertyKeyValue as String]
-      guard let label, let value else { return nil }
-      return "\(label)=\(value)"
-    }
-    return components.isEmpty ? nil : components.joined(separator: ", ")
+  private func secIdentity(_ value: Any?) -> SecIdentity? {
+    guard let value else { return nil }
+    let reference = value as CFTypeRef
+    guard CFGetTypeID(reference) == SecIdentityGetTypeID() else { return nil }
+    // Security returns opaque CFTypeRef values. Swift 6 rejects a conditional
+    // Core Foundation downcast, so narrow only after checking the runtime type.
+    return unsafeDowncast(reference, to: SecIdentity.self)
   }
 
   private func fingerprintSha256(_ certificate: SecCertificate) -> String {

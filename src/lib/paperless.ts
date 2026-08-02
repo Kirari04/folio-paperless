@@ -21,6 +21,7 @@ import {
   PaperlessLibraryRequest,
   PaperlessSavedViewRule,
   PaperlessTrashWorkspace,
+  PaperlessWorkspaceResourceAvailability,
 } from '@/types/document';
 
 import { matchesLibraryFilters } from '@/lib/library-filters';
@@ -28,7 +29,10 @@ import { normalizePaperlessServerUrl, ServerUrlError } from '@/lib/server-url';
 import { getNativeMtlsTransport } from '@/lib/auth/native-mtls-module';
 import { assertNativeMtlsRequestUrl, validateNativeMtlsResponseUrl } from '@/lib/auth/native-mtls-adapter';
 import { NativeMtlsCapabilityError } from '@/lib/auth/session';
-import { serializeUploadMetadata } from '@/lib/upload-metadata';
+import {
+  serializeUploadMetadata,
+  unsupportedStandardUploadClearMessage,
+} from '@/lib/upload-metadata';
 import { buildVisibleTagOptions } from '@/lib/tag-hierarchy';
 import {
   appendPaperlessSavedViewRules,
@@ -41,6 +45,10 @@ import {
   effectiveDownloadLimit,
   MAX_DOCUMENT_DOWNLOAD_BYTES,
 } from '@/lib/download-policy';
+import {
+  negotiatePaperlessWorkspaceResources,
+  resolvePaperlessDocumentStatus,
+} from '@/lib/paperless-workspace-capabilities';
 
 type ApiList<T> = {
   count: number;
@@ -86,6 +94,8 @@ type ApiDocument = {
   page_count?: number;
   original_file_size?: number;
   archived_file_size?: number;
+  original_file_name?: string;
+  /** Compatibility with older or forked document serializers. */
   original_filename?: string;
   mime_type?: string;
   content?: string;
@@ -144,6 +154,7 @@ export type PaperlessWorkspace = {
   catalog: PaperlessCatalog;
   documents: DocumentItem[];
   totalDocuments: number;
+  resourceAvailability: PaperlessWorkspaceResourceAvailability;
 };
 
 export type PaperlessTask = {
@@ -793,6 +804,38 @@ async function getAllPages<T>(credentials: PaperlessCredentials, initialPath: st
   return { results, total };
 }
 
+async function fetchPaperlessInboxDocumentIds(
+  credentials: PaperlessCredentials,
+  remoteId?: number,
+) {
+  const params = new URLSearchParams({
+    // Paperless's custom InboxFilter compares the raw query value to the
+    // literal strings "true" and "false" rather than coercing Django-style
+    // boolean aliases such as "1".
+    is_in_inbox: 'true',
+    page_size: '100',
+    fields: 'id',
+  });
+  if (remoteId !== undefined) {
+    if (!Number.isSafeInteger(remoteId) || remoteId <= 0) {
+      throw new PaperlessApiError('A valid document ID is required.');
+    }
+    params.set('id', String(remoteId));
+  }
+  const page = await getAllPages<{ id: number }>(
+    credentials,
+    `/api/documents/?${params.toString()}`,
+  );
+  const ids = new Set<number>();
+  for (const document of page.results) {
+    if (!Number.isSafeInteger(document.id) || document.id <= 0) {
+      throw new PaperlessApiError('Paperless returned invalid inbox membership data.');
+    }
+    ids.add(document.id);
+  }
+  return ids;
+}
+
 function toOption(kind: string, item: ApiNamedItem): PaperlessOption {
   return {
     id: `remote-${kind}-${item.id}`,
@@ -811,6 +854,7 @@ function buildCatalog(
   customFields: ApiCustomField[],
   savedViews: ApiSavedView[],
   workflows: ApiNamedItem[] = [],
+  resourceAvailability?: PaperlessWorkspaceResourceAvailability,
 ): PaperlessCatalog {
   return {
     correspondents: correspondents.map((item) => toOption('correspondent', item)),
@@ -825,6 +869,7 @@ function buildCatalog(
     workflows: workflows.map((item) => toOption('workflow', item)),
     customFields: customFields.map(mapCustomFieldDefinition),
     savedViews: savedViews.map(mapSavedView),
+    ...(resourceAvailability ? { resourceAvailability } : {}),
   };
 }
 
@@ -901,7 +946,11 @@ function formatBytes(bytes?: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function mapDocument(document: ApiDocument, catalog: PaperlessCatalog): DocumentItem {
+function mapDocument(
+  document: ApiDocument,
+  catalog: PaperlessCatalog,
+  authoritativeInboxIds?: ReadonlySet<number>,
+): DocumentItem {
   const correspondent = catalog.correspondents.find((item) => item.remoteId === document.correspondent);
   const documentType = catalog.documentTypes.find((item) => item.remoteId === document.document_type);
   const storagePath = catalog.storagePaths.find((item) => item.remoteId === document.storage_path);
@@ -919,15 +968,21 @@ function mapDocument(document: ApiDocument, catalog: PaperlessCatalog): Document
     correspondent: correspondent?.name || (document.correspondent
       ? translateRuntime('document.unknownCorrespondent')
       : translateRuntime('document.noCorrespondent')),
-    correspondentId: correspondent?.id,
+    correspondentId: correspondent?.id ?? (document.correspondent
+      ? `remote-correspondent-${document.correspondent}`
+      : undefined),
     documentType: documentType?.name || (document.document_type
       ? translateRuntime('document.remoteGenericType')
       : translateRuntime('document.unsorted')),
-    documentTypeId: documentType?.id,
+    documentTypeId: documentType?.id ?? (document.document_type
+      ? `remote-type-${document.document_type}`
+      : undefined),
     storagePath: storagePath?.name || (document.storage_path
       ? translateRuntime('document.unknownStoragePath')
       : translateRuntime('document.automatic')),
-    storagePathId: storagePath?.id,
+    storagePathId: storagePath?.id ?? (document.storage_path
+      ? `remote-storage-path-${document.storage_path}`
+      : undefined),
     created: document.created,
     added: document.added,
     addedAt: document.added,
@@ -935,19 +990,19 @@ function mapDocument(document: ApiDocument, catalog: PaperlessCatalog): Document
     fileSize: formatBytes(fileSizeBytes),
     ...(fileSizeBytes ? { fileSizeBytes } : {}),
     tags: resolvedTags.map((tag) => tag.name),
-    tagIds: resolvedTags.map((tag) => tag.id),
-    status: resolvedTags.some((tag) => tag.name.toLocaleLowerCase() === 'inbox')
-      ? 'inbox'
-      : 'archived',
+    // Preserve only opaque stable identities for tags the account cannot
+    // enumerate; never synthesize or cache their private names or paths.
+    tagIds: document.tags.map((tagId) => `remote-tag-${tagId}`),
+    status: resolvePaperlessDocumentStatus(document.id, resolvedTags, authoritativeInboxIds),
     color: cardColors[document.id % cardColors.length],
     accent: '#354139',
     excerpt: content.slice(0, 220) || translateRuntime('document.noExtractedText'),
     fullText: content || undefined,
-    originalFileName: document.original_filename,
+    originalFileName: document.original_file_name ?? document.original_filename,
     mimeType: document.mime_type,
     modifiedAt: document.modified,
     owner: owner?.name,
-    ownerId: owner?.id,
+    ownerId: owner?.id ?? (document.owner ? `remote-owner-${document.owner}` : undefined),
     // Paperless applies view permissions to the documents queryset. Presence
     // in this authenticated response is the authoritative visibility signal;
     // older cached rows without this field fail closed in OS search.
@@ -1007,32 +1062,76 @@ export async function fetchPaperlessCreationCapabilities(
 export async function fetchPaperlessWorkspace(
   credentials: PaperlessCredentials,
 ): Promise<PaperlessWorkspace> {
-  const [
-    documentsPage,
-    correspondentsPage,
-    documentTypesPage,
-    tagsPage,
-    storagePathsPage,
-    ownersPage,
-    customFieldsPage,
-    savedViewsPage,
-    workflowsPage,
-  ] = await Promise.all([
-    getAllPages<ApiDocument>(
-      credentials,
-      '/api/documents/?page_size=100&ordering=-added&truncate_content=true',
+  type Page<T> = { results: T[]; total: number };
+  type OptionalPages = {
+    correspondents: Page<ApiNamedItem>;
+    documentTypes: Page<ApiNamedItem>;
+    tags: Page<ApiNamedItem>;
+    storagePaths: Page<ApiNamedItem>;
+    owners: Page<ApiUser>;
+    customFields: Page<ApiCustomField>;
+    savedViews: Page<ApiSavedView>;
+    workflows: Page<ApiNamedItem>;
+  };
+  const emptyPage = <T>(): Page<T> => ({ results: [], total: 0 });
+  const [workspaceResources, inboxDocumentIds] = await Promise.all([
+    negotiatePaperlessWorkspaceResources<Page<ApiDocument>, OptionalPages>(
+      () => getAllPages<ApiDocument>(
+        credentials,
+        '/api/documents/?page_size=100&ordering=-added&truncate_content=true',
+      ),
+      {
+      correspondents: () => getAllPages<ApiNamedItem>(
+        credentials,
+        '/api/correspondents/?page_size=100&ordering=name',
+      ),
+      documentTypes: () => getAllPages<ApiNamedItem>(
+        credentials,
+        '/api/document_types/?page_size=100&ordering=name',
+      ),
+      tags: () => getAllPages<ApiNamedItem>(credentials, '/api/tags/?page_size=100&ordering=name'),
+      storagePaths: () => getAllPages<ApiNamedItem>(
+        credentials,
+        '/api/storage_paths/?page_size=100&ordering=name',
+      ),
+      owners: () => getAllPages<ApiUser>(credentials, '/api/users/?page_size=100&ordering=username'),
+      customFields: () => getAllPages<ApiCustomField>(
+        credentials,
+        '/api/custom_fields/?page_size=100&ordering=name',
+      ),
+      savedViews: () => getAllPages<ApiSavedView>(
+        credentials,
+        '/api/saved_views/?page_size=100&ordering=name',
+      ),
+      workflows: () => getAllPages<ApiNamedItem>(
+        credentials,
+        '/api/workflows/?page_size=100&ordering=name',
+      ),
+      },
+      {
+      correspondents: emptyPage<ApiNamedItem>(),
+      documentTypes: emptyPage<ApiNamedItem>(),
+      tags: emptyPage<ApiNamedItem>(),
+      storagePaths: emptyPage<ApiNamedItem>(),
+      owners: emptyPage<ApiUser>(),
+      customFields: emptyPage<ApiCustomField>(),
+      savedViews: emptyPage<ApiSavedView>(),
+      workflows: emptyPage<ApiNamedItem>(),
+      },
     ),
-    getAllPages<ApiNamedItem>(credentials, '/api/correspondents/?page_size=100&ordering=name'),
-    getAllPages<ApiNamedItem>(credentials, '/api/document_types/?page_size=100&ordering=name'),
-    getAllPages<ApiNamedItem>(credentials, '/api/tags/?page_size=100&ordering=name'),
-    getAllPages<ApiNamedItem>(credentials, '/api/storage_paths/?page_size=100&ordering=name'),
-    getAllPages<ApiUser>(credentials, '/api/users/?page_size=100&ordering=username')
-      .catch(() => ({ results: [], total: 0 })),
-    getAllPages<ApiCustomField>(credentials, '/api/custom_fields/?page_size=100&ordering=name'),
-    getAllPages<ApiSavedView>(credentials, '/api/saved_views/?page_size=100&ordering=name'),
-    getAllPages<ApiNamedItem>(credentials, '/api/workflows/?page_size=100&ordering=name')
-      .catch(() => ({ results: [], total: 0 })),
+    fetchPaperlessInboxDocumentIds(credentials),
   ]);
+  const documentsPage = workspaceResources.documents;
+  const {
+    correspondents: correspondentsPage,
+    documentTypes: documentTypesPage,
+    tags: tagsPage,
+    storagePaths: storagePathsPage,
+    owners: ownersPage,
+    customFields: customFieldsPage,
+    savedViews: savedViewsPage,
+    workflows: workflowsPage,
+  } = workspaceResources.optional;
   const catalog = buildCatalog(
     correspondentsPage.results,
     documentTypesPage.results,
@@ -1042,12 +1141,16 @@ export async function fetchPaperlessWorkspace(
     customFieldsPage.results,
     savedViewsPage.results,
     workflowsPage.results,
+    workspaceResources.availability,
   );
 
   return {
     catalog,
-    documents: documentsPage.results.map((document) => mapDocument(document, catalog)),
+    documents: documentsPage.results.map((document) => (
+      mapDocument(document, catalog, inboxDocumentIds)
+    )),
     totalDocuments: documentsPage.total,
+    resourceAvailability: workspaceResources.availability,
   };
 }
 
@@ -1056,8 +1159,11 @@ export async function fetchPaperlessDocument(
   remoteId: number,
   catalog: PaperlessCatalog,
 ) {
-  const document = await getJson<ApiDocument>(credentials, `/api/documents/${remoteId}/`);
-  return mapDocument(document, catalog);
+  const [document, inboxDocumentIds] = await Promise.all([
+    getJson<ApiDocument>(credentials, `/api/documents/${remoteId}/`),
+    fetchPaperlessInboxDocumentIds(credentials, remoteId),
+  ]);
+  return mapDocument(document, catalog, inboxDocumentIds);
 }
 
 /** Paperless 3.0.5 always assigns API uploads to the requesting user and does
@@ -1078,16 +1184,35 @@ export async function applyPaperlessUploadOwner(
       403,
     );
   }
-  const ownerId = requestedOwner.state === 'clear'
-    ? null
-    : requestedOwner.value.remoteId;
-  if (ownerId !== null && (!Number.isSafeInteger(ownerId) || (ownerId ?? 0) <= 0)) {
+  if (requestedOwner.state === 'clear') {
+    throw new PaperlessApiError(
+      unsupportedStandardUploadClearMessage('owner'),
+      400,
+    );
+  }
+  const ownerId = requestedOwner.value.remoteId;
+  if (!Number.isSafeInteger(ownerId) || (ownerId ?? 0) <= 0) {
     throw new PaperlessApiError(translateRuntime('runtimeError.uploadOwnerStale'), 409);
   }
-  await sendJson<ApiDocument>(credentials, `/api/documents/${remoteId}/`, 'PATCH', {
+  const patched = await sendJson<ApiDocument>(credentials, `/api/documents/${remoteId}/`, 'PATCH', {
     owner: ownerId,
   });
-  const verified = await getJson<ApiDocument>(credentials, `/api/documents/${remoteId}/`);
+  const patchConfirmsOwner = patched.id === remoteId && (patched.owner ?? null) === ownerId;
+  let verified: ApiDocument;
+  try {
+    verified = await getJson<ApiDocument>(credentials, `/api/documents/${remoteId}/`);
+  } catch (error) {
+    // A successful ownership transfer can synchronously remove this account's
+    // object-level view permission. Only an exact PATCH response plus the
+    // expected 403/404 readback is accepted; all other failures remain an
+    // explicit repair state.
+    if (
+      patchConfirmsOwner
+      && error instanceof PaperlessApiError
+      && (error.status === 403 || error.status === 404)
+    ) return true;
+    throw error;
+  }
   if ((verified.owner ?? null) !== ownerId) {
     throw new PaperlessApiError(translateRuntime('runtimeError.uploadOwnerReadback'), 409);
   }
@@ -1246,7 +1371,7 @@ function appendLibraryFilters(
   filters: LibraryFilters,
   catalog: PaperlessCatalog,
 ) {
-  if (filters.status === 'inbox') params.set('is_in_inbox', '1');
+  if (filters.status === 'inbox') params.set('is_in_inbox', 'true');
   if (filters.status === 'tagged') params.set('is_tagged', '1');
   if (filters.status === 'untagged') params.set('is_tagged', '0');
 
@@ -1364,13 +1489,16 @@ export async function fetchPaperlessLibraryDocuments(
   credentials: PaperlessCredentials,
   request: PaperlessLibraryRequest,
   catalog: PaperlessCatalog,
-): Promise<PaperlessWorkspace> {
-  const page = await getAllPages<ApiDocument>(
-    credentials,
-    `/api/documents/?${libraryQuery(request, catalog)}`,
-  );
+): Promise<Pick<PaperlessWorkspace, 'catalog' | 'documents' | 'totalDocuments'>> {
+  const [page, inboxDocumentIds] = await Promise.all([
+    getAllPages<ApiDocument>(
+      credentials,
+      `/api/documents/?${libraryQuery(request, catalog)}`,
+    ),
+    fetchPaperlessInboxDocumentIds(credentials),
+  ]);
   const documents = page.results
-    .map((document) => mapDocument(document, catalog))
+    .map((document) => mapDocument(document, catalog, inboxDocumentIds))
     .filter((document) => matchesLibraryFilters(document, request.filters));
   return { catalog, documents, totalDocuments: documents.length };
 }
@@ -1380,9 +1508,14 @@ export async function fetchPaperlessSavedViewDocuments(
   view: PaperlessSavedView,
   catalog: PaperlessCatalog,
 ) {
-  const page = await getAllPages<ApiDocument>(credentials, `/api/documents/?${savedViewQuery(view)}`);
+  const [page, inboxDocumentIds] = await Promise.all([
+    getAllPages<ApiDocument>(credentials, `/api/documents/?${savedViewQuery(view)}`),
+    fetchPaperlessInboxDocumentIds(credentials),
+  ]);
   return {
-    documents: page.results.map((document) => mapDocument(document, catalog)),
+    documents: page.results.map((document) => (
+      mapDocument(document, catalog, inboxDocumentIds)
+    )),
     totalDocuments: page.total,
   };
 }
@@ -1391,12 +1524,17 @@ export async function fetchPaperlessTrash(
   credentials: PaperlessCredentials,
   catalog: PaperlessCatalog,
 ): Promise<PaperlessTrashWorkspace> {
-  const page = await getAllPages<ApiDocument>(
-    credentials,
-    '/api/trash/?page_size=100&ordering=-deleted_at&truncate_content=true',
-  );
+  const [page, inboxDocumentIds] = await Promise.all([
+    getAllPages<ApiDocument>(
+      credentials,
+      '/api/trash/?page_size=100&ordering=-deleted_at&truncate_content=true',
+    ),
+    fetchPaperlessInboxDocumentIds(credentials),
+  ]);
   return {
-    documents: page.results.map((document) => mapDocument(document, catalog)),
+    documents: page.results.map((document) => (
+      mapDocument(document, catalog, inboxDocumentIds)
+    )),
     totalDocuments: page.total,
   };
 }

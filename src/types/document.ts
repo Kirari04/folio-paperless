@@ -98,6 +98,28 @@ export type PaperlessSavedView = {
   extra?: Readonly<Record<string, unknown>>;
 };
 
+export type PaperlessOptionalWorkspaceResource =
+  | 'correspondents'
+  | 'documentTypes'
+  | 'tags'
+  | 'storagePaths'
+  | 'owners'
+  | 'customFields'
+  | 'savedViews'
+  | 'workflows';
+
+export type PaperlessWorkspaceResourceCapability =
+  | { available: true }
+  | {
+      available: false;
+      reason: 'permission-denied' | 'endpoint-unavailable';
+      status: 403 | 404 | 405;
+    };
+
+export type PaperlessWorkspaceResourceAvailability = {
+  documents: { available: true };
+} & Record<PaperlessOptionalWorkspaceResource, PaperlessWorkspaceResourceCapability>;
+
 export type PaperlessCatalog = {
   correspondents: PaperlessOption[];
   documentTypes: PaperlessOption[];
@@ -107,6 +129,9 @@ export type PaperlessCatalog = {
   workflows?: PaperlessOption[];
   customFields: PaperlessCustomFieldDefinition[];
   savedViews: PaperlessSavedView[];
+  /** Present on live workspace catalogs so empty and permission-unavailable
+   * resources remain distinguishable after the catalog enters app state. */
+  resourceAvailability?: PaperlessWorkspaceResourceAvailability;
 };
 
 export type LibrarySelectionMode = 'include' | 'exclude';
