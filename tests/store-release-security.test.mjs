@@ -171,3 +171,13 @@ test('iOS verification binds the app signature and reported team to the protecte
   assert.ok(verificationStep.includes('identifier \\"app.folio.paperless\\"'));
   assert.match(verificationStep, /TeamIdentifier:0/);
 });
+
+test('Android verification accepts a valid self-signed upload key and binds its fingerprint', () => {
+  const verificationStep = stepSource(androidJob, 'Download and verify AAB');
+  assert.match(verificationStep, /jarsigner -verify -verbose -certs/);
+  assert.doesNotMatch(verificationStep, /jarsigner -verify -strict/);
+  assert.match(verificationStep, /keytool -printcert -jarfile/);
+  assert.match(verificationStep, /actual=.*SHA256/);
+  assert.match(verificationStep, /ANDROID_STORE_CERT_SHA256/);
+  assert.match(verificationStep, /"\$actual" != "\$expected"/);
+});

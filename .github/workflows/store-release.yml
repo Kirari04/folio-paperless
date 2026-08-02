@@ -148,7 +148,11 @@ jobs:
           curl --fail --location --proto '=https' --tlsv1.2 "$ARTIFACT_URL" --output "$artifact"
           test -s "$artifact"
           unzip -t "$artifact"
-          jarsigner -verify -strict -verbose -certs "$artifact" > "$RUNNER_TEMP/jarsigner.txt"
+          # Android upload certificates are intentionally self-signed. `-strict`
+          # turns that expected signer warning into exit 4 even when the JAR
+          # signature is valid; the protected SHA-256 comparison below supplies
+          # the required signer authority check.
+          jarsigner -verify -verbose -certs "$artifact" > "$RUNNER_TEMP/jarsigner.txt"
           keytool -printcert -jarfile "$artifact" > "$RUNNER_TEMP/certificate.txt"
           actual="$(sed -n 's/^[[:space:]]*SHA256: //p' "$RUNNER_TEMP/certificate.txt" | head -n 1 | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
           expected="$(printf '%s' "$ANDROID_STORE_CERT_SHA256" | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
