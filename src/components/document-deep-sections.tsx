@@ -20,6 +20,8 @@ import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/c
 import { TextEditSheet } from '@/components/text-edit-sheet';
 import { fonts, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
+import { useI18n, type TranslationKey } from '@/i18n';
+import { presentRuntimeError } from '@/i18n/error-presentation';
 import {
   DocumentItem,
   PaperlessCustomFieldDefinition,
@@ -34,24 +36,32 @@ type Props = {
   onToast: (message: string, error?: boolean) => void;
 };
 
-function displayDate(value: string) {
+type Translator = (key: TranslationKey, values?: Record<string, string | number>) => string;
+
+function displayDate(
+  value: string,
+  formatDate: (value: Date | string | number, options?: Intl.DateTimeFormatOptions) => string,
+) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+  return formatDate(date, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function customFieldDisplay(
   definition: PaperlessCustomFieldDefinition | undefined,
   value: PaperlessCustomFieldValue['value'],
   documents: DocumentItem[],
+  t: Translator,
+  formatList: (values: string[], options?: Intl.ListFormatOptions) => string,
 ) {
-  if (value === null || value === '') return 'Not set';
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (value === null || value === '') return t('deep.notSet');
+  if (typeof value === 'boolean') return value ? t('deep.yes') : t('deep.no');
   if (Array.isArray(value)) {
-    if (!value.length) return 'No documents linked';
-    return value
-      .map((id) => documents.find((document) => document.remoteId === id)?.title || `Document ${id}`)
-      .join(', ');
+    if (!value.length) return t('deep.noLinkedDocuments');
+    return formatList(value.map(
+      (id) => documents.find((document) => document.remoteId === id)?.title
+        || t('deep.documentReference', { id }),
+    ));
   }
   if (definition?.dataType === 'select') {
     return definition.selectOptions.find((option) => option.id === String(value))?.label || String(value);
@@ -65,7 +75,9 @@ export function DocumentDeepSections({
   onSelectVersion,
   onToast,
 }: Props) {
+  const { formatDate, formatList, formatNumber, t } = useI18n();
   const {
+    activeProfile,
     documents,
     catalog,
     updateDocument,
@@ -118,7 +130,7 @@ export function DocumentDeepSections({
   async function saveAsn(nextValue: string) {
     const normalized = nextValue.trim();
     if (normalized && (!/^\d+$/.test(normalized) || Number(normalized) <= 0)) {
-      throw new Error('Archive serial numbers must be positive whole numbers.');
+      throw new Error(t('deep.asnValidation'));
     }
     setBusy('asn');
     try {
@@ -126,9 +138,9 @@ export function DocumentDeepSections({
         archiveSerialNumber: normalized ? Number(normalized) : null,
       });
       setAsn(normalized);
-      onToast(normalized ? 'Archive serial number updated' : 'Archive serial number cleared');
+      onToast(normalized ? t('deep.asnUpdated') : t('deep.asnCleared'));
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Could not update the serial number.';
+      const message = presentRuntimeError(error, t('deep.asnError'));
       onToast(message, true);
       throw error instanceof Error ? error : new Error(message);
     } finally {
@@ -143,7 +155,9 @@ export function DocumentDeepSections({
     ];
     animateLayout();
     await updateDocument(document.id, { customFields: nextFields });
-    onToast(`${editingField?.name || 'Custom field'} updated`);
+    onToast(t('deep.customFieldUpdated', {
+      name: editingField?.name || t('deep.customFieldFallback'),
+    }));
   }
 
   async function removeCustomField() {
@@ -152,7 +166,7 @@ export function DocumentDeepSections({
     await updateDocument(document.id, {
       customFields: customFields.filter((field) => field.fieldId !== editingField.id),
     });
-    onToast(`${editingField.name} removed`);
+    onToast(t('deep.customFieldRemoved', { name: editingField.name }));
   }
 
   async function submitNote(nextValue: string) {
@@ -161,9 +175,9 @@ export function DocumentDeepSections({
     try {
       await addNote(document.id, normalized);
       animateLayout();
-      onToast('Note added');
+      onToast(t('deep.noteAdded'));
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Could not add this note.';
+      const message = presentRuntimeError(error, t('deep.noteAddError'));
       onToast(message, true);
       throw error instanceof Error ? error : new Error(message);
     } finally {
@@ -172,21 +186,21 @@ export function DocumentDeepSections({
   }
 
   function confirmDeleteNote(noteId: number | string) {
-    Alert.alert('Delete note?', 'This removes the note from this document.', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(t('deep.deleteNoteTitle'), t('deep.deleteNoteBody'), [
+      { text: t('common.cancel'), style: 'cancel' },
       {
-        text: 'Delete',
+        text: t('common.delete'),
         style: 'destructive',
         onPress: () => {
           setBusy(`note-${noteId}`);
           deleteNote(document.id, noteId)
             .then(async () => {
               animateLayout();
-              onToast('Note deleted');
+              onToast(t('deep.noteDeleted'));
               await hapticFeedback('warning');
             })
             .catch(async (error) => {
-              onToast(error instanceof Error ? error.message : 'Could not delete this note.', true);
+              onToast(presentRuntimeError(error, t('deep.noteDeleteError')), true);
               await hapticFeedback('error');
             })
             .finally(() => setBusy(null));
@@ -213,10 +227,10 @@ export function DocumentDeepSections({
       }, label);
       animateLayout();
       onSelectVersion(undefined);
-      onToast('New version processed by Paperless');
+      onToast(t('deep.versionProcessed'));
       await hapticFeedback('confirm');
     } catch (error) {
-      onToast(error instanceof Error ? error.message : 'Could not upload this version.', true);
+      onToast(presentRuntimeError(error, t('deep.versionUploadError')), true);
       await hapticFeedback('error');
     } finally {
       setBusy(null);
@@ -227,9 +241,9 @@ export function DocumentDeepSections({
     setBusy(`version-${version.id}`);
     try {
       await renameVersion(document.id, version.id, nextValue.trim());
-      onToast('Version label updated');
+      onToast(t('deep.versionLabelUpdated'));
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Could not rename this version.';
+      const message = presentRuntimeError(error, t('deep.versionRenameError'));
       onToast(message, true);
       throw error instanceof Error ? error : new Error(message);
     } finally {
@@ -239,12 +253,12 @@ export function DocumentDeepSections({
 
   function confirmDeleteVersion(version: PaperlessDocumentVersion) {
     Alert.alert(
-      'Delete this version?',
-      'The other versions and document metadata will stay in Paperless. This version cannot be recovered.',
+      t('deep.deleteVersionTitle'),
+      t('deep.deleteVersionBody'),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: 'Delete version',
+          text: t('deep.deleteVersion'),
           style: 'destructive',
           onPress: () => {
             setBusy(`version-${version.id}`);
@@ -252,11 +266,11 @@ export function DocumentDeepSections({
               .then(async () => {
                 animateLayout();
                 if (selectedVersionId === version.id) onSelectVersion(undefined);
-                onToast('Version deleted');
+                onToast(t('deep.versionDeleted'));
                 await hapticFeedback('warning');
               })
               .catch(async (error) => {
-                onToast(error instanceof Error ? error.message : 'Could not delete this version.', true);
+                onToast(presentRuntimeError(error, t('deep.versionDeleteError')), true);
                 await hapticFeedback('error');
               })
               .finally(() => setBusy(null));
@@ -269,10 +283,10 @@ export function DocumentDeepSections({
   return (
     <>
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Paperless metadata</Text>
+        <Text style={styles.sectionTitle}>{t('deep.metadata')}</Text>
         <View style={styles.group}>
           <Pressable
-            accessibilityHint="Opens a keyboard-safe number editor"
+            accessibilityHint={t('deep.numberEditorHint')}
             disabled={document.canEdit === false}
             onPress={() => setEditingAsn(true)}
             style={styles.row}>
@@ -280,8 +294,12 @@ export function DocumentDeepSections({
               <Hash color={palette.ink} size={18} />
             </View>
             <View style={styles.rowCopy}>
-              <Text style={styles.label}>Archive serial number</Text>
-              <Text style={styles.value}>{document.archiveSerialNumber || 'Not assigned'}</Text>
+              <Text style={styles.label}>{t('deep.archiveSerialNumber')}</Text>
+              <Text style={styles.value}>
+                {document.archiveSerialNumber
+                  ? formatNumber(document.archiveSerialNumber)
+                  : t('deep.notAssigned')}
+              </Text>
             </View>
             <ChevronRight color={palette.faint} size={17} />
           </Pressable>
@@ -293,8 +311,8 @@ export function DocumentDeepSections({
               <Archive color={palette.ink} size={18} />
             </View>
             <View style={styles.rowCopy}>
-              <Text style={styles.label}>Storage path</Text>
-              <Text style={styles.value}>{document.storagePath || 'Automatic'}</Text>
+              <Text style={styles.label}>{t('deep.storagePath')}</Text>
+              <Text style={styles.value}>{document.storagePath || t('deep.automatic')}</Text>
             </View>
             <ChevronRight color={palette.faint} size={17} />
           </Pressable>
@@ -303,11 +321,11 @@ export function DocumentDeepSections({
 
       {visibleSections >= 2 && <View style={styles.section}>
         <View style={styles.sectionHeading}>
-          <Text style={styles.sectionTitle}>Custom fields</Text>
+          <Text style={styles.sectionTitle}>{t('deep.customFields')}</Text>
           {!!availableFields.length && document.canEdit !== false && (
             <Pressable onPress={() => setFieldPicker(true)} style={styles.smallAction}>
-              <Plus color={palette.ink} size={15} />
-              <Text style={styles.smallActionText}>Add field</Text>
+              <Plus color={palette.accentInk} size={15} />
+              <Text style={styles.smallActionText}>{t('deep.addField')}</Text>
             </Pressable>
           )}
         </View>
@@ -325,9 +343,13 @@ export function DocumentDeepSections({
                     <Pencil color={palette.ink} size={17} />
                   </View>
                   <View style={styles.rowCopy}>
-                    <Text style={styles.label}>{definition?.name || `Field ${field.fieldRemoteId}`}</Text>
+                    <Text style={styles.label}>
+                      {definition?.name || t('deep.fieldReference', {
+                        id: field.fieldRemoteId ?? field.fieldId,
+                      })}
+                    </Text>
                     <Text numberOfLines={2} style={styles.value}>
-                      {customFieldDisplay(definition, field.value, documents)}
+                      {customFieldDisplay(definition, field.value, documents, t, formatList)}
                     </Text>
                   </View>
                   {!!definition && <ChevronRight color={palette.faint} size={17} />}
@@ -337,29 +359,29 @@ export function DocumentDeepSections({
           </View>
         ) : (
           <View style={styles.emptyBlock}>
-            <Text style={styles.emptyTitle}>No custom fields yet</Text>
-            <Text style={styles.emptyCopy}>Add structured values defined on your Paperless server.</Text>
+            <Text style={styles.emptyTitle}>{t('deep.noCustomFields')}</Text>
+            <Text style={styles.emptyCopy}>{t('deep.noCustomFieldsCopy')}</Text>
           </View>
         )}
       </View>}
 
       {visibleSections >= 3 && <View style={styles.section}>
         <View style={styles.sectionHeading}>
-          <Text style={styles.sectionTitle}>Notes</Text>
-          <Text style={styles.count}>{notes.length}</Text>
+          <Text style={styles.sectionTitle}>{t('deep.notes')}</Text>
+          <Text style={styles.count}>{formatNumber(notes.length)}</Text>
         </View>
         <Pressable
-          accessibilityHint="Opens a keyboard-safe note editor"
+          accessibilityHint={t('deep.noteEditorHint')}
           disabled={document.canEdit === false}
           onPress={() => setNoteComposerOpen(true)}
           style={styles.noteComposer}>
           <MessageSquare color={palette.muted} size={18} />
           <View style={styles.noteComposerCopy}>
-            <Text style={styles.noteComposerTitle}>Add a note</Text>
-            <Text style={styles.noteComposerHint}>Add context for your future self</Text>
+            <Text style={styles.noteComposerTitle}>{t('deep.addNote')}</Text>
+            <Text style={styles.noteComposerHint}>{t('deep.addNoteHint')}</Text>
           </View>
           <View style={styles.noteComposerAction}>
-            <Plus color={palette.ink} size={16} />
+            <Plus color={palette.accentInk} size={16} />
           </View>
         </Pressable>
         {!!notes.length && (
@@ -368,10 +390,12 @@ export function DocumentDeepSections({
               <View key={item.id} style={styles.noteCard}>
                 <Text style={styles.noteText}>{item.note}</Text>
                 <View style={styles.noteFooter}>
-                  <Text style={styles.noteMeta}>{item.author} · {displayDate(item.created)}</Text>
+                  <Text style={styles.noteMeta}>
+                    {item.author} · {displayDate(item.created, formatDate)}
+                  </Text>
                   {document.canEdit !== false && (
                     <Pressable
-                      accessibilityLabel="Delete note"
+                      accessibilityLabel={t('deep.deleteNote')}
                       haptic="warning"
                       onPress={() => confirmDeleteNote(item.id)}>
                       {busy === `note-${item.id}`
@@ -388,7 +412,7 @@ export function DocumentDeepSections({
 
       {visibleSections >= 4 && <View style={styles.section}>
         <View style={styles.sectionHeading}>
-          <Text style={styles.sectionTitle}>Version history</Text>
+          <Text style={styles.sectionTitle}>{t('deep.versionHistory')}</Text>
           {document.canEdit !== false && (
             <Pressable
               disabled={busy === 'version-upload'}
@@ -396,9 +420,9 @@ export function DocumentDeepSections({
               onPress={replaceFile}
               style={styles.smallAction}>
               {busy === 'version-upload'
-                ? <ActivityIndicator color={palette.ink} size="small" />
-                : <Upload color={palette.ink} size={15} />}
-              <Text style={styles.smallActionText}>New version</Text>
+                ? <ActivityIndicator color={palette.accentInk} size="small" />
+                : <Upload color={palette.accentInk} size={15} />}
+              <Text style={styles.smallActionText}>{t('deep.newVersion')}</Text>
             </Pressable>
           )}
         </View>
@@ -416,18 +440,23 @@ export function DocumentDeepSections({
                   </View>
                   <View style={styles.versionCopy}>
                     <Text numberOfLines={1} style={styles.versionTitle}>
-                      {version.versionLabel || (version.isRoot ? 'Original' : `Version ${versions.length - index}`)}
+                      {version.versionLabel || (version.isRoot
+                        ? t('deep.original')
+                        : t('deep.version', { number: formatNumber(versions.length - index) }))}
                     </Text>
                     <View style={styles.versionMetaRow}>
                       <Clock3 color={palette.faint} size={12} />
-                      <Text style={styles.versionMeta}>{displayDate(version.added)}{index === 0 ? ' · Current' : ''}</Text>
+                      <Text style={styles.versionMeta}>
+                        {displayDate(version.added, formatDate)}
+                        {index === 0 ? ` · ${t('deep.current')}` : ''}
+                      </Text>
                     </View>
                   </View>
                 </Pressable>
                 {document.canEdit !== false ? (
                   <View style={styles.versionActions}>
                     <Pressable
-                      accessibilityLabel="Rename version"
+                      accessibilityLabel={t('deep.renameVersion')}
                       onPress={() => {
                         setVersionLabel(version.versionLabel || '');
                         setEditingVersionId(version.id);
@@ -437,7 +466,7 @@ export function DocumentDeepSections({
                     </Pressable>
                     {!version.isRoot && (
                       <Pressable
-                        accessibilityLabel="Delete version"
+                        accessibilityLabel={t('deep.deleteVersion')}
                         haptic="warning"
                         onPress={() => confirmDeleteVersion(version)}
                         style={styles.versionAction}>
@@ -450,8 +479,8 @@ export function DocumentDeepSections({
             );
           }) : (
             <View style={styles.emptyBlock}>
-              <Text style={styles.emptyTitle}>Current file only</Text>
-              <Text style={styles.emptyCopy}>Upload a replacement to preserve the current file as history.</Text>
+              <Text style={styles.emptyTitle}>{t('deep.currentFileOnly')}</Text>
+              <Text style={styles.emptyCopy}>{t('deep.currentFileOnlyCopy')}</Text>
             </View>
           )}
         </View>
@@ -463,11 +492,11 @@ export function DocumentDeepSections({
           onClose={() => setStoragePicker(false)}
           onConfirm={async (selected) => {
             await updateDocument(document.id, { storagePath: selected[0] || null });
-            onToast('Storage path updated');
+            onToast(t('deep.storageUpdated'));
           }}
           options={catalog.storagePaths}
           selectedIds={document.storagePathId ? [document.storagePathId] : []}
-          title="Storage path"
+          title={t('deep.storagePath')}
           visible
         />
       )}
@@ -486,7 +515,7 @@ export function DocumentDeepSections({
           }}
           options={fieldOptions}
           selectedIds={[]}
-          title="Add custom field"
+          title={t('deep.addCustomField')}
           visible
         />
       )}
@@ -506,20 +535,21 @@ export function DocumentDeepSections({
         <TextEditSheet
           autoCapitalize="none"
           autoCorrect={false}
-          helperText="Leave this empty to remove the archive serial number."
+          editorKey={`${activeProfile?.id || 'none'}:${document.id}:asn`}
+          helperText={t('deep.asnHelper')}
           keyboardType="number-pad"
-          label="Archive serial number"
+          label={t('deep.archiveSerialNumber')}
           onClose={() => setEditingAsn(false)}
           onSave={saveAsn}
-          placeholder="No serial number"
-          saveLabel="Save number"
-          subtitle="Use a positive whole number assigned to this document."
-          title="Edit serial number"
+          placeholder={t('deep.noSerial')}
+          saveLabel={t('deep.saveNumber')}
+          subtitle={t('deep.asnSubtitle')}
+          title={t('deep.editSerial')}
           validate={(next) => {
             const normalized = next.trim();
             return !normalized || (/^\d+$/.test(normalized) && Number(normalized) > 0)
               ? null
-              : 'Archive serial numbers must be positive whole numbers.';
+              : t('deep.asnValidation');
           }}
           value={asn}
           visible
@@ -527,28 +557,30 @@ export function DocumentDeepSections({
       )}
       {noteComposerOpen && (
         <TextEditSheet
-          label="Note"
+          editorKey={`${activeProfile?.id || 'none'}:${document.id}:new-note`}
+          label={t('deep.noteLabel')}
           multiline
           onClose={() => setNoteComposerOpen(false)}
           onSave={submitNote}
-          placeholder="Add context for your future self"
+          placeholder={t('deep.addNoteHint')}
           required
-          saveLabel="Add note"
-          subtitle="Notes are saved to this document in Paperless."
-          title="New note"
+          saveLabel={t('deep.addNote')}
+          subtitle={t('deep.noteSubtitle')}
+          title={t('deep.newNote')}
           value=""
           visible
         />
       )}
       {!!editingVersion && (
         <TextEditSheet
-          label="Version label"
+          editorKey={`${activeProfile?.id || 'none'}:${document.id}:version:${editingVersion.id}`}
+          label={t('deep.versionLabel')}
           onClose={() => setEditingVersionId(null)}
           onSave={(next) => saveVersionLabel(editingVersion, next)}
-          placeholder={editingVersion.isRoot ? 'Original' : 'Version label'}
-          saveLabel="Rename version"
-          subtitle="Use a short label that makes this file revision easy to recognize."
-          title="Rename version"
+          placeholder={editingVersion.isRoot ? t('deep.original') : t('deep.versionPlaceholder')}
+          saveLabel={t('deep.renameVersion')}
+          subtitle={t('deep.renameSubtitle')}
+          title={t('deep.renameVersion')}
           value={versionLabel}
           visible
         />
@@ -568,7 +600,7 @@ const styles = StyleSheet.create({
   label: { color: palette.faint, fontFamily: fonts.sans, fontSize: 9, fontWeight: '700' },
   value: { color: palette.ink, fontFamily: fonts.sans, fontSize: 12, fontWeight: '700', lineHeight: 17, marginTop: 3 },
   smallAction: { minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, borderRadius: radii.sm, backgroundColor: palette.lime },
-  smallActionText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 9, fontWeight: '900' },
+  smallActionText: { color: palette.accentInk, fontFamily: fonts.sans, fontSize: 9, fontWeight: '900' },
   emptyBlock: { padding: 17, borderRadius: radii.lg, backgroundColor: palette.paper },
   emptyTitle: { color: palette.ink, fontFamily: fonts.sans, fontSize: 12, fontWeight: '800' },
   emptyCopy: { color: palette.muted, fontFamily: fonts.sans, fontSize: 10, lineHeight: 15, marginTop: 4 },
@@ -585,7 +617,7 @@ const styles = StyleSheet.create({
   noteMeta: { flex: 1, color: palette.faint, fontFamily: fonts.sans, fontSize: 9, fontWeight: '700' },
   versionGroup: { gap: 7 },
   versionRow: { minHeight: 70, flexDirection: 'row', alignItems: 'center', padding: 9, borderRadius: radii.md, backgroundColor: palette.paper, borderWidth: 1, borderColor: 'transparent' },
-  versionSelected: { borderColor: palette.ink, backgroundColor: '#F1F5E7' },
+  versionSelected: { borderColor: palette.ink, backgroundColor: palette.paperStrong },
   versionMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 11 },
   versionIcon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: palette.canvas },
   versionIconSelected: { backgroundColor: palette.ink },

@@ -18,6 +18,9 @@ import {
   hapticFeedback,
 } from '@/components/motion';
 import { fonts, palette, radii } from '@/constants/theme';
+import { useI18n } from '@/context/ui-preferences-context';
+import { presentRuntimeError } from '@/i18n/error-presentation';
+import type { TranslationKey } from '@/i18n/catalogs';
 import { isValidIsoDate } from '@/lib/validation';
 import {
   DocumentItem,
@@ -46,13 +49,16 @@ function keyboardFor(definition: PaperlessCustomFieldDefinition) {
   return 'default' as const;
 }
 
-function placeholderFor(definition: PaperlessCustomFieldDefinition) {
+function placeholderFor(
+  definition: PaperlessCustomFieldDefinition,
+  t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+) {
   if (definition.dataType === 'date') return 'YYYY-MM-DD';
   if (definition.dataType === 'url') return 'https://example.com';
   if (definition.dataType === 'monetary') {
     return definition.defaultCurrency ? `${definition.defaultCurrency}0.00` : '0.00';
   }
-  return `Enter ${definition.name.toLocaleLowerCase()}`;
+  return t('custom.enter', { name: definition.name.toLocaleLowerCase() });
 }
 
 export function CustomFieldSheet({
@@ -63,6 +69,7 @@ export function CustomFieldSheet({
   onSave,
   onRemove,
 }: Props) {
+  const { t } = useI18n();
   const sheetRef = useRef<KeyboardSheetHandle>(null);
   const inputRef = useRef<TextInput>(null);
   const [text, setText] = useState(textValue(value?.value));
@@ -101,7 +108,7 @@ export function CustomFieldSheet({
     if (!normalized) return null;
     if (definition.dataType === 'date') {
       if (!isValidIsoDate(normalized)) {
-        throw new Error('Use a valid date in YYYY-MM-DD format.');
+        throw new Error(t('custom.invalidDate'));
       }
       return normalized;
     }
@@ -109,24 +116,24 @@ export function CustomFieldSheet({
       try {
         new URL(normalized);
       } catch {
-        throw new Error('Enter a complete URL, including https://.');
+        throw new Error(t('custom.invalidUrl'));
       }
       return normalized;
     }
     if (definition.dataType === 'integer') {
-      if (!/^-?\d+$/.test(normalized)) throw new Error('Enter a whole number.');
+      if (!/^-?\d+$/.test(normalized)) throw new Error(t('custom.invalidInteger'));
       return Number(normalized);
     }
     if (definition.dataType === 'float') {
       const number = Number(normalized.replace(',', '.'));
-      if (!Number.isFinite(number)) throw new Error('Enter a valid number.');
+      if (!Number.isFinite(number)) throw new Error(t('custom.invalidNumber'));
       return number;
     }
     if (definition.dataType === 'monetary') {
       if (/^[A-Z]{3}-?\d+(\.\d{1,2})?$/.test(normalized)) return normalized;
       const amount = normalized.replace(',', '.');
       if (!/^-?\d+(\.\d{1,2})?$/.test(amount)) {
-        throw new Error('Enter an amount such as 86.40 or CHF86.40.');
+        throw new Error(t('custom.invalidAmount'));
       }
       return definition.defaultCurrency ? `${definition.defaultCurrency}${amount}` : amount;
     }
@@ -145,7 +152,7 @@ export function CustomFieldSheet({
       await hapticFeedback('confirm');
       sheetRef.current?.close();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Could not save this field.');
+      setError(presentRuntimeError(nextError, t('custom.saveError')));
       await hapticFeedback('error');
     } finally {
       setSaving(false);
@@ -161,7 +168,7 @@ export function CustomFieldSheet({
       await hapticFeedback('warning');
       sheetRef.current?.close();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Could not remove this field.');
+      setError(presentRuntimeError(nextError, t('custom.removeError')));
       await hapticFeedback('error');
     } finally {
       setSaving(false);
@@ -170,11 +177,11 @@ export function CustomFieldSheet({
 
   return (
     <KeyboardSheet
-      accessibilityLabel={`${definition.name} custom field editor`}
+      accessibilityLabel={t('custom.editorLabel', { name: definition.name })}
       onDismiss={onClose}
       onOpened={() => inputRef.current?.focus()}
       ref={sheetRef}
-      subtitle={definition.dataType.replace('documentlink', 'Linked documents')}
+      subtitle={t(`custom.type.${definition.dataType}` as TranslationKey)}
       title={definition.name}
       visible>
       <ScrollView
@@ -186,8 +193,10 @@ export function CustomFieldSheet({
             {definition.dataType === 'boolean' ? (
               <View style={styles.booleanRow}>
                 <View>
-                  <Text style={styles.booleanTitle}>{booleanValue ? 'Yes' : 'No'}</Text>
-                  <Text style={styles.booleanCopy}>Toggle this document value</Text>
+                  <Text style={styles.booleanTitle}>
+                    {booleanValue ? t('custom.yes') : t('custom.no')}
+                  </Text>
+                  <Text style={styles.booleanCopy}>{t('custom.toggle')}</Text>
                 </View>
                 <Switch
                   onValueChange={(next) => {
@@ -225,7 +234,7 @@ export function CustomFieldSheet({
                   <Search color={palette.muted} size={18} />
                   <TextInput
                     onChangeText={setQuery}
-                    placeholder="Find a document"
+                    placeholder={t('custom.findDocument')}
                     placeholderTextColor={palette.faint}
                     style={styles.searchInput}
                     value={query}
@@ -247,7 +256,7 @@ export function CustomFieldSheet({
                             : [...current, remoteId]);
                         }}
                         style={[styles.option, selected && styles.optionSelected]}>
-                        <Link2 color={palette.muted} size={16} />
+                        <Link2 color={selected ? palette.ink : palette.muted} size={16} />
                         <View style={styles.optionCopy}>
                           <Text numberOfLines={1} style={styles.optionLabel}>{document.title}</Text>
                           <Text numberOfLines={1} style={styles.optionMeta}>{document.correspondent}</Text>
@@ -272,7 +281,7 @@ export function CustomFieldSheet({
                   onChangeText={setText}
                   onFocus={() => setFocused(true)}
                   onSubmitEditing={definition.dataType === 'longtext' ? undefined : save}
-                  placeholder={placeholderFor(definition)}
+                  placeholder={placeholderFor(definition, t)}
                   placeholderTextColor={palette.faint}
                   returnKeyType={definition.dataType === 'longtext' ? 'default' : 'done'}
                   ref={inputRef}
@@ -294,7 +303,7 @@ export function CustomFieldSheet({
             onPress={remove}
             style={styles.removeButton}>
             <Trash2 color={palette.danger} size={17} />
-            <Text style={styles.removeText}>Remove</Text>
+            <Text style={styles.removeText}>{t('common.remove')}</Text>
           </Pressable>
         )}
         <Pressable
@@ -302,8 +311,8 @@ export function CustomFieldSheet({
           haptic="none"
           onPress={save}
           style={styles.saveButton}>
-          {saving ? <ActivityIndicator color={palette.ink} /> : <Check color={palette.ink} size={19} />}
-          <Text style={styles.saveText}>Save field</Text>
+          {saving ? <ActivityIndicator color={palette.accentInk} /> : <Check color={palette.accentInk} size={19} />}
+          <Text style={styles.saveText}>{t('custom.saveField')}</Text>
         </Pressable>
       </View>
     </KeyboardSheet>
@@ -330,8 +339,8 @@ const styles = StyleSheet.create({
   optionMeta: { color: palette.muted, fontFamily: fonts.sans, fontSize: 10, marginTop: 2 },
   error: { color: palette.danger, fontFamily: fonts.sans, fontSize: 11, fontWeight: '700', lineHeight: 16, marginTop: 9, paddingHorizontal: 2 },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 12, paddingTop: 10, paddingBottom: 8, borderTopWidth: 1, borderColor: palette.line },
-  removeButton: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 16, borderRadius: radii.md, backgroundColor: '#F7E8E5' },
+  removeButton: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 16, borderRadius: radii.md, backgroundColor: palette.dangerSurface },
   removeText: { color: palette.danger, fontFamily: fonts.sans, fontSize: 12, fontWeight: '800' },
   saveButton: { flex: 1, height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: radii.md, backgroundColor: palette.lime },
-  saveText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 13, fontWeight: '900' },
+  saveText: { color: palette.accentInk, fontFamily: fonts.sans, fontSize: 13, fontWeight: '900' },
 });
