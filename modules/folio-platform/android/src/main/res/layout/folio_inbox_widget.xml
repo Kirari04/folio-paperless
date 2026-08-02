@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/folio_widget_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:background="@drawable/folio_widget_background"
+  android:gravity="center_vertical"
+  android:orientation="vertical"
+  android:padding="16dp">
+
+  <TextView
+    android:id="@+id/folio_widget_brand"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="@string/folio_widget_brand"
+    android:textColor="#CFD9D1"
+    android:textSize="13sp"
+    android:textStyle="bold" />
+
+  <TextView
+    android:id="@+id/folio_widget_primary"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="5dp"
+    android:maxLines="1"
+    android:text="@string/folio_widget_locked"
+    android:textColor="#FFFFFF"
+    android:textSize="30sp"
+    android:textStyle="bold" />
+
+  <TextView
+    android:id="@+id/folio_widget_secondary"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="4dp"
+    android:maxLines="1"
+    android:text="@string/folio_widget_open_scan"
+    android:textColor="#CFD9D1"
+    android:textSize="12sp" />
+</LinearLayout>

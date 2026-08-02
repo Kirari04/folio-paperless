@@ -3,20 +3,25 @@ import {
   Check,
   ChevronRight,
   CircleAlert,
-  Cloud,
+  Database,
   Download,
   ExternalLink,
+  EyeOff,
+  FileText,
   Fingerprint,
+  HardDrive,
   Info,
-  LockKeyhole,
+  Languages,
+  ListTodo,
+  Search,
   RefreshCw,
   Server,
   ShieldCheck,
+  SunMoon,
   Trash2,
-  Unplug,
 } from 'lucide-react-native';
 import Constants from 'expo-constants';
-import { useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -25,92 +30,116 @@ import {
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 
 import { AppShell } from '@/components/app-shell';
-import { KeyboardSheet, KeyboardSheetHandle } from '@/components/keyboard-sheet';
 import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/components/motion';
 import { FolioLogo } from '@/components/folio-logo';
+import { ProfileManagerSheet } from '@/components/profile-manager-sheet';
 import { fonts, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useUpdates } from '@/context/update-context';
-import { FOLIO_RELEASES_URL, formatUpdateSize } from '@/lib/app-updates';
+import {
+  type AppearancePreference,
+  type LanguagePreference,
+  useI18n,
+} from '@/context/ui-preferences-context';
+import { presentRuntimeError } from '@/i18n/error-presentation';
+import { FOLIO_RELEASES_URL } from '@/lib/app-updates';
+import { IN_APP_APK_UPDATES_ENABLED } from '@/lib/distribution-runtime';
 import { useRouter } from '@/lib/router';
+import { createNativeOsSearchIndexAdapter, type NativeOsSearchEngine } from '@/lib/os-search-native-adapter';
+import { presentSyncStatus, type SyncStatusTone } from '@/lib/sync-status-presentation';
+
+type OsSearchCapability = {
+  supported: boolean;
+  engine: NativeOsSearchEngine;
+  reason: string | null;
+};
+
+function syncToneColor(tone: SyncStatusTone) {
+  if (tone === 'success') return palette.limeDark;
+  if (tone === 'progress') return palette.inkSoft;
+  if (tone === 'warning') return palette.apricot;
+  if (tone === 'danger') return palette.danger;
+  return palette.faint;
+}
 
 export default function SettingsScreen() {
   const updates = useUpdates();
+  const {
+    appearance,
+    language,
+    setAppearance,
+    setLanguage,
+    t,
+    formatDate,
+    formatFileSize,
+    formatNumber,
+  } = useI18n();
   const versionLabel = Constants.expoConfig?.version
-    ? `Version ${Constants.expoConfig.version}`
-    : 'Development build';
-  const serverSheetRef = useRef<KeyboardSheetHandle>(null);
-  const serverInputRef = useRef<TextInput>(null);
-  const tokenInputRef = useRef<TextInput>(null);
+    ? t('settings.version', { version: Constants.expoConfig.version })
+    : t('settings.developmentBuild');
   const router = useRouter();
   const {
     connected,
-    credentials,
+    activeProfile,
     connectionInfo,
     isSyncing,
     lastSynced,
+    syncState,
+    online,
     connectionError,
-    connect,
-    disconnect,
     refresh,
     totalDocuments,
+    tasks,
+    offlineUsage,
+    clearEvictableCache,
+    removeAllPinnedFiles,
+    refreshOfflineUsage,
     preferences,
     updatePreference,
   } = useApp();
-  const [serverUrl, setServerUrl] = useState('');
-  const [token, setToken] = useState('');
-  const [editingServer, setEditingServer] = useState(false);
-  const [success, setSuccess] = useState(false);
+  const [profileManagerVisible, setProfileManagerVisible] = useState(false);
+  const [cacheBusy, setCacheBusy] = useState<'clear' | 'pinned' | null>(null);
   const [preferenceSaving, setPreferenceSaving] = useState<keyof typeof preferences | null>(null);
+  const [uiPreferenceSaving, setUiPreferenceSaving] = useState<'appearance' | 'language' | null>(null);
   const [preferenceError, setPreferenceError] = useState<string | null>(null);
-  const [focusedInput, setFocusedInput] = useState<'server' | 'token' | null>(null);
+  const [osSearchCapability, setOsSearchCapability] = useState<OsSearchCapability | null>(() => (
+    Platform.OS === 'web'
+      ? { supported: false, engine: 'unsupported', reason: 'native-module-unavailable' }
+      : null
+  ));
+  const syncStatus = presentSyncStatus({ connected, lastSynced, online, syncState });
+  const syncStatusText = t(
+    syncStatus.messageKey,
+    syncStatus.lastSuccessfulSyncAt
+      ? { time: formatDate(syncStatus.lastSuccessfulSyncAt, { dateStyle: 'short', timeStyle: 'short' }) }
+      : undefined,
+  );
 
-  async function handleConnect() {
-    setSuccess(false);
-    try {
-      await connect({ serverUrl, token });
-      animateLayout();
-      setSuccess(true);
-      await hapticFeedback('confirm');
-      serverSheetRef.current?.close();
-    } catch {
-      await hapticFeedback('error');
+  useEffect(() => {
+    let active = true;
+    if (Platform.OS === 'web') {
+      return () => { active = false; };
     }
-  }
-
-  async function disconnectNow() {
-    await disconnect();
-    animateLayout();
-    setEditingServer(false);
-    setServerUrl('');
-    setToken('');
-    setSuccess(false);
-    await hapticFeedback('warning');
-  }
-
-  function handleDisconnect() {
-    Alert.alert(
-      'Disconnect Paperless?',
-      'Your server token will be removed from this device. Demo documents will be shown instead.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Disconnect', style: 'destructive', onPress: disconnectNow },
-      ],
-    );
-  }
+    void createNativeOsSearchIndexAdapter()
+      .then((adapter) => adapter.capabilities())
+      .then((capabilities) => {
+        if (active) setOsSearchCapability(capabilities.osSearch);
+      })
+      .catch(() => {
+        if (active) setOsSearchCapability({ supported: false, engine: 'unsupported', reason: 'native-module-unavailable' });
+      });
+    return () => { active = false; };
+  }, []);
 
   async function handleRefresh() {
     try {
       await refresh();
       animateLayout();
-      setSuccess(true);
       await hapticFeedback('confirm');
-      setTimeout(() => setSuccess(false), 2000);
     } catch {
       await hapticFeedback('error');
     }
@@ -126,21 +155,79 @@ export default function SettingsScreen() {
       await updatePreference(key, value);
       await hapticFeedback('selection');
     } catch (error) {
-      setPreferenceError(error instanceof Error ? error.message : 'Could not save this preference.');
+      setPreferenceError(presentRuntimeError(error, t('settings.preferenceError')));
       await hapticFeedback('error');
     } finally {
       setPreferenceSaving(null);
     }
   }
 
-  function toggleServerForm() {
-    if (editingServer) {
-      serverSheetRef.current?.close();
+  async function saveUiPreference(
+    kind: 'appearance' | 'language',
+    value: AppearancePreference | LanguagePreference,
+  ) {
+    setUiPreferenceSaving(kind);
+    setPreferenceError(null);
+    try {
+      if (kind === 'appearance') await setAppearance(value as AppearancePreference);
+      else await setLanguage(value as LanguagePreference);
+      await hapticFeedback('selection');
+    } catch {
+      setPreferenceError(t('settings.preferenceError'));
+      await hapticFeedback('error');
+    } finally {
+      setUiPreferenceSaving(null);
+    }
+  }
+
+  async function runCacheAction(action: 'clear' | 'pinned') {
+    setCacheBusy(action);
+    setPreferenceError(null);
+    try {
+      if (action === 'clear') await clearEvictableCache();
+      else await removeAllPinnedFiles();
+      await refreshOfflineUsage();
+      await hapticFeedback(action === 'clear' ? 'confirm' : 'warning');
+    } catch (error) {
+      setPreferenceError(presentRuntimeError(error, t('settings.cacheActionError')));
+      await hapticFeedback('error');
+    } finally {
+      setCacheBusy(null);
+    }
+  }
+
+  function confirmRemovePinned() {
+    Alert.alert(
+      t('settings.removePinnedTitle'),
+      t('settings.removePinnedBody', {
+        count: formatNumber(offlineUsage?.pinnedDocuments ?? 0),
+        profile: activeProfile?.displayName ?? t('settings.paperlessConnected'),
+      }),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('settings.removePinnedAction'),
+          style: 'destructive',
+          onPress: () => void runCacheAction('pinned'),
+        },
+      ],
+    );
+  }
+
+  function osSearchUnavailableReason(reason: string | null | undefined) {
+    if (reason === 'android-appsearch-requires-api-31') return t('settings.osSearchRequiresApi31');
+    if (reason === 'android-appsearch-service-unavailable') return t('settings.osSearchServiceUnavailable');
+    if (reason === 'core-spotlight-unavailable') return t('settings.osSearchSpotlightUnavailable');
+    return t('settings.osSearchNativeUnavailable');
+  }
+
+  async function setOsSearchEnabled(value: boolean) {
+    if (value && osSearchCapability?.supported !== true) {
+      setPreferenceError(osSearchUnavailableReason(osSearchCapability?.reason));
+      await hapticFeedback('error');
       return;
     }
-    setServerUrl(credentials?.serverUrl || '');
-    setToken(credentials?.token || '');
-    setEditingServer(true);
+    await togglePreference('osSearchEnabled', value);
   }
 
   function openSoftwareUpdates() {
@@ -151,32 +238,35 @@ export default function SettingsScreen() {
   }
 
   const updateSubtitle = (() => {
-    if (updates.support === 'initializing') return 'Preparing secure update checks…';
-    if (updates.support === 'development-build') return 'Release updates stay off in development builds';
-    if (updates.support === 'module-unavailable') return 'Rebuild once to enable native verification';
-    if (updates.support === 'android-release-only') return 'Signed Android releases are available on GitHub';
+    if (updates.support === 'initializing') return t('settings.updatePreparing');
+    if (updates.support === 'development-build') return t('settings.updateDevelopment');
+    if (updates.support === 'module-unavailable') return t('settings.updateRebuild');
+    if (updates.support === 'android-release-only') return t('settings.updateAndroidOnly');
 
     switch (updates.status) {
       case 'checking':
-        return 'Checking GitHub Releases…';
+        return t('settings.updateChecking');
       case 'available':
-        return `Version ${updates.release?.version} available · ${formatUpdateSize(updates.release?.apk?.size ?? 0)}`;
+        return t('settings.updateAvailable', {
+          version: updates.release?.version || '',
+          size: formatFileSize(updates.release?.apk?.size ?? 0),
+        });
       case 'downloading':
-        return `Downloading from GitHub · ${Math.round(updates.progress * 100)}%`;
+        return t('settings.updateDownloading', { progress: formatNumber(Math.round(updates.progress * 100)) });
       case 'verifying':
-        return 'Verifying hash, package, version, and signer…';
+        return t('settings.updateVerifying');
       case 'ready':
-        return `Version ${updates.release?.version} is verified and ready`;
+        return t('settings.updateReady', { version: updates.release?.version || '' });
       case 'permission':
-        return 'Waiting for Android install permission';
+        return t('settings.updatePermission');
       case 'installing':
-        return 'Opening the Android installer…';
+        return t('settings.updateInstalling');
       case 'error':
-        return 'Update interrupted · Tap to try again';
+        return t('settings.updateError');
       case 'up-to-date':
-        return `${versionLabel} · Up to date`;
+        return t('settings.updateCurrent', { version: versionLabel });
       default:
-        return 'GitHub Releases · Automatic daily checks';
+        return t('settings.updateDefault');
     }
   })();
 
@@ -185,8 +275,8 @@ export default function SettingsScreen() {
     <AppShell showDemoBanner={false}>
       <View style={styles.header}>
         <View>
-          <Text style={styles.eyebrow}>YOUR FOLIO</Text>
-          <Text style={styles.title}>Settings</Text>
+          <Text style={styles.eyebrow}>{t('settings.yourFolio')}</Text>
+          <Text style={styles.title}>{t('settings.title')}</Text>
         </View>
         <FolioLogo inverse size={44} />
       </View>
@@ -195,7 +285,7 @@ export default function SettingsScreen() {
         <View style={styles.connectionTop}>
           <View style={[styles.serverIcon, connected && styles.serverIconConnected]}>
             {connected ? (
-              <ShieldCheck color={palette.ink} size={23} />
+              <ShieldCheck color={palette.accentInk} size={23} />
             ) : (
               <Server color={palette.paper} size={23} />
             )}
@@ -203,51 +293,62 @@ export default function SettingsScreen() {
           <View style={styles.connectionCopy}>
             <View style={styles.connectionStatusRow}>
               <Text style={styles.connectionTitle}>
-                {connected ? 'Paperless connected' : 'Demo workspace'}
+                {activeProfile?.displayName ?? t('settings.demoWorkspace')}
               </Text>
-              <View style={[styles.liveDot, connected && styles.liveDotConnected]} />
+              <View style={[styles.liveDot, { backgroundColor: syncToneColor(syncStatus.tone) }]} />
             </View>
             <Text style={styles.connectionSubtitle}>
-              {connected
-                ? credentials?.serverUrl
-                : 'Explore with sample documents, or connect your server.'}
+              {activeProfile?.serverUrl ?? t('settings.demoWorkspaceSubtitle')}
             </Text>
           </View>
         </View>
 
         {connected ? (
-          <View style={styles.serverStats}>
-            <View>
-              <Text style={styles.serverStatValue}>{totalDocuments}</Text>
-              <Text style={styles.serverStatLabel}>documents · synced {lastSynced}</Text>
+          <>
+            <View
+              accessibilityLabel={syncStatusText}
+              accessibilityLiveRegion="polite"
+              accessible
+              style={styles.syncStatusBanner}>
+              <View style={[styles.liveDot, { backgroundColor: syncToneColor(syncStatus.tone) }]} />
+              <Text style={styles.syncStatusText}>{syncStatusText}</Text>
             </View>
-            <View style={styles.serverDivider} />
-            <View>
-              <Text style={styles.serverStatValue}>v{connectionInfo?.apiVersion || '10'}</Text>
-              <Text style={styles.serverStatLabel}>
-                Paperless {connectionInfo?.serverVersion || 'server'}
-              </Text>
+            <View style={styles.serverStats}>
+              <View>
+                <Text style={styles.serverStatValue}>{formatNumber(totalDocuments)}</Text>
+                <Text style={styles.serverStatLabel}>{t('home.libraryDocuments')}</Text>
+              </View>
+              <View style={styles.serverDivider} />
+              <View>
+                <Text style={styles.serverStatValue}>v{connectionInfo?.apiVersion || '10'}</Text>
+                <Text style={styles.serverStatLabel}>
+                  {t('settings.paperlessServer', {
+                    version: connectionInfo?.serverVersion || t('settings.serverFallback'),
+                  })}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityLabel={t('settings.syncNow')}
+                accessibilityState={{ busy: syncStatus.busy, disabled: isSyncing }}
+                disabled={isSyncing}
+                onPress={handleRefresh}
+                style={styles.syncButton}>
+                {isSyncing ? (
+                  <ActivityIndicator color={palette.accentInk} size="small" />
+                ) : (
+                  <RefreshCw color={palette.accentInk} size={18} />
+                )}
+              </Pressable>
             </View>
-            <Pressable
-              accessibilityLabel="Sync now"
-              disabled={isSyncing}
-              onPress={handleRefresh}
-              style={styles.syncButton}>
-              {isSyncing ? (
-                <ActivityIndicator color={palette.ink} size="small" />
-              ) : (
-                <RefreshCw color={palette.ink} size={18} />
-              )}
-            </Pressable>
-          </View>
+          </>
         ) : (
           <Pressable
-            accessibilityHint="Opens a keyboard-safe server connection form"
+            accessibilityHint={t('settings.connectHint')}
             haptic="medium"
-            onPress={toggleServerForm}
+            onPress={() => setProfileManagerVisible(true)}
             style={styles.connectButton}>
-            <Cloud color={palette.ink} size={18} />
-            <Text style={styles.connectButtonText}>Connect Paperless</Text>
+            <Server color={palette.accentInk} size={18} />
+            <Text style={styles.connectButtonText}>{t('settings.connect')}</Text>
           </Pressable>
         )}
 
@@ -259,37 +360,59 @@ export default function SettingsScreen() {
 
         {connected && (
           <View style={styles.connectionActions}>
-            <Pressable onPress={toggleServerForm}>
-              <Text style={styles.changeServer}>Change server</Text>
-            </Pressable>
-            <Pressable onPress={handleDisconnect} style={styles.disconnect}>
-              <Unplug color={palette.danger} size={14} />
-              <Text style={styles.disconnectText}>Disconnect</Text>
+            <Pressable onPress={() => setProfileManagerVisible(true)} style={styles.manageConnectionsButton}>
+              <Server color={palette.inkSoft} size={15} />
+              <Text style={styles.changeServer}>{t('settings.manageConnections')}</Text>
+              <ChevronRight color={palette.inkSoft} size={15} />
             </Pressable>
           </View>
         )}
       </View>
 
-      {success && (
-        <View style={styles.successBanner}>
-          <Check color={palette.ink} size={16} />
-          <Text style={styles.successText}>Connection saved securely on this device.</Text>
-        </View>
-      )}
+      <Text style={styles.sectionLabel}>{t('settings.appearanceSection')}</Text>
+      <View style={styles.settingsGroup}>
+        <PreferenceControl
+          disabled={uiPreferenceSaving === 'appearance'}
+          icon={SunMoon}
+          onChange={(value) => saveUiPreference('appearance', value)}
+          options={[
+            { value: 'system', label: t('settings.system') },
+            { value: 'light', label: t('settings.light') },
+            { value: 'dark', label: t('settings.dark') },
+          ]}
+          subtitle={t('settings.appearanceSubtitle')}
+          title={t('settings.appearanceTitle')}
+          value={appearance}
+        />
+        <PreferenceControl
+          disabled={uiPreferenceSaving === 'language'}
+          icon={Languages}
+          last
+          onChange={(value) => saveUiPreference('language', value)}
+          options={[
+            { value: 'system', label: t('settings.system') },
+            { value: 'en', label: t('settings.english') },
+            { value: 'de', label: t('settings.german') },
+          ]}
+          subtitle={t('settings.languageSubtitle')}
+          title={t('settings.languageTitle')}
+          value={language}
+        />
+      </View>
 
-      <Text style={styles.sectionLabel}>PRIVACY & EXPERIENCE</Text>
+      <Text style={styles.sectionLabel}>{t('settings.privacySection')}</Text>
       <View style={styles.settingsGroup}>
         <SettingRow
           icon={Trash2}
           onPress={() => router.push('/trash')}
-          title="Recently deleted"
-          subtitle="Restore documents or empty the Paperless trash"
+          title={t('settings.recentlyDeleted')}
+          subtitle={t('settings.recentlyDeletedSubtitle')}
           trailing={<ChevronRight color={palette.faint} size={18} />}
         />
         <SettingRow
           icon={Fingerprint}
-          title="Unlock with biometrics"
-          subtitle="Keep document previews private"
+          title={t('settings.biometricTitle')}
+          subtitle={t('settings.biometricSubtitle')}
           trailing={
             <Switch
               disabled={preferenceSaving === 'biometricLock'}
@@ -301,10 +424,39 @@ export default function SettingsScreen() {
           }
         />
         <SettingRow
+          icon={Search}
+          title={t('settings.osSearchTitle')}
+          subtitle={!osSearchCapability
+            ? t('settings.osSearchChecking')
+            : osSearchCapability.supported
+              ? t('settings.osSearchSubtitle')
+              : osSearchUnavailableReason(osSearchCapability.reason)}
+          trailing={
+            <Switch
+              disabled={!osSearchCapability || preferenceSaving === 'osSearchEnabled'}
+              onValueChange={(value) => void setOsSearchEnabled(value)}
+              trackColor={{ false: palette.lineStrong, true: palette.ink }}
+              thumbColor={preferences.osSearchEnabled ? palette.lime : palette.paper}
+              value={preferences.osSearchEnabled}
+            />
+          }
+        />
+        <PreferenceControl
+          disabled={!preferences.osSearchEnabled || osSearchCapability?.supported !== true || preferenceSaving === 'osSearchMetadata'}
+          icon={preferences.osSearchMetadata === 'minimal' ? EyeOff : FileText}
+          onChange={(value) => togglePreference('osSearchMetadata', value)}
+          options={[
+            { value: 'minimal', label: t('settings.osSearchMinimal') },
+            { value: 'document-title', label: t('settings.osSearchDocumentTitle') },
+          ]}
+          subtitle={t('settings.osSearchMetadataSubtitle')}
+          title={t('settings.osSearchMetadataTitle')}
+          value={preferences.osSearchMetadata}
+        />
+        <SettingRow
           icon={Bell}
-          last
-          title="Processing notifications"
-          subtitle="Notify when an uploaded document is ready"
+          title={t('settings.notificationsTitle')}
+          subtitle={t('settings.notificationsSubtitle')}
           trailing={
             <Switch
               disabled={preferenceSaving === 'processingNotifications'}
@@ -315,6 +467,19 @@ export default function SettingsScreen() {
             />
           }
         />
+        <PreferenceControl
+          disabled={preferenceSaving === 'notificationPrivacy'}
+          icon={preferences.notificationPrivacy === 'redacted' ? EyeOff : FileText}
+          last
+          onChange={(value) => togglePreference('notificationPrivacy', value)}
+          options={[
+            { value: 'redacted', label: t('settings.notificationPrivacyRedacted') },
+            { value: 'document-title', label: t('settings.notificationPrivacyTitleOption') },
+          ]}
+          subtitle={t('settings.notificationPrivacySubtitle')}
+          title={t('settings.notificationPrivacyTitle')}
+          value={preferences.notificationPrivacy}
+        />
       </View>
 
       {!!preferenceError && (
@@ -323,34 +488,115 @@ export default function SettingsScreen() {
         </Text>
       )}
 
-      <Text style={styles.sectionLabel}>ABOUT</Text>
+      <Text style={styles.sectionLabel}>{t('settings.offlineSection')}</Text>
+      {Platform.OS === 'web' ? (
+        <View style={styles.storageCard}>
+          <View style={styles.storageHeader}>
+            <HardDrive color={palette.ink} size={20} />
+            <View style={styles.storageCopy}>
+              <Text style={styles.storageTitle}>{t('settings.offlineTitle')}</Text>
+              <Text style={styles.storageSubtitle}>{t('settings.offlineWeb')}</Text>
+            </View>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.storageCard}>
+          <View style={styles.storageHeader}>
+            <HardDrive color={palette.ink} size={20} />
+            <View style={styles.storageCopy}>
+              <Text style={styles.storageTitle}>{t('settings.offlineTitle')}</Text>
+              <Text style={styles.storageSubtitle}>
+                {activeProfile
+                  ? t('settings.offlineSubtitle', { profile: activeProfile.displayName })
+                  : t('settings.demoWorkspaceSubtitle')}
+              </Text>
+            </View>
+            <Text style={styles.storageTotal}>
+              {t('settings.cacheTotal', { size: formatFileSize(offlineUsage?.totalBytes ?? 0) })}
+            </Text>
+          </View>
+          <View style={styles.storageBreakdown}>
+            <Text style={styles.storageMetric}>
+              {t('settings.cacheAutomatic', { size: formatFileSize(offlineUsage?.automaticBytes ?? 0) })}
+            </Text>
+            <Text style={styles.storageMetric}>
+              {t('settings.cachePinned', {
+                size: formatFileSize(offlineUsage?.pinnedBytes ?? 0),
+                count: formatNumber(offlineUsage?.pinnedDocuments ?? 0),
+              })}
+            </Text>
+          </View>
+          <QuotaControl
+            disabled={!activeProfile || preferenceSaving === 'automaticCacheLimitBytes'}
+            onChange={(value) => togglePreference('automaticCacheLimitBytes', value)}
+            title={t('settings.cacheLimit')}
+            value={preferences.automaticCacheLimitBytes}
+          />
+          <View style={styles.storageActions}>
+            <StorageAction
+              disabled={!activeProfile || cacheBusy !== null}
+              icon={Database}
+              loading={cacheBusy === 'clear'}
+              onPress={() => runCacheAction('clear')}
+              subtitle={t('settings.clearCacheSubtitle')}
+              title={t('settings.clearCache')}
+            />
+            <StorageAction
+              disabled={!activeProfile || !offlineUsage?.pinnedFiles || cacheBusy !== null}
+              icon={Trash2}
+              loading={cacheBusy === 'pinned'}
+              onPress={confirmRemovePinned}
+              subtitle={t('settings.removePinnedSubtitle')}
+              title={t('settings.removePinned')}
+            />
+          </View>
+        </View>
+      )}
+
+      <View style={[styles.settingsGroup, styles.taskCenterGroup]}>
+        <SettingRow
+          icon={ListTodo}
+          last
+          onPress={() => router.push('/tasks')}
+          title={t('home.taskCenter')}
+          subtitle={t('settings.taskCenterSubtitle', {
+            active: formatNumber(tasks.filter((task) => !['ready', 'canceled', 'failed'].includes(task.stage)).length),
+            failed: formatNumber(tasks.filter((task) => task.stage === 'failed').length),
+          })}
+          trailing={<ChevronRight color={palette.faint} size={18} />}
+        />
+      </View>
+
+      <Text style={styles.sectionLabel}>{t('settings.aboutSection')}</Text>
       <View style={styles.settingsGroup}>
-        {Platform.OS === 'android' ? (
-          <SettingRow
-            icon={Download}
-            onPress={openSoftwareUpdates}
-            title="Software updates"
-            subtitle={updateSubtitle}
-            trailing={<UpdateStatusTrailing />}
-          />
-        ) : (
-          <SettingRow
-            icon={Download}
-            onPress={() => Linking.openURL(FOLIO_RELEASES_URL)}
-            title="Release downloads"
-            subtitle="New Folio builds are published on GitHub"
-            trailing={<ExternalLink color={palette.faint} size={18} />}
-          />
+        {IN_APP_APK_UPDATES_ENABLED && (
+          Platform.OS === 'android' ? (
+            <SettingRow
+              icon={Download}
+              onPress={openSoftwareUpdates}
+              title={t('settings.softwareUpdates')}
+              subtitle={updateSubtitle}
+              trailing={<UpdateStatusTrailing />}
+            />
+          ) : (
+            <SettingRow
+              icon={Download}
+              onPress={() => Linking.openURL(FOLIO_RELEASES_URL)}
+              title={t('updates.viewReleases')}
+              subtitle={t('updates.platformUnsupported')}
+              trailing={<ExternalLink color={palette.faint} size={18} />}
+            />
+          )
         )}
         <SettingRow
           icon={Info}
           onPress={() =>
             Alert.alert(
-              'Folio for Paperless',
-              `${versionLabel}\nExpo SDK 57\n\nA private, direct-to-server Paperless-ngx client.`,
+              t('settings.appName'),
+              t('settings.aboutBody', { version: versionLabel }),
             )
           }
-          title="About Folio"
+          title={t('settings.aboutFolio')}
           subtitle={`${versionLabel} · Expo SDK 57`}
           trailing={<ChevronRight color={palette.faint} size={18} />}
         />
@@ -358,104 +604,80 @@ export default function SettingsScreen() {
           icon={ExternalLink}
           last
           onPress={() => Linking.openURL('https://docs.paperless-ngx.com/')}
-          title="Paperless documentation"
-          subtitle="API and server setup"
+          title={t('settings.paperlessDocs')}
+          subtitle={t('settings.paperlessDocsSubtitle')}
           trailing={<ChevronRight color={palette.faint} size={18} />}
         />
       </View>
 
       <Text style={styles.privacyNote}>
-        Folio talks directly to your Paperless-ngx server. Your token is stored in{' '}
-        {Platform.OS === 'web' ? 'this browser' : 'the device secure store'} and is never sent
-        anywhere else.
+        {t(Platform.OS === 'web' ? 'settings.privacyNoteWeb' : 'settings.privacyNoteNative')}
       </Text>
     </AppShell>
 
-    {editingServer && (
-      <KeyboardSheet
-        accessibilityLabel="Paperless server connection"
-        onDismiss={() => {
-          setEditingServer(false);
-          setFocusedInput(null);
-        }}
-        onOpened={() => serverInputRef.current?.focus()}
-        ref={serverSheetRef}
-        subtitle="Your credentials stay on this device and connect directly to Paperless."
-        title={connected ? 'Change server' : 'Connect Paperless'}
-        visible>
-        <View style={styles.sheetForm}>
-          <Text style={styles.inputLabel}>SERVER URL</Text>
-          <View style={[styles.inputWrap, focusedInput === 'server' && styles.inputWrapFocused]}>
-            <Cloud color={palette.muted} size={18} />
-            <TextInput
-              accessibilityLabel="Paperless server URL"
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-              onBlur={() => setFocusedInput(null)}
-              onChangeText={setServerUrl}
-              onFocus={() => setFocusedInput('server')}
-              onSubmitEditing={() => tokenInputRef.current?.focus()}
-              placeholder="https://paperless.example.com"
-              placeholderTextColor={palette.faint}
-              ref={serverInputRef}
-              returnKeyType="next"
-              style={styles.input}
-              value={serverUrl}
-            />
-          </View>
-          <Text style={styles.inputLabel}>API TOKEN</Text>
-          <View style={[styles.inputWrap, focusedInput === 'token' && styles.inputWrapFocused]}>
-            <LockKeyhole color={palette.muted} size={18} />
-            <TextInput
-              accessibilityLabel="Paperless API token"
-              autoCapitalize="none"
-              autoCorrect={false}
-              onBlur={() => setFocusedInput(null)}
-              onChangeText={setToken}
-              onFocus={() => setFocusedInput('token')}
-              onSubmitEditing={serverUrl.trim() && token.trim() ? handleConnect : undefined}
-              placeholder="Paste your Paperless token"
-              placeholderTextColor={palette.faint}
-              ref={tokenInputRef}
-              returnKeyType="done"
-              secureTextEntry
-              style={styles.input}
-              value={token}
-            />
-          </View>
-          {!!connectionError && (
-            <Text accessibilityLiveRegion="polite" style={styles.error}>{connectionError}</Text>
-          )}
-        </View>
-        <View style={styles.sheetActions}>
-          <Pressable haptic="light" onPress={() => serverSheetRef.current?.close()} style={styles.cancelButton}>
-            <Text style={styles.cancelText}>Cancel</Text>
-          </Pressable>
-          <Pressable
-            accessibilityLabel="Test and connect to Paperless"
-            disabled={!serverUrl.trim() || !token.trim() || isSyncing}
-            haptic="none"
-            onPress={handleConnect}
-            style={[
-              styles.sheetConnectButton,
-              (!serverUrl.trim() || !token.trim()) && styles.connectButtonDisabled,
-            ]}>
-            {isSyncing ? (
-              <ActivityIndicator color={palette.ink} size="small" />
-            ) : (
-              <Check color={palette.ink} size={19} />
-            )}
-            <Text style={styles.connectButtonText}>Test & connect</Text>
-          </Pressable>
-        </View>
-      </KeyboardSheet>
-    )}
+    <ProfileManagerSheet
+      onDismiss={() => setProfileManagerVisible(false)}
+      visible={profileManagerVisible}
+    />
     </>
   );
 }
 
 type IconComponent = typeof Bell;
+
+function PreferenceControl<T extends string>({
+  disabled,
+  icon: Icon,
+  title,
+  subtitle,
+  options,
+  value,
+  onChange,
+  last = false,
+}: {
+  disabled?: boolean;
+  icon: IconComponent;
+  title: string;
+  subtitle: string;
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+  last?: boolean;
+}) {
+  return (
+    <View style={[styles.preferenceControl, last && styles.settingRowLast]}>
+      <View style={styles.preferenceHeading}>
+        <View style={styles.settingIcon}>
+          <Icon color={palette.ink} size={19} />
+        </View>
+        <View style={styles.settingCopy}>
+          <Text style={styles.settingTitle}>{title}</Text>
+          <Text style={styles.settingSubtitle}>{subtitle}</Text>
+        </View>
+      </View>
+      <View accessibilityRole="radiogroup" style={styles.segmentedControl}>
+        {options.map((option) => {
+          const selected = option.value === value;
+          return (
+            <Pressable
+              accessibilityRole="radio"
+              accessibilityState={{ checked: selected, disabled }}
+              disabled={disabled}
+              key={option.value}
+              onPress={() => onChange(option.value)}
+              style={[styles.segment, selected && styles.segmentSelected]}>
+              <Text
+                numberOfLines={2}
+                style={[styles.segmentText, selected && styles.segmentTextSelected]}>
+                {option.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
 
 function SettingRow({
   icon: Icon,
@@ -489,22 +711,78 @@ function SettingRow({
   );
 }
 
+function QuotaControl({ disabled, onChange, title, value }: {
+  disabled?: boolean;
+  onChange: (value: number) => void;
+  title: string;
+  value: number;
+}) {
+  const { formatFileSize } = useI18n();
+  const options = [128, 256, 512, 1024].map((megabytes) => megabytes * 1024 * 1024);
+  return (
+    <View style={styles.quotaControl}>
+      <Text style={styles.quotaTitle}>{title}</Text>
+      <View accessibilityRole="radiogroup" style={styles.quotaOptions}>
+        {options.map((option) => {
+          const selected = value === option;
+          return (
+            <Pressable
+              accessibilityRole="radio"
+              accessibilityState={{ checked: selected, disabled }}
+              disabled={disabled}
+              key={option}
+              onPress={() => onChange(option)}
+              style={[styles.quotaOption, selected && styles.quotaOptionSelected]}>
+              <Text style={[styles.quotaOptionText, selected && styles.quotaOptionTextSelected]}>
+                {formatFileSize(option)}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function StorageAction({ disabled, icon: Icon, loading, onPress, subtitle, title }: {
+  disabled?: boolean;
+  icon: IconComponent;
+  loading?: boolean;
+  onPress: () => void;
+  subtitle: string;
+  title: string;
+}) {
+  return (
+    <Pressable disabled={disabled} onPress={onPress} style={[styles.storageAction, disabled && styles.disabled]}>
+      <View style={styles.storageActionIcon}>
+        {loading ? <ActivityIndicator color={palette.ink} size="small" /> : <Icon color={palette.ink} size={18} />}
+      </View>
+      <View style={styles.storageActionCopy}>
+        <Text style={styles.storageActionTitle}>{title}</Text>
+        <Text style={styles.storageActionSubtitle}>{subtitle}</Text>
+      </View>
+      <ChevronRight color={palette.faint} size={17} />
+    </Pressable>
+  );
+}
+
 function UpdateStatusTrailing() {
   const { status } = useUpdates();
+  const { t } = useI18n();
   if (status === 'checking' || status === 'downloading' || status === 'verifying' || status === 'installing') {
     return <ActivityIndicator color={palette.ink} size="small" />;
   }
   if (status === 'available') {
     return (
       <View style={styles.updateBadge}>
-        <Text style={styles.updateBadgeText}>NEW</Text>
+        <Text style={[styles.updateBadgeText, styles.updateBadgeTextAccent]}>{t('settings.badgeNew')}</Text>
       </View>
     );
   }
   if (status === 'ready' || status === 'permission') {
     return (
       <View style={[styles.updateBadge, styles.updateBadgeReady]}>
-        <Text style={styles.updateBadgeText}>READY</Text>
+        <Text style={styles.updateBadgeText}>{t('settings.badgeReady')}</Text>
       </View>
     );
   }
@@ -544,8 +822,8 @@ const styles = StyleSheet.create({
     borderColor: palette.line,
   },
   connectionCardConnected: {
-    backgroundColor: '#E4EBD8',
-    borderColor: '#D4DFC2',
+    backgroundColor: palette.mint,
+    borderColor: palette.lineStrong,
   },
   connectionTop: {
     flexDirection: 'row',
@@ -583,9 +861,6 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: palette.faint,
   },
-  liveDotConnected: {
-    backgroundColor: '#4C9B60',
-  },
   connectionSubtitle: {
     color: palette.muted,
     fontFamily: fonts.sans,
@@ -604,11 +879,12 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   inputWrap: {
-    height: 50,
+    minHeight: 50,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 9,
     paddingHorizontal: 13,
+    paddingVertical: 9,
     borderRadius: radii.sm,
     backgroundColor: palette.paperStrong,
     borderWidth: 1,
@@ -640,11 +916,12 @@ const styles = StyleSheet.create({
     marginTop: 9,
   },
   connectButton: {
-    height: 50,
+    minHeight: 50,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+    paddingVertical: 12,
     borderRadius: radii.sm,
     backgroundColor: palette.lime,
     marginTop: 15,
@@ -657,10 +934,11 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   cancelButton: {
-    height: 52,
+    minHeight: 52,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 18,
+    paddingVertical: 12,
     borderRadius: radii.sm,
     backgroundColor: palette.paper,
   },
@@ -672,11 +950,12 @@ const styles = StyleSheet.create({
   },
   sheetConnectButton: {
     flex: 1,
-    height: 52,
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+    paddingVertical: 12,
     borderRadius: radii.sm,
     backgroundColor: palette.lime,
   },
@@ -684,7 +963,7 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   connectButtonText: {
-    color: palette.ink,
+    color: palette.accentInk,
     fontFamily: fonts.sans,
     fontSize: 13,
     fontWeight: '900',
@@ -694,10 +973,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 20,
-    paddingTop: 16,
-    marginTop: 15,
+    paddingTop: 8,
+    marginTop: 4,
+  },
+  syncStatusBanner: {
+    minHeight: 35,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingTop: 13,
+    marginTop: 13,
     borderTopWidth: 1,
-    borderColor: '#CDD9BB',
+    borderColor: palette.lineStrong,
+  },
+  syncStatusText: {
+    flex: 1,
+    color: palette.inkSoft,
+    fontFamily: fonts.sans,
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 16,
   },
   serverStatValue: {
     color: palette.ink,
@@ -714,7 +1009,7 @@ const styles = StyleSheet.create({
   serverDivider: {
     width: 1,
     height: 35,
-    backgroundColor: '#CDD9BB',
+    backgroundColor: palette.lineStrong,
   },
   syncButton: {
     width: 42,
@@ -727,9 +1022,18 @@ const styles = StyleSheet.create({
   },
   connectionActions: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     alignItems: 'center',
     marginTop: 13,
+  },
+  manageConnectionsButton: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    borderRadius: radii.sm,
+    backgroundColor: palette.paperScrim,
   },
   changeServer: {
     color: palette.inkSoft,
@@ -759,7 +1063,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   successText: {
-    color: palette.ink,
+    color: palette.accentInk,
     fontFamily: fonts.sans,
     fontSize: 11,
     fontWeight: '700',
@@ -791,6 +1095,48 @@ const styles = StyleSheet.create({
   settingRowLast: {
     borderBottomWidth: 0,
   },
+  preferenceControl: {
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderColor: palette.line,
+  },
+  preferenceHeading: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+  },
+  segmentedControl: {
+    flexDirection: 'row',
+    gap: 6,
+    padding: 4,
+    borderRadius: radii.sm,
+    backgroundColor: palette.canvas,
+    marginTop: 10,
+  },
+  segment: {
+    minHeight: Platform.OS === 'android' ? 48 : 44,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 8,
+    borderRadius: 9,
+  },
+  segmentSelected: {
+    backgroundColor: palette.ink,
+  },
+  segmentText: {
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 16,
+    textAlign: 'center',
+  },
+  segmentTextSelected: {
+    color: palette.paper,
+  },
   settingIcon: {
     width: 36,
     height: 36,
@@ -814,6 +1160,112 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginTop: 3,
   },
+  storageCard: {
+    padding: 15,
+    borderRadius: radii.lg,
+    backgroundColor: palette.paper,
+    borderWidth: 1,
+    borderColor: palette.line,
+  },
+  storageHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+  },
+  storageCopy: { flex: 1, minWidth: 0 },
+  storageTitle: {
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  storageSubtitle: {
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 10,
+    lineHeight: 15,
+    marginTop: 3,
+  },
+  storageTotal: {
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 10,
+    fontWeight: '900',
+    textAlign: 'right',
+  },
+  storageBreakdown: {
+    gap: 4,
+    paddingVertical: 12,
+    marginTop: 12,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: palette.line,
+  },
+  storageMetric: {
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  quotaControl: { paddingTop: 13 },
+  quotaTitle: {
+    color: palette.inkSoft,
+    fontFamily: fonts.sans,
+    fontSize: 10,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  quotaOptions: { flexDirection: 'row', gap: 6 },
+  quotaOption: {
+    minHeight: 42,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: palette.canvas,
+  },
+  quotaOptionSelected: { backgroundColor: palette.ink },
+  quotaOptionText: {
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 9,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  quotaOptionTextSelected: { color: palette.paper },
+  storageActions: { marginTop: 10 },
+  storageAction: {
+    minHeight: 66,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderTopWidth: 1,
+    borderColor: palette.line,
+  },
+  storageActionIcon: {
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: palette.canvas,
+  },
+  storageActionCopy: { flex: 1, minWidth: 0 },
+  storageActionTitle: {
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  storageActionSubtitle: {
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 9,
+    lineHeight: 14,
+    marginTop: 2,
+  },
+  taskCenterGroup: { marginTop: 10 },
   updateBadge: {
     minWidth: 42,
     height: 24,
@@ -833,6 +1285,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.6,
   },
+  updateBadgeTextAccent: { color: palette.accentInk },
   privacyNote: {
     color: palette.faint,
     fontFamily: fonts.sans,
@@ -842,6 +1295,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginTop: 18,
   },
+  disabled: { opacity: 0.42 },
   pressed: {
     opacity: 0.75,
     transform: [{ scale: 0.985 }],

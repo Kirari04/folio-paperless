@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "defaultLocale": "en-US",
+  "locales": ["en-US", "de-DE"],
+  "appMetadataFile": "app.json",
+  "releaseNotesFile": "release-notes.txt",
+  "privacyDisclosureFile": "../privacy-disclosures.json",
+  "submissionMode": "reviewed-manual"
+}

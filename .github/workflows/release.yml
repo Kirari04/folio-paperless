@@ -93,6 +93,7 @@ jobs:
     permissions:
       contents: write
     env:
+      FOLIO_DISTRIBUTION: github
       RELEASE_TAG: ${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}
     steps:
       - name: Check out exact release tag

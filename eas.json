@@ -1,0 +1,46 @@
+{
+  "cli": {
+    "version": ">= 21.4.0",
+    "appVersionSource": "remote",
+    "requireCommit": true
+  },
+  "build": {
+    "github-android": {
+      "distribution": "internal",
+      "env": {
+        "FOLIO_DISTRIBUTION": "github"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "store-android": {
+      "distribution": "store",
+      "environment": "production",
+      "env": {
+        "FOLIO_DISTRIBUTION": "store",
+        "CI": "true"
+      },
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      }
+    },
+    "store-ios": {
+      "distribution": "store",
+      "environment": "production",
+      "env": {
+        "FOLIO_DISTRIBUTION": "store",
+        "CI": "true"
+      },
+      "autoIncrement": true,
+      "ios": {
+        "simulator": false
+      }
+    }
+  },
+  "submit": {
+    "store-android": {},
+    "store-ios": {}
+  }
+}

@@ -1,0 +1,8 @@
+First store-candidate release of Folio for Paperless.
+
+- Add isolated connection profiles with token, OIDC, 2FA, custom-header, and mutual-TLS authentication.
+- Add durable shared-file and scan intake, upload metadata presets, offline access, background sync, and a persistent task center.
+- Add bulk actions, saved views, metadata catalogs, document search, printing, representation selection, public links, and Paperless 3 document tools.
+- Add English and German localization, system-aware appearance, validated deep links, redacted notifications, privacy-safe shortcuts, OS search, and widgets.
+
+A compatible Paperless-ngx server is required. Signed store candidates still require physical-device and store-console review before submission.

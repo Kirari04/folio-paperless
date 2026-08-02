@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="folio_widget_brand">Folio</string>
+  <string name="folio_widget_description">Inbox count and private Quick Scan access</string>
+  <string name="folio_widget_inbox">Inbox</string>
+  <string name="folio_widget_inbox_item">Inbox item · Quick Scan</string>
+  <string name="folio_widget_inbox_items">Inbox items · Quick Scan</string>
+  <string name="folio_widget_locked">Locked</string>
+  <string name="folio_widget_open_scan">Open Folio · Quick Scan</string>
+</resources>

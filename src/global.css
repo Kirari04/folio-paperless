@@ -1,4 +1,27 @@
 :root {
+  color-scheme: light dark;
+  --folio-canvas: #f3f0e8;
+  --folio-paper: #fffdf8;
+  --folio-paper-strong: #ffffff;
+  --folio-ink: #17231b;
+  --folio-ink-soft: #354139;
+  --folio-muted: #59625b;
+  --folio-faint: #626b64;
+  --folio-line: #d8d2c5;
+  --folio-line-strong: #817a70;
+  --folio-lime: #d8f678;
+  --folio-lime-surface: #effbcb;
+  --folio-lime-dark: #526c1e;
+  --folio-mint: #cde8d4;
+  --folio-apricot: #f2b486;
+  --folio-lavender: #d8d2f1;
+  --folio-sky: #c9e1eb;
+  --folio-rose: #edc7c1;
+  --folio-danger: #963f35;
+  --folio-danger-surface: #f7e8e5;
+  --folio-viewer-surface: #e7e2d8;
+  --folio-black: #111713;
+  --folio-on-dark: #fffdf8;
   --font-display:
     Spline Sans, Inter, ui-sans-serif, system-ui, sans-serif, Apple Color Emoji, Segoe UI Emoji,
     Segoe UI Symbol, Noto Color Emoji;
@@ -6,4 +29,57 @@
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
   --font-rounded: 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif;
   --font-serif: Georgia, 'Times New Roman', serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-folio-theme='light']) {
+    --folio-canvas: #111713;
+    --folio-paper: #1a211c;
+    --folio-paper-strong: #222b24;
+    --folio-ink: #f4f1e9;
+    --folio-ink-soft: #d4d9d2;
+    --folio-muted: #b2bab3;
+    --folio-faint: #a3aba4;
+    --folio-line: #39433d;
+    --folio-line-strong: #718077;
+    --folio-lime: #c8ea64;
+    --folio-lime-surface: #303c20;
+    --folio-lime-dark: #b8d957;
+    --folio-mint: #294638;
+    --folio-apricot: #643f2c;
+    --folio-lavender: #3d3859;
+    --folio-sky: #294753;
+    --folio-rose: #5c3735;
+    --folio-danger: #f0a096;
+    --folio-danger-surface: #402522;
+    --folio-viewer-surface: #171d19;
+  }
+}
+
+:root[data-folio-theme='dark'] {
+  color-scheme: dark;
+  --folio-canvas: #111713;
+  --folio-paper: #1a211c;
+  --folio-paper-strong: #222b24;
+  --folio-ink: #f4f1e9;
+  --folio-ink-soft: #d4d9d2;
+  --folio-muted: #b2bab3;
+  --folio-faint: #a3aba4;
+  --folio-line: #39433d;
+  --folio-line-strong: #718077;
+  --folio-lime: #c8ea64;
+  --folio-lime-surface: #303c20;
+  --folio-lime-dark: #b8d957;
+  --folio-mint: #294638;
+  --folio-apricot: #643f2c;
+  --folio-lavender: #3d3859;
+  --folio-sky: #294753;
+  --folio-rose: #5c3735;
+  --folio-danger: #f0a096;
+  --folio-danger-surface: #402522;
+  --folio-viewer-surface: #171d19;
+}
+
+:root[data-folio-theme='light'] {
+  color-scheme: light;
 }

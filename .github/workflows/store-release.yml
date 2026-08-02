@@ -1,0 +1,366 @@
+name: Store release candidates
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: Immutable main commit SHA to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: folio-store-release
+  cancel-in-progress: false
+
+jobs:
+  validate-ref:
+    name: Validate protected release input
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Require an immutable commit on main
+        id: ref
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+        run: |
+          if [[ ! "$RELEASE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'release_ref must be a full 40-character lowercase commit SHA.' >&2
+            exit 1
+          fi
+          git merge-base --is-ancestor "$RELEASE_REF" origin/main || {
+            echo 'release_ref is not reachable from main.' >&2
+            exit 1
+          }
+          echo "sha=$RELEASE_REF" >> "$GITHUB_OUTPUT"
+
+  android-store:
+    name: Signed Play AAB candidate
+    needs: validate-ref
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: store-release
+    env:
+      ANDROID_STORE_CERT_SHA256: ${{ vars.ANDROID_STORE_CERT_SHA256 }}
+      EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+      EXPO_OWNER: ${{ vars.EXPO_OWNER }}
+      FOLIO_DISTRIBUTION: store
+    steps:
+      - name: Check out approved commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.validate-ref.outputs.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Validate protected environment
+        run: |
+          for name in ANDROID_STORE_CERT_SHA256 EAS_PROJECT_ID EXPO_OWNER; do
+            if [ -z "${!name}" ]; then
+              echo "Missing store-release environment value: $name" >&2
+              exit 1
+            fi
+          done
+      - name: Install and validate configuration
+        run: |
+          npm ci
+          FOLIO_DISTRIBUTION=github npx expo config --type prebuild --json > "$RUNNER_TEMP/github-config.json"
+          npx expo config --type prebuild --json > "$RUNNER_TEMP/store-config.json"
+          node scripts/assert-distribution-config.mjs "$RUNNER_TEMP/github-config.json" "$RUNNER_TEMP/store-config.json"
+          node scripts/assert-store-metadata.mjs
+      - name: Request signed EAS build
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo 'Missing store-release environment value: EXPO_TOKEN' >&2
+            exit 1
+          fi
+          npx --yes eas-cli@21.4.0 build \
+            --platform android \
+            --profile store-android \
+            --non-interactive \
+            --wait \
+            --json > "$RUNNER_TEMP/eas-android.json"
+      - name: Validate EAS artifact URL
+        id: android-artifact
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          let builds;
+          try {
+            builds = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/eas-android.json`, 'utf8'));
+          } catch {
+            throw new Error('EAS Android build metadata is not valid JSON.');
+          }
+          const build = Array.isArray(builds) ? builds[0] : builds;
+          if (build?.status !== 'FINISHED') {
+            throw new Error('EAS Android build did not finish successfully.');
+          }
+          const artifactUrl = build?.artifacts?.buildUrl;
+          if (
+            typeof artifactUrl !== 'string' ||
+            artifactUrl.length === 0 ||
+            artifactUrl.length > 2048 ||
+            artifactUrl !== artifactUrl.trim() ||
+            /[\u0000-\u001f\u007f]/u.test(artifactUrl)
+          ) {
+            throw new Error('EAS Android artifact URL is not a bounded single-line string.');
+          }
+          let url;
+          try {
+            url = new URL(artifactUrl);
+          } catch {
+            throw new Error('EAS Android artifact URL is invalid.');
+          }
+          if (
+            url.protocol !== 'https:' ||
+            url.hostname.length === 0 ||
+            url.username.length !== 0 ||
+            url.password.length !== 0 ||
+            url.href !== artifactUrl
+          ) {
+            throw new Error('EAS Android artifact URL must be canonical HTTPS without credentials.');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `artifact_url=${url.href}\n`, { encoding: 'utf8' });
+          NODE
+      - name: Download and verify AAB
+        env:
+          ARTIFACT_URL: ${{ steps.android-artifact.outputs.artifact_url }}
+        run: |
+          artifact="Folio-${{ needs.validate-ref.outputs.sha }}-play.aab"
+          curl --fail --location --proto '=https' --tlsv1.2 "$ARTIFACT_URL" --output "$artifact"
+          test -s "$artifact"
+          unzip -t "$artifact"
+          jarsigner -verify -strict -verbose -certs "$artifact" > "$RUNNER_TEMP/jarsigner.txt"
+          keytool -printcert -jarfile "$artifact" > "$RUNNER_TEMP/certificate.txt"
+          actual="$(sed -n 's/^[[:space:]]*SHA256: //p' "$RUNNER_TEMP/certificate.txt" | head -n 1 | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+          expected="$(printf '%s' "$ANDROID_STORE_CERT_SHA256" | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+          if [ -z "$actual" ] || [ "$actual" != "$expected" ]; then
+            echo 'AAB certificate does not match the protected store fingerprint.' >&2
+            exit 1
+          fi
+          # Verify the packaged flavor rather than trusting the build environment.
+          # The resolved config intentionally names REQUEST_INSTALL_PACKAGES in
+          # blockedPermissions, and the shared JS bundle safely probes whether the
+          # optional GitHub-only native module exists. Neither is executable updater
+          # capability in the store flavor, so validate them separately and scan
+          # every compiled/native/resource payload for the forbidden capability.
+          unzip -p "$artifact" 'base/assets/app.config' > "$RUNNER_TEMP/aab-app-config.json"
+          AAB_CONFIG="$RUNNER_TEMP/aab-app-config.json" node <<'NODE'
+          const fs = require('fs');
+          const config = JSON.parse(fs.readFileSync(process.env.AAB_CONFIG, 'utf8'));
+          const permissions = config.android?.permissions ?? [];
+          const blocked = config.android?.blockedPermissions ?? [];
+          const forbidden = [
+            'android.permission.REQUEST_INSTALL_PACKAGES',
+            'android.permission.SYSTEM_ALERT_WINDOW',
+            'android.permission.READ_EXTERNAL_STORAGE',
+            'android.permission.WRITE_EXTERNAL_STORAGE',
+          ];
+          if (
+            config.extra?.folioDistribution !== 'store' ||
+            config.extra?.supportsInAppApkUpdates !== false ||
+            forbidden.some((permission) => permissions.includes(permission)) ||
+            forbidden.some((permission) => !blocked.includes(permission))
+          ) {
+            throw new Error('Packaged Android config is not the fail-closed store flavor.');
+          }
+          NODE
+          # Expo Constants embeds blockedPermissions in the JavaScript bundle.
+          # Those strings are the deny-list itself, not permission declarations;
+          # executable permission authority is verified from the compiled native
+          # manifest below.
+          # Scan the compiled manifest's string table directly. Matching the
+          # permission value independently of its element name covers both
+          # <uses-permission> and <uses-permission-sdk-23> declarations.
+          unzip -p "$artifact" 'base/manifest/AndroidManifest.xml' \
+            | strings -a > "$RUNNER_TEMP/aab-manifest-strings.txt"
+          if grep -Eqi 'REQUEST_INSTALL_PACKAGES|SYSTEM_ALERT_WINDOW|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE' "$RUNNER_TEMP/aab-manifest-strings.txt"; then
+            echo 'Store AndroidManifest contains a forbidden permission declaration.' >&2
+            exit 1
+          fi
+          unzip -p "$artifact" 'base/*' \
+            -x 'base/assets/app.config' 'base/assets/index.android.bundle' \
+            | strings -a > "$RUNNER_TEMP/aab-strings.txt"
+          # Dependency bytecode may contain permission-name constants while
+          # offering APIs that Folio never requests. Permission authority is
+          # determined by the compiled manifest; this broader scan is for the
+          # GitHub-only updater implementation itself.
+          if grep -Eqi 'FolioUpdater|folio[-_.]?updater|expo\.modules\.dev(launcher|menu)|devlauncher\.modules|expo[-_.]?dev[-_.]?(client|launcher|menu)|EXDev(Client|Launcher|Menu)' "$RUNNER_TEMP/aab-strings.txt"; then
+            echo 'AAB contains a GitHub/development-only native implementation.' >&2
+            exit 1
+          fi
+          sha256sum "$artifact" > "$artifact.sha256"
+      - name: Upload verified AAB candidate
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: folio-play-${{ needs.validate-ref.outputs.sha }}
+          path: |
+            Folio-${{ needs.validate-ref.outputs.sha }}-play.aab
+            Folio-${{ needs.validate-ref.outputs.sha }}-play.aab.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  ios-store:
+    name: Signed iOS archive candidate
+    needs: validate-ref
+    runs-on: macos-15
+    timeout-minutes: 90
+    environment: store-release
+    env:
+      EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+      EXPO_OWNER: ${{ vars.EXPO_OWNER }}
+      FOLIO_DISTRIBUTION: store
+      IOS_TEAM_ID: ${{ vars.IOS_TEAM_ID }}
+    steps:
+      - name: Check out approved commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.validate-ref.outputs.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Validate protected environment
+        run: |
+          for name in EAS_PROJECT_ID EXPO_OWNER IOS_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              echo "Missing store-release environment value: $name" >&2
+              exit 1
+            fi
+          done
+          if [[ ! "$IOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+            echo 'IOS_TEAM_ID must be a 10-character Apple team identifier.' >&2
+            exit 1
+          fi
+      - name: Install and validate configuration
+        run: |
+          npm ci
+          FOLIO_DISTRIBUTION=github npx expo config --type prebuild --json > "$RUNNER_TEMP/github-config.json"
+          npx expo config --type prebuild --json > "$RUNNER_TEMP/store-config.json"
+          node scripts/assert-distribution-config.mjs "$RUNNER_TEMP/github-config.json" "$RUNNER_TEMP/store-config.json"
+          node scripts/assert-store-metadata.mjs
+      - name: Request signed EAS build
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo 'Missing store-release environment value: EXPO_TOKEN' >&2
+            exit 1
+          fi
+          npx --yes eas-cli@21.4.0 build \
+            --platform ios \
+            --profile store-ios \
+            --non-interactive \
+            --wait \
+            --json > "$RUNNER_TEMP/eas-ios.json"
+      - name: Validate EAS artifact URL
+        id: ios-artifact
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          let builds;
+          try {
+            builds = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/eas-ios.json`, 'utf8'));
+          } catch {
+            throw new Error('EAS iOS build metadata is not valid JSON.');
+          }
+          const build = Array.isArray(builds) ? builds[0] : builds;
+          if (build?.status !== 'FINISHED') {
+            throw new Error('EAS iOS build did not finish successfully.');
+          }
+          const artifactUrl = build?.artifacts?.buildUrl;
+          if (
+            typeof artifactUrl !== 'string' ||
+            artifactUrl.length === 0 ||
+            artifactUrl.length > 2048 ||
+            artifactUrl !== artifactUrl.trim() ||
+            /[\u0000-\u001f\u007f]/u.test(artifactUrl)
+          ) {
+            throw new Error('EAS iOS artifact URL is not a bounded single-line string.');
+          }
+          let url;
+          try {
+            url = new URL(artifactUrl);
+          } catch {
+            throw new Error('EAS iOS artifact URL is invalid.');
+          }
+          if (
+            url.protocol !== 'https:' ||
+            url.hostname.length === 0 ||
+            url.username.length !== 0 ||
+            url.password.length !== 0 ||
+            url.href !== artifactUrl
+          ) {
+            throw new Error('EAS iOS artifact URL must be canonical HTTPS without credentials.');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `artifact_url=${url.href}\n`, { encoding: 'utf8' });
+          NODE
+      - name: Download and verify IPA
+        env:
+          ARTIFACT_URL: ${{ steps.ios-artifact.outputs.artifact_url }}
+        run: |
+          artifact="Folio-${{ needs.validate-ref.outputs.sha }}-app-store.ipa"
+          curl --fail --location --proto '=https' --tlsv1.2 "$ARTIFACT_URL" --output "$artifact"
+          test -s "$artifact"
+          unzip -q "$artifact" -d "$RUNNER_TEMP/folio-ipa"
+          app_path="$(find "$RUNNER_TEMP/folio-ipa/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          signature_metadata="$(codesign --display --verbose=4 "$app_path" 2>&1)"
+          actual_team_id="$(printf '%s\n' "$signature_metadata" | sed -n 's/^TeamIdentifier=//p' | head -n 1)"
+          if [ -z "$actual_team_id" ] || [ "$actual_team_id" != "$IOS_TEAM_ID" ]; then
+            echo 'App code-signing team does not match the protected store team ID.' >&2
+            exit 1
+          fi
+          codesign --verify --strict --verbose=2 \
+            -R="=anchor apple generic and certificate leaf[subject.OU] = \"$IOS_TEAM_ID\" and identifier \"app.folio.paperless\"" \
+            "$app_path"
+          bundle_id="$(defaults read "$app_path/Info" CFBundleIdentifier)"
+          [ "$bundle_id" = 'app.folio.paperless' ] || {
+            echo "Unexpected iOS bundle identifier: $bundle_id" >&2
+            exit 1
+          }
+          security cms -D -i "$app_path/embedded.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          team_id="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$RUNNER_TEMP/profile.plist")"
+          [ "$team_id" = "$IOS_TEAM_ID" ] || {
+            echo 'IPA team does not match the protected store team ID.' >&2
+            exit 1
+          }
+          # The shared JS bundle contains an inert optional-module probe; the store
+          # flavor has no linked updater module. Scan every native/resource payload
+          # while excluding only that JavaScript bundle.
+          if find "$app_path" -type f ! -name 'main.jsbundle' -print0 \
+            | xargs -0 strings -a \
+            | grep -Eqi 'FolioUpdater|folio[-_.]?updater|expo\.modules\.dev(launcher|menu)|devlauncher\.modules|expo[-_.]?dev[-_.]?(client|launcher|menu)|EXDev(Client|Launcher|Menu)'; then
+            echo 'IPA contains a GitHub/development-only native implementation.' >&2
+            exit 1
+          fi
+          shasum -a 256 "$artifact" > "$artifact.sha256"
+      - name: Upload verified IPA candidate
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: folio-app-store-${{ needs.validate-ref.outputs.sha }}
+          path: |
+            Folio-${{ needs.validate-ref.outputs.sha }}-app-store.ipa
+            Folio-${{ needs.validate-ref.outputs.sha }}-app-store.ipa.sha256
+          if-no-files-found: error
+          retention-days: 7

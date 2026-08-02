@@ -5,12 +5,17 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "folio-paperless",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
+    "locales": {
+      "en": "./assets/locales/en.json",
+      "de": "./assets/locales/de.json"
+    },
     "ios": {
       "icon": "./assets/images/icon.png",
       "supportsTablet": false,
       "bundleIdentifier": "app.folio.paperless",
       "infoPlist": {
+        "CFBundleAllowMixedLocalizations": true,
         "ITSAppUsesNonExemptEncryption": false,
         "NSLocalNetworkUsageDescription": "Allow Folio to connect directly to a Paperless server on your local network.",
         "UIViewControllerBasedStatusBarAppearance": true
@@ -47,9 +52,13 @@
         ],
         "NSPrivacyCollectedDataTypes": [],
         "NSPrivacyTracking": false
+      },
+      "entitlements": {
+        "com.apple.developer.default-data-protection": "NSFileProtectionCompleteUntilFirstUserAuthentication"
       }
     },
     "android": {
+      "allowBackup": false,
       "permissions": [
         "android.permission.REQUEST_INSTALL_PACKAGES"
       ],
@@ -78,12 +87,34 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#F3F0E8",
+          "backgroundColor": "#111713",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 128
+          "imageWidth": 128,
+          "dark": {
+            "backgroundColor": "#111713",
+            "image": "./assets/images/splash-icon.png"
+          }
         }
       ],
+      [
+        "expo-localization",
+        {
+          "supportedLocales": {
+            "ios": [
+              "en",
+              "de"
+            ],
+            "android": [
+              "en",
+              "de"
+            ]
+          }
+        }
+      ],
+      "expo-system-ui",
       "expo-secure-store",
+      "expo-sqlite",
+      "expo-background-task",
       [
         "expo-local-authentication",
         {
@@ -96,7 +127,41 @@
           "color": "#17231B"
         }
       ],
-      "expo-sharing",
+      [
+        "expo-sharing",
+        {
+          "ios": {
+            "enabled": true,
+            "appGroupId": "group.app.folio.paperless.share",
+            "extensionBundleIdentifier": "app.folio.paperless.share-extension",
+            "activationRule": {
+              "supportsFileWithMaxCount": 20,
+              "supportsImageWithMaxCount": 20
+            }
+          },
+          "android": {
+            "enabled": true,
+            "singleShareMimeTypes": [
+              "application/pdf",
+              "image/jpeg",
+              "image/png",
+              "image/tiff",
+              "image/heic",
+              "image/heif",
+              "text/plain"
+            ],
+            "multipleShareMimeTypes": [
+              "application/pdf",
+              "image/jpeg",
+              "image/png",
+              "image/tiff",
+              "image/heic",
+              "image/heif",
+              "text/plain"
+            ]
+          }
+        }
+      ],
       "./plugins/withAndroidReleaseSigning"
     ],
     "experiments": {

@@ -1,0 +1,9 @@
+{
+  "name": "folio-platform",
+  "version": "0.1.0",
+  "description": "Privacy-gated Folio integrations for OS search, iOS shortcuts, Android widgets, and native RS256 verification.",
+  "license": "MIT",
+  "author": "Folio contributors",
+  "homepage": "https://github.com/Kirari04/folio-paperless",
+  "private": true
+}
