@@ -13,6 +13,7 @@ import {
   translate,
 } from '../src/i18n/core.ts';
 import { parseStoredUiPreferences } from '../src/i18n/preferences-policy.ts';
+import { commitNativeAppearanceTransition } from '../src/i18n/appearance-transition.ts';
 import { I18nRenderProvider, useI18n } from '../src/i18n/react-provider.ts';
 import {
   formatRuntimeList,
@@ -326,7 +327,10 @@ test('semantic application surfaces, statuses, and control boundaries retain AA 
 test('Android semantic colors have exact light and night resources', async () => {
   const integrations = require('../plugins/withFolioPlatformIntegrations.js');
   const themeSource = await readFile(new URL('../src/constants/theme.ts', import.meta.url), 'utf8');
-  assert.match(themeSource, /PlatformColor\(`@color\/folio_\$\{name\.replaceAll\('-', '_'\)\}`\)/);
+  assert.match(
+    themeSource,
+    /const resource = `@color\/folio_\$\{name\.replaceAll\('-', '_'\)\}`;[\s\S]*PlatformColor\(resource\)/,
+  );
   assert.doesNotMatch(themeSource, /\?(?:android:)?attr\//);
 
   for (const mode of ['light', 'dark']) {
@@ -346,6 +350,12 @@ test('Android semantic colors have exact light and night resources', async () =>
       assert.match(xml, new RegExp(`<color name="folio_${name}">${value}</color>`));
     }
   }
+  const explicitXml = integrations.createAndroidThemeColorsXml(
+    integrations.ANDROID_THEME_COLORS.light,
+    integrations.ANDROID_THEME_COLORS,
+  );
+  assert.match(explicitXml, /<color name="folio_light_ink">#17231B<\/color>/);
+  assert.match(explicitXml, /<color name="folio_dark_ink">#F4F1E9<\/color>/);
 });
 
 test('known Folio authentication errors localize while unknown server text stays unchanged', () => {
@@ -648,12 +658,11 @@ test('stored appearance and locale are the first visible provider render before 
   assert.match(appSource, /if \(ready\) SplashScreen\.hide\(\)/);
 });
 
-test('native scheme completion republishes explicit-theme PlatformColor consumers', async () => {
-  const settings = { appearance: 'dark', language: 'system' };
+test('Android palette remount follows the resolved applied scheme for explicit preferences', async () => {
   const setAppearance = async () => {};
   const setLanguage = async () => {};
   const child = createElement(NativeSchemeProbe);
-  const renderProvider = (systemScheme) => createElement(
+  const renderProvider = (settings) => createElement(
     I18nRenderProvider,
     {
       nativePaletteRemountEnabled: true,
@@ -662,7 +671,7 @@ test('native scheme completion republishes explicit-theme PlatformColor consumer
       setAppearance,
       setLanguage,
       systemLocales: englishLocales,
-      systemScheme,
+      systemScheme: 'dark',
     },
     child,
   );
@@ -670,23 +679,23 @@ test('native scheme completion republishes explicit-theme PlatformColor consumer
   nativeSchemeProbeRenders = 0;
   let renderer;
   await act(async () => {
-    renderer = create(renderProvider('light'));
+    renderer = create(renderProvider({ appearance: 'dark', language: 'system' }));
   });
   assert.equal(nativeSchemeProbeRenders, 1);
   assert.equal(renderer.root.findByType('folio-native-scheme-probe').props.colorScheme, 'dark');
   assert.equal(
     renderer.root.findByType('folio-native-scheme-probe').props.nativePaletteKey,
-    'light',
+    'dark',
   );
 
   await act(async () => {
-    renderer.update(renderProvider('dark'));
+    renderer.update(renderProvider({ appearance: 'light', language: 'system' }));
   });
   assert.equal(nativeSchemeProbeRenders, 2);
-  assert.equal(renderer.root.findByType('folio-native-scheme-probe').props.colorScheme, 'dark');
+  assert.equal(renderer.root.findByType('folio-native-scheme-probe').props.colorScheme, 'light');
   assert.equal(
     renderer.root.findByType('folio-native-scheme-probe').props.nativePaletteKey,
-    'dark',
+    'light',
   );
   await act(async () => renderer.unmount());
 
@@ -696,6 +705,74 @@ test('native scheme completion republishes explicit-theme PlatformColor consumer
   );
   assert.match(appSource, /key=\{nativePaletteKey\}/);
   assert.equal(appSource.match(/key=\{nativePaletteKey\}/g)?.length, 1);
+});
+
+test('explicit appearance applies natively before publication and restores on persistence failure', async () => {
+  const previous = { appearance: 'dark', language: 'system' };
+  const next = { appearance: 'light', language: 'system' };
+  const events = [];
+
+  await commitNativeAppearanceTransition({
+    previous,
+    next,
+    applyNative: async (settings) => events.push(`apply:${settings.appearance}`),
+    publish: (settings) => events.push(`publish:${settings.appearance}`),
+    persist: async (settings) => events.push(`persist:${settings.appearance}`),
+  });
+  assert.deepEqual(events, ['apply:light', 'publish:light', 'persist:light']);
+
+  events.length = 0;
+  const persistenceError = new Error('protected storage failed');
+  await assert.rejects(
+    commitNativeAppearanceTransition({
+      previous,
+      next,
+      applyNative: async (settings) => events.push(`apply:${settings.appearance}`),
+      publish: (settings) => events.push(`publish:${settings.appearance}`),
+      persist: async (settings) => {
+        events.push(`persist:${settings.appearance}`);
+        throw persistenceError;
+      },
+    }),
+    persistenceError,
+  );
+  assert.deepEqual(events, [
+    'apply:light',
+    'publish:light',
+    'persist:light',
+    'apply:dark',
+    'publish:dark',
+  ]);
+
+  const providerSource = await readFile(
+    new URL('../src/context/ui-preferences-context.tsx', import.meta.url),
+    'utf8',
+  );
+  const themeSource = await readFile(
+    new URL('../src/constants/theme.ts', import.meta.url),
+    'utf8',
+  );
+  assert.ok(
+    providerSource.indexOf('Appearance.setColorScheme(')
+      < providerSource.indexOf('const colorScheme = resolveColorScheme('),
+    'the native override must be applied before its resolved root background is selected',
+  );
+  assert.match(
+    providerSource,
+    /Appearance\.addChangeListener\([\s\S]*Appearance\.setColorScheme\(requestedScheme\)/,
+    'Android must await its configuration-change signal before publishing a new palette',
+  );
+  assert.match(
+    themeSource,
+    /resource\.replace\('@color\/folio_', `@color\/folio_\$\{colorScheme\}_`\)/,
+    'Android semantic colors must use explicit scheme resources to bypass stale Fabric contexts',
+  );
+  assert.match(
+    providerSource,
+    /const colorScheme = resolveColorScheme[\s\S]*prepareAndroidSemanticColors\(colorScheme\)/,
+    'the cache-buster must run before the presentation tree receives the resolved scheme',
+  );
+  assert.match(providerSource, /commitNativeAppearanceTransition\(\{[\s\S]*publish: setHydratedSettings/);
 });
 
 test('file sizes use locale-aware decimal separators', () => {

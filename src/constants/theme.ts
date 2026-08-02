@@ -6,6 +6,15 @@ import {
 
 import { themeHex } from './theme-colors';
 
+type AndroidPlatformColorValue = {
+  resource_paths?: string[];
+};
+
+const androidSemanticColors: {
+  color: AndroidPlatformColorValue;
+  resource: string;
+}[] = [];
+
 function semanticColor(
   name: string,
   light: string,
@@ -22,10 +31,28 @@ function semanticColor(
     }) as unknown as string;
   }
   if (Platform.OS === 'android') {
-    return PlatformColor(`@color/folio_${name.replaceAll('-', '_')}`) as unknown as string;
+    const resource = `@color/folio_${name.replaceAll('-', '_')}`;
+    const color = PlatformColor(resource) as unknown as AndroidPlatformColorValue;
+    androidSemanticColors.push({ color, resource });
+    return color as unknown as string;
   }
   if (Platform.OS === 'web') return `var(--folio-${name})`;
   return light;
+}
+
+/**
+ * Fabric's surface context can retain the previous uiMode after an in-process
+ * AppCompat change. Point each remount at an explicit light/dark resource so
+ * semantic colors never depend on that stale context.
+ */
+export function prepareAndroidSemanticColors(colorScheme: 'light' | 'dark') {
+  if (Platform.OS !== 'android') return;
+  for (const { color, resource } of androidSemanticColors) {
+    color.resource_paths = [
+      resource.replace('@color/folio_', `@color/folio_${colorScheme}_`),
+      resource,
+    ];
+  }
 }
 
 export const palette = {

@@ -34,6 +34,7 @@ import {
 } from 'react-native';
 
 import { AppShell } from '@/components/app-shell';
+import { AnimatedSegmentedControl } from '@/components/animated-segmented-control';
 import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/components/motion';
 import { FolioLogo } from '@/components/folio-logo';
 import { ProfileManagerSheet } from '@/components/profile-manager-sheet';
@@ -661,26 +662,13 @@ function PreferenceControl<T extends string>({
           <Text style={styles.settingSubtitle}>{subtitle}</Text>
         </View>
       </View>
-      <View accessibilityRole="radiogroup" style={styles.segmentedControl}>
-        {options.map((option) => {
-          const selected = option.value === value;
-          return (
-            <Pressable
-              accessibilityRole="radio"
-              accessibilityState={{ checked: selected, disabled }}
-              disabled={disabled}
-              key={option.value}
-              onPress={() => onChange(option.value)}
-              style={[styles.segment, selected && styles.segmentSelected]}>
-              <Text
-                numberOfLines={2}
-                style={[styles.segmentText, selected && styles.segmentTextSelected]}>
-                {option.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      <AnimatedSegmentedControl
+        accessibilityLabel={title}
+        disabled={disabled}
+        onChange={onChange}
+        options={options}
+        value={value}
+      />
     </View>
   );
 }
@@ -724,28 +712,21 @@ function QuotaControl({ disabled, onChange, title, value }: {
   value: number;
 }) {
   const { formatFileSize } = useI18n();
-  const options = [128, 256, 512, 1024].map((megabytes) => megabytes * 1024 * 1024);
+  const options = [128, 256, 512, 1024].map((megabytes) => {
+    const bytes = megabytes * 1024 * 1024;
+    return { value: String(bytes), label: formatFileSize(bytes) };
+  });
   return (
     <View style={styles.quotaControl}>
       <Text style={styles.quotaTitle}>{title}</Text>
-      <View accessibilityRole="radiogroup" style={styles.quotaOptions}>
-        {options.map((option) => {
-          const selected = value === option;
-          return (
-            <Pressable
-              accessibilityRole="radio"
-              accessibilityState={{ checked: selected, disabled }}
-              disabled={disabled}
-              key={option}
-              onPress={() => onChange(option)}
-              style={[styles.quotaOption, selected && styles.quotaOptionSelected]}>
-              <Text style={[styles.quotaOptionText, selected && styles.quotaOptionTextSelected]}>
-                {formatFileSize(option)}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      <AnimatedSegmentedControl
+        accessibilityLabel={title}
+        compact
+        disabled={disabled}
+        onChange={(nextValue) => onChange(Number(nextValue))}
+        options={options}
+        value={String(value)}
+      />
     </View>
   );
 }
@@ -1112,37 +1093,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 11,
   },
-  segmentedControl: {
-    flexDirection: 'row',
-    gap: 6,
-    padding: 4,
-    borderRadius: radii.sm,
-    backgroundColor: palette.canvas,
-    marginTop: 10,
-  },
-  segment: {
-    minHeight: Platform.OS === 'android' ? 48 : 44,
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 6,
-    paddingVertical: 8,
-    borderRadius: 9,
-  },
-  segmentSelected: {
-    backgroundColor: palette.ink,
-  },
-  segmentText: {
-    color: palette.muted,
-    fontFamily: fonts.sans,
-    fontSize: 12,
-    fontWeight: '800',
-    lineHeight: 16,
-    textAlign: 'center',
-  },
-  segmentTextSelected: {
-    color: palette.paper,
-  },
   settingIcon: {
     width: 36,
     height: 36,
@@ -1221,25 +1171,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginBottom: 8,
   },
-  quotaOptions: { flexDirection: 'row', gap: 6 },
-  quotaOption: {
-    minHeight: 42,
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-    borderRadius: 9,
-    backgroundColor: palette.canvas,
-  },
-  quotaOptionSelected: { backgroundColor: palette.ink },
-  quotaOptionText: {
-    color: palette.muted,
-    fontFamily: fonts.sans,
-    fontSize: 9,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-  quotaOptionTextSelected: { color: palette.paper },
   storageActions: { marginTop: 10 },
   storageAction: {
     minHeight: 66,

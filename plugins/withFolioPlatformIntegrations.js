@@ -169,8 +169,12 @@ ${entries}
 `;
 }
 
-function createAndroidThemeColorsXml(colors) {
-  const entries = Object.entries(colors)
+function createAndroidThemeColorsXml(colors, variants = {}) {
+  const entries = [
+    ...Object.entries(colors),
+    ...Object.entries(variants).flatMap(([scheme, schemeColors]) =>
+      Object.entries(schemeColors).map(([name, value]) => [`${scheme}_${name}`, value])),
+  ]
     .map(([name, value]) => `  <color name="folio_${name}">${escapeXml(value)}</color>`)
     .join('\n');
   return `<?xml version="1.0" encoding="utf-8"?>
@@ -437,7 +441,7 @@ function withFolioPlatformIntegrations(config) {
       );
       fs.writeFileSync(
         path.join(valuesDirectory, 'folio_theme_colors.xml'),
-        createAndroidThemeColorsXml(ANDROID_THEME_COLORS.light),
+        createAndroidThemeColorsXml(ANDROID_THEME_COLORS.light, ANDROID_THEME_COLORS),
       );
       fs.writeFileSync(
         path.join(nightValuesDirectory, 'folio_theme_colors.xml'),
