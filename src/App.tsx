@@ -1,9 +1,12 @@
 import { StatusBar } from 'expo-status-bar';
+import { useIsFocused } from '@react-navigation/native';
+import { createNativeStackNavigator, type NativeStackScreenProps } from '@react-navigation/native-stack';
 import { LockKeyhole } from 'lucide-react-native';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
+  Platform,
   StyleSheet,
   Text,
   View,
@@ -23,14 +26,13 @@ import { UpdateOverlay } from '@/components/update-overlay';
 import {
   MotionPressable as Pressable,
   MotionProvider,
-  MotionScreen,
 } from '@/components/motion';
 import { fonts, palette, radii } from '@/constants/theme';
 import { AppProvider, useApp } from '@/context/app-context';
 import { UpdateProvider } from '@/context/update-context';
 import { authenticateForFolio } from '@/lib/device-features';
-import { NavigationProvider, useNavigationMotion, useNavigationRoute } from '@/lib/router';
-import type { RoutePath } from '@/lib/router';
+import { NavigationProvider, useNavigationMotion } from '@/lib/router';
+import type { RootStackParamList } from '@/lib/router';
 
 const tabScreens = [
   { pathname: '/', Screen: memo(HomeScreen) },
@@ -39,72 +41,78 @@ const tabScreens = [
   { pathname: '/settings', Screen: memo(SettingsScreen) },
 ] as const;
 
-const tabPathnames = new Set<RoutePath>(tabScreens.map((screen) => screen.pathname));
 type TabPath = (typeof tabScreens)[number]['pathname'];
+const Stack = createNativeStackNavigator<RootStackParamList>();
 
-function isTabPath(pathname: RoutePath): pathname is TabPath {
-  return tabPathnames.has(pathname);
-}
-
-function CurrentScreen() {
-  const route = useNavigationRoute();
-  const { lastDocument, lastTab } = useNavigationMotion();
-  const tabRoute = isTabPath(route.pathname) ? route.pathname : null;
-  const isTabRoute = tabRoute !== null;
-  const documentActive = route.pathname === '/document/[id]';
-
-  let overlayScreen = null;
-  switch (route.pathname) {
-    case '/trash':
-      overlayScreen = <TrashScreen />;
-      break;
-    case '/scan':
-      overlayScreen = <ScanScreen />;
-      break;
-  }
+function TabNavigator() {
+  const { lastTab } = useNavigationMotion();
 
   return (
     <View style={styles.navigationRoot}>
       {tabScreens.map(({ pathname, Screen }) => {
-        const active = route.pathname === pathname;
-        const visible = active || (!isTabRoute && lastTab === pathname);
+        const active = lastTab === pathname;
         return (
           <View
-            accessibilityElementsHidden={!visible}
-            importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
+            accessibilityElementsHidden={!active}
+            importantForAccessibility={active ? 'auto' : 'no-hide-descendants'}
             key={pathname}
             pointerEvents={active ? 'auto' : 'none'}
-            renderToHardwareTextureAndroid={visible}
-            shouldRasterizeIOS={visible}
-            style={[styles.tabScene, { zIndex: visible ? 2 : 1 }]}>
+            renderToHardwareTextureAndroid={active}
+            shouldRasterizeIOS={active}
+            style={[styles.tabScene, { zIndex: active ? 2 : 1 }]}>
             <Screen />
           </View>
         );
       })}
-      {!isTabRoute && !documentActive && (
-        <MotionScreen
-          backgroundColor={
-            route.pathname === '/scan'
-              ? palette.black
-              : route.pathname === '/document/[id]'
-                ? 'transparent'
-                : palette.canvas
-          }
-          key={route.key}>
-          {overlayScreen}
-        </MotionScreen>
-      )}
-      {!!lastDocument?.params.id && (
-        <MotionScreen backgroundColor="transparent" visible={documentActive}>
-          <DocumentDetailScreen
-            active={documentActive}
-            documentFrom={lastDocument.params.from}
-            documentId={lastDocument.params.id}
-            key={lastDocument.key}
-          />
-        </MotionScreen>
-      )}
-      <BottomNav activePathname={isTabRoute ? tabRoute : lastTab} visible={isTabRoute} />
+      <BottomNav activePathname={lastTab as TabPath} />
+    </View>
+  );
+}
+
+function DocumentRoute({ route }: NativeStackScreenProps<RootStackParamList, 'Document'>) {
+  const active = useIsFocused();
+  return (
+    <DocumentDetailScreen
+      active={active}
+      documentFrom={route.params.from}
+      documentId={route.params.id}
+    />
+  );
+}
+
+function AppNavigator() {
+  return (
+    <Stack.Navigator
+      screenOptions={{
+        animation: 'default',
+        animationMatchesGesture: true,
+        contentStyle: { backgroundColor: palette.canvas },
+        gestureEnabled: true,
+        headerShown: false,
+        statusBarStyle: 'dark',
+      }}>
+      <Stack.Screen component={TabNavigator} name="Tabs" />
+      <Stack.Screen component={DocumentRoute} name="Document" />
+      <Stack.Screen
+        component={ScanScreen}
+        name="Scan"
+        options={{
+          animation: 'slide_from_bottom',
+          contentStyle: { backgroundColor: palette.black },
+          presentation: 'fullScreenModal',
+          statusBarStyle: 'light',
+        }}
+      />
+      <Stack.Screen component={TrashScreen} name="Trash" />
+    </Stack.Navigator>
+  );
+}
+
+function PrivacyCurtain() {
+  return (
+    <View accessibilityViewIsModal style={styles.privacyCurtain}>
+      <StatusBar style="light" />
+      <FolioLogo inverse size={60} />
     </View>
   );
 }
@@ -113,32 +121,38 @@ function ProtectedApp() {
   const { isBootstrapping, preferences, preferencesReady } = useApp();
   const [locked, setLocked] = useState(true);
   const [unlocking, setUnlocking] = useState(false);
+  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
+  const authenticating = useRef(false);
   const unlockAttempted = useRef(false);
   const lockEnabled = preferencesReady && preferences.biometricLock;
   const showLock = lockEnabled && locked;
 
   const unlock = useCallback(async () => {
-    if (!lockEnabled) return;
+    if (!lockEnabled || !appActive) return;
+    authenticating.current = true;
     setUnlocking(true);
     try {
       if (await authenticateForFolio()) setLocked(false);
     } finally {
+      authenticating.current = false;
       setUnlocking(false);
     }
-  }, [lockEnabled]);
+  }, [appActive, lockEnabled]);
 
   useEffect(() => {
-    if (showLock && !unlockAttempted.current) {
+    if (appActive && showLock && !unlockAttempted.current) {
       unlockAttempted.current = true;
       void unlock();
     }
-  }, [showLock, unlock]);
+  }, [appActive, showLock, unlock]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      if (lockEnabled && state === 'background') {
-        unlockAttempted.current = false;
+      const active = state === 'active';
+      setAppActive(active);
+      if (lockEnabled && !active) {
         setLocked(true);
+        if (!authenticating.current) unlockAttempted.current = false;
       }
     });
     return () => subscription.remove();
@@ -154,31 +168,35 @@ function ProtectedApp() {
     );
   }
 
-  if (showLock) {
-    return (
-      <View style={styles.lockRoot}>
-        <View style={styles.lockMark}>
-          <LockKeyhole color={palette.lime} size={27} />
-        </View>
-        <Text style={styles.lockTitle}>Folio is locked</Text>
-        <Text style={styles.lockCopy}>Use your device security to view document previews.</Text>
-        <Pressable disabled={unlocking} onPress={unlock} style={styles.unlockButton}>
-          {unlocking ? (
-            <ActivityIndicator color={palette.ink} />
-          ) : (
-            <LockKeyhole color={palette.ink} size={18} />
-          )}
-          <Text style={styles.unlockText}>{unlocking ? 'Checking…' : 'Unlock Folio'}</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
   return (
-    <>
-      <CurrentScreen />
-      <UpdateOverlay />
-    </>
+    <View style={styles.protectedRoot}>
+      <View
+        accessibilityElementsHidden={!appActive || showLock}
+        importantForAccessibility={!appActive || showLock ? 'no-hide-descendants' : 'auto'}
+        style={styles.protectedRoot}>
+        <AppNavigator />
+        {Platform.OS === 'android' && <UpdateOverlay />}
+      </View>
+      {!appActive ? (
+        <PrivacyCurtain />
+      ) : showLock ? (
+        <View accessibilityViewIsModal style={styles.lockRoot}>
+          <View style={styles.lockMark}>
+            <LockKeyhole color={palette.lime} size={27} />
+          </View>
+          <Text style={styles.lockTitle}>Folio is locked</Text>
+          <Text style={styles.lockCopy}>Use your device security to view document previews.</Text>
+          <Pressable disabled={unlocking} onPress={unlock} style={styles.unlockButton}>
+            {unlocking ? (
+              <ActivityIndicator color={palette.ink} />
+            ) : (
+              <LockKeyhole color={palette.ink} size={18} />
+            )}
+            <Text style={styles.unlockText}>{unlocking ? 'Checking…' : 'Unlock Folio'}</Text>
+          </Pressable>
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -202,6 +220,9 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  protectedRoot: {
+    flex: 1,
+  },
   navigationRoot: {
     flex: 1,
     backgroundColor: palette.canvas,
@@ -231,11 +252,27 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   lockRoot: {
-    flex: 1,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 100,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
     backgroundColor: palette.canvas,
+  },
+  privacyCurtain: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 110,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.ink,
   },
   lockMark: {
     width: 68,

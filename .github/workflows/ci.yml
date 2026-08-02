@@ -101,10 +101,38 @@ jobs:
         working-directory: android
         run: ./gradlew :app:assembleDebug --build-cache --no-daemon
       - name: Upload debug APK
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: folio-pr-${{ github.event.pull_request.number || github.run_number }}-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  ios-unsigned:
+    name: iOS unsigned release build
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build and verify unsigned IPA
+        env:
+          IOS_ASSET: Folio-pr-${{ github.event.pull_request.number || github.run_number }}-ios-unsigned.ipa
+        run: ./scripts/build-unsigned-ios.sh "$GITHUB_WORKSPACE/$IOS_ASSET"
+      - name: Upload unsigned IPA for testing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: folio-pr-${{ github.event.pull_request.number || github.run_number }}-ios-unsigned
+          path: |
+            Folio-pr-${{ github.event.pull_request.number || github.run_number }}-ios-unsigned.ipa
+            Folio-pr-${{ github.event.pull_request.number || github.run_number }}-ios-unsigned.ipa.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -115,12 +143,14 @@ jobs:
       - pr-title
       - quality
       - android-debug
+      - ios-unsigned
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Consolidate required results
         env:
           ANDROID_RESULT: ${{ needs.android-debug.result }}
+          IOS_RESULT: ${{ needs.ios-unsigned.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           TITLE_RESULT: ${{ needs.pr-title.result }}
         run: |
@@ -129,6 +159,7 @@ jobs:
             'PR title': process.env.TITLE_RESULT,
             Quality: process.env.QUALITY_RESULT,
             'Android debug build': process.env.ANDROID_RESULT,
+            'iOS unsigned release build': process.env.IOS_RESULT,
           };
           const failed = Object.entries(results).filter(([, result]) => result !== 'success');
           for (const [name, result] of Object.entries(results)) {
