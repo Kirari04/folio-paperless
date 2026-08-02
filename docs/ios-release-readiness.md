@@ -13,6 +13,7 @@ Folio's iOS distribution is an unsigned iPhone build attached to GitHub Releases
 - An aggregate Apple privacy manifest based on the required-reason declarations in the installed Expo and React Native dependencies.
 - iOS-specific status-bar styling, no unused microphone permission, automatic build numbers derived from the package version, higher-contrast secondary colors, and larger effective press targets.
 - Android-only in-app updating. iOS links to GitHub Releases and does not initialize or advertise the APK installer.
+- Local processing notifications without the unused Apple remote-push entitlement, keeping personal-account resigning simple.
 
 ## Deliberately not required
 
@@ -30,8 +31,10 @@ Dark appearance and a complete migration of content UI to native navigation bars
 - Every pull request builds an unsigned Release IPA on a GitHub-hosted macOS 26 runner using Xcode 26 or newer. The IPA and SHA-256 file are retained as an Actions artifact for seven days so the exact PR can be signed and tested on hardware.
 - Release Please creates an unpublished draft. Android and iOS build independently from the exact release tag and upload their verified assets to that draft.
 - The iOS job rejects a mismatched bundle ID, version, build number, device family, or architecture; a missing JavaScript bundle or privacy manifest; and any app signature or embedded provisioning profile.
-- A final job verifies the signed APK, unsigned IPA, and both checksum files are present and non-empty before publishing. If either platform fails, the release remains a draft and can be rebuilt with `rebuild_tag=vX.Y.Z`.
+- The iOS job generates `altstore-source.json` from the archived app metadata and IPA. The source is compatible with AltStore Classic and SideStore, declares no special entitlements or notarized-marketplace ID, and includes the exact privacy permissions, minimum iOS version, size, and SHA-256 digest.
+- A final job verifies the signed APK, unsigned IPA, both checksum files, and AltStore/SideStore source are present and non-empty before publishing. If either platform fails, the release remains a draft and can be rebuilt with `rebuild_tag=vX.Y.Z`.
 - Release assets are named `Folio-vX.Y.Z-ios-unsigned.ipa` and `Folio-vX.Y.Z-ios-unsigned.ipa.sha256`.
+- The stable source URL is `https://github.com/Kirari04/folio-paperless/releases/latest/download/altstore-source.json`. Each new source retains compatible older entries so AltStore and SideStore can offer updates and fallback builds.
 
 ## Physical-device release gate
 
@@ -47,5 +50,7 @@ Before publishing the first IPA, download the PR's unsigned IPA artifact, sign i
 - VoiceOver reading order, Reduce Motion, Bold Text, Button Shapes, and the largest accessibility text sizes
 - Light status bar on camera/preview surfaces and dark status bar on light content surfaces
 - Upgrade over an older build without losing the Secure Store token or preferences
+- Add the stable source in current AltStore Classic and SideStore versions; install, launch, refresh/resign, and upgrade Folio through each tool without losing the Secure Store token or preferences
+- Confirm the store listing shows only Camera, Face ID, and Local Network permissions, shows no special entitlements, selects only compatible iOS versions, and rejects a deliberately altered IPA checksum
 
 The shared CI gate runs `npm ci`, typechecking, linting, tests, Expo diagnostics, and platform builds. The iOS job performs a clean prebuild, CocoaPods install, device Release archive, unsigned-package verification, and checksum generation.

@@ -108,7 +108,7 @@ jobs:
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
       - name: Confirm the release is an unpublished draft
@@ -192,7 +192,7 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Generate Android project
         env:
-          CI: '1'
+          CI: "1"
         run: npx expo prebuild --platform android --clean --no-install
       - name: Assemble signed release APK
         env:
@@ -321,14 +321,56 @@ jobs:
           console.log(`Release contract valid: ${expectedTag} (iOS build ${buildNumber}).`);
           NODE
       - name: Build and verify unsigned IPA
+        id: ios_build
         env:
           IOS_ASSET: Folio-${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}-ios-unsigned.ipa
         run: ./scripts/build-unsigned-ios.sh "$GITHUB_WORKSPACE/$IOS_ASSET"
+      - name: Generate verified AltStore and SideStore source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IOS_ASSET: Folio-${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}-ios-unsigned.ipa
+          IOS_METADATA: ${{ steps.ios_build.outputs.metadata_path }}
+        run: |
+          release_metadata="$RUNNER_TEMP/release-metadata.json"
+          release_notes="$RUNNER_TEMP/release-notes.md"
+          previous_directory="$RUNNER_TEMP/previous-altstore-source"
+          previous_source="$previous_directory/altstore-source.json"
+
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json body,createdAt > "$release_metadata"
+          jq -r '.body // ""' "$release_metadata" > "$release_notes"
+
+          latest_published_tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)"
+          if [ -n "$latest_published_tag" ] && gh release view "$latest_published_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq '.assets[].name' | grep -Fxq 'altstore-source.json'; then
+            mkdir -p "$previous_directory"
+            gh release download "$latest_published_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern 'altstore-source.json' \
+              --dir "$previous_directory"
+          fi
+
+          generator_args=(
+            --metadata "$IOS_METADATA"
+            --ipa "$GITHUB_WORKSPACE/$IOS_ASSET"
+            --repository "$GITHUB_REPOSITORY"
+            --tag "$RELEASE_TAG"
+            --date "$(jq -r .createdAt "$release_metadata")"
+            --release-notes "$release_notes"
+            --output "$GITHUB_WORKSPACE/altstore-source.json"
+          )
+          if [ -f "$previous_source" ]; then
+            generator_args+=(--previous "$previous_source")
+          fi
+          node scripts/generate-altstore-source.mjs "${generator_args[@]}"
       - name: Upload verified assets to draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IOS_ASSET: Folio-${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}-ios-unsigned.ipa
-        run: gh release upload "$RELEASE_TAG" "$IOS_ASSET" "$IOS_ASSET.sha256" --clobber --repo "$GITHUB_REPOSITORY"
+        run: gh release upload "$RELEASE_TAG" "$IOS_ASSET" "$IOS_ASSET.sha256" altstore-source.json --clobber --repo "$GITHUB_REPOSITORY"
 
   publish-release:
     name: Publish verified Android and iOS release
@@ -359,6 +401,7 @@ jobs:
             `Folio-${process.env.RELEASE_TAG}-android-universal.apk.sha256`,
             `Folio-${process.env.RELEASE_TAG}-ios-unsigned.ipa`,
             `Folio-${process.env.RELEASE_TAG}-ios-unsigned.ipa.sha256`,
+            'altstore-source.json',
           ];
           const assets = new Map(release.assets.map((asset) => [asset.name, asset]));
           const missing = required.filter((name) => !assets.has(name));
