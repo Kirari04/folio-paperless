@@ -91,7 +91,7 @@
         }
       ],
       [
-        "expo-notifications",
+        "./plugins/withLocalNotifications",
         {
           "color": "#17231B"
         }

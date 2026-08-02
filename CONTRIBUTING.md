@@ -74,11 +74,13 @@ Release Please maintains a release pull request on `main`. Merging it creates a 
 starts independent Android and iOS builds. Automation verifies the Android application ID,
 version, signature, and certificate fingerprint. It also verifies the iOS bundle ID, version,
 build number, iPhone-only device family, arm64 binary, production JavaScript bundle, privacy
-manifest, and absence of Apple signing material.
+manifest, and absence of Apple signing material. The iOS job derives an AltStore/SideStore source
+from the archived app and verifies its download URL, size, checksum, minimum iOS version,
+permissions, and non-notarized entitlement policy.
 
-The release remains a draft until the signed APK, unsigned IPA, and both SHA-256 files have been
-uploaded successfully. The IPA must be signed with the tester's own Apple credentials before it
-can be installed on an iPhone.
+The release remains a draft until the signed APK, unsigned IPA, both SHA-256 files, and
+`altstore-source.json` have been uploaded successfully. The IPA must be signed with the tester's
+own Apple credentials before it can be installed on an iPhone.
 
 If the build fails, the release stays in draft. A maintainer can run the `Release` workflow with
 `rebuild_tag=vX.Y.Z` after fixing the cause. The workflow refuses to modify an already-published

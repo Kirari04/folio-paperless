@@ -29,7 +29,7 @@ not affiliated with or endorsed by the Paperless-ngx project.
 - Recoverable deletion with a dedicated Paperless trash screen for restore and permanent erase.
 - Native file sharing/export plus document reprocessing and guarded deletion.
 - Optional biometric locking and local notifications when an upload finishes processing.
-- GitHub Releases with a signed Android APK, an unsigned iPhone IPA, checksums, and Android update checks.
+- GitHub Releases with a signed Android APK, an unsigned iPhone IPA, checksums, an AltStore/SideStore source, and Android update checks.
 - Reduce-Motion-aware page transitions, tactile press feedback, semantic haptics, and animated state changes.
 - Direct Paperless-ngx API v10 connectivity with credentials stored in Secure Store.
 - A polished demo workspace so the product can be evaluated without a server.
@@ -59,13 +59,35 @@ development build. It does not run completely in Expo Go.
 ## GitHub releases
 
 Each [GitHub Release](https://github.com/Kirari04/folio-paperless/releases) contains a signed
-universal Android APK, an unsigned iPhone IPA, and a SHA-256 checksum for each file. Folio is not
-distributed through Google Play or the App Store.
+universal Android APK, an unsigned iPhone IPA, a SHA-256 checksum for each file, and an
+`altstore-source.json` manifest. Folio is not distributed through Google Play or the App Store.
 
 The IPA intentionally contains no Apple provisioning profile or code signature. It cannot be
 installed directly on an iPhone: sign it with your own Apple ID or developer certificate using a
 sideloading tool, then install the signed copy. The IPA targets iPhone only and does not require
 the project maintainers to hold or distribute Apple credentials.
+
+### Install with AltStore or SideStore
+
+The stable Folio source URL is:
+
+```text
+https://github.com/Kirari04/folio-paperless/releases/latest/download/altstore-source.json
+```
+
+Add that URL as a source in AltStore Classic or SideStore. The same source works in both apps and
+offers future Folio versions as updates. SideStore users can also open this URL on their iPhone:
+
+```text
+sidestore://source?url=https%3A%2F%2Fgithub.com%2FKirari04%2Ffolio-paperless%2Freleases%2Flatest%2Fdownload%2Faltstore-source.json
+```
+
+The generated source is checked against the IPA's bundle ID, version, build number, minimum iOS
+version, size, SHA-256 digest, and privacy permissions before a release can be published. It
+deliberately omits `marketplaceID` because Folio is not notarized for an alternative marketplace.
+Signing validity, refresh requirements, and app limits depend on the Apple account and sideloading
+tool. Follow the current [AltStore](https://faq.altstore.io/altstore-classic/how-to-install-altstore-macos)
+or [SideStore](https://docs.sidestore.io/docs/installation/prerequisites) setup guide.
 
 Signed release builds check GitHub Releases once per day and also provide a manual check in
 **Settings → Software updates**. Folio never installs silently: it downloads only after confirmation,
@@ -100,6 +122,8 @@ npx expo start --dev-client
 ```
 
 Processing notifications are local. Remote push notifications are intentionally not configured.
+The iOS project therefore omits the Apple push entitlement so personal-account signing does not
+request an unused capability.
 The first GitHub-distributed iOS build is iPhone-only and requires an HTTPS Paperless address with
 a certificate trusted by the device. See the [iOS release-readiness checklist](docs/ios-release-readiness.md)
 for signing, sideloading, and the physical-device release gate.

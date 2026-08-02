@@ -149,12 +149,72 @@ checksum_path="$output_ipa.sha256"
   shasum -a 256 "$(basename "$output_ipa")" > "$(basename "$checksum_path")"
 )
 
+metadata_path="${output_ipa%.ipa}.metadata.json"
+INFO_PLIST="$info_plist" IOS_PROJECT_ROOT="$repository_root/ios" METADATA_PATH="$metadata_path" node <<'NODE'
+const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+
+function findEntitlementFiles(directory) {
+  const files = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === 'Pods') continue;
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...findEntitlementFiles(entryPath));
+    else if (entry.isFile() && entry.name.endsWith('.entitlements')) files.push(entryPath);
+  }
+  return files;
+}
+
+function readPlist(plistPath) {
+  return JSON.parse(
+    execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plistPath], {
+      encoding: 'utf8',
+    }),
+  );
+}
+
+const info = readPlist(process.env.INFO_PLIST);
+const privacy = Object.fromEntries(
+  Object.entries(info)
+    .filter(([key, value]) => /^NS.+UsageDescription$/.test(key) && typeof value === 'string')
+    .sort(([left], [right]) => left.localeCompare(right)),
+);
+const entitlements = [
+  ...new Set(
+    findEntitlementFiles(process.env.IOS_PROJECT_ROOT).flatMap((plistPath) =>
+      Object.keys(readPlist(plistPath)),
+    ),
+  ),
+].sort();
+const metadata = {
+  bundleIdentifier: info.CFBundleIdentifier,
+  version: info.CFBundleShortVersionString,
+  buildVersion: info.CFBundleVersion,
+  minOSVersion: info.MinimumOSVersion,
+  entitlements,
+  privacy,
+};
+
+if (!metadata.minOSVersion || Object.keys(privacy).length === 0) {
+  throw new Error('The archived app is missing AltStore compatibility metadata.');
+}
+if (entitlements.length > 0) {
+  throw new Error(
+    `The sideloading build must not require special entitlements; received ${entitlements.join(', ')}.`,
+  );
+}
+fs.writeFileSync(process.env.METADATA_PATH, `${JSON.stringify(metadata, null, 2)}\n`);
+NODE
+
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
     echo "ipa_path=$output_ipa"
     echo "checksum_path=$checksum_path"
+    echo "metadata_path=$metadata_path"
   } >> "$GITHUB_OUTPUT"
 fi
 
 echo "Created unsigned iPhone artifact: $output_ipa"
+echo "Created sideloading metadata: $metadata_path"
 echo "This IPA contains no provisioning profile or code signature and must be signed before installation."
