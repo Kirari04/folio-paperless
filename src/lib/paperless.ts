@@ -29,10 +29,7 @@ import { normalizePaperlessServerUrl, ServerUrlError } from '@/lib/server-url';
 import { getNativeMtlsTransport } from '@/lib/auth/native-mtls-module';
 import { assertNativeMtlsRequestUrl, validateNativeMtlsResponseUrl } from '@/lib/auth/native-mtls-adapter';
 import { NativeMtlsCapabilityError } from '@/lib/auth/session';
-import {
-  serializeUploadMetadata,
-  unsupportedStandardUploadClearMessage,
-} from '@/lib/upload-metadata';
+import { serializeUploadMetadata } from '@/lib/upload-metadata';
 import { buildVisibleTagOptions } from '@/lib/tag-hierarchy';
 import {
   appendPaperlessSavedViewRules,
@@ -1186,7 +1183,9 @@ export async function applyPaperlessUploadOwner(
   }
   if (requestedOwner.state === 'clear') {
     throw new PaperlessApiError(
-      unsupportedStandardUploadClearMessage('owner'),
+      translateRuntime('uploadValidation.standardClearUnsupported', {
+        field: translateRuntime('intake.owner'),
+      }),
       400,
     );
   }
