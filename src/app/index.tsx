@@ -41,7 +41,7 @@ export default function HomeScreen() {
     documents,
     totalDocuments,
     inboxDocuments,
-    connected,
+    profileConfigured,
     isSyncing,
     lastSynced,
     syncState,
@@ -55,7 +55,12 @@ export default function HomeScreen() {
   const [query, setQuery] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
-  const syncStatus = presentSyncStatus({ connected, lastSynced, online, syncState });
+  const syncStatus = presentSyncStatus({
+    connected: profileConfigured,
+    lastSynced,
+    online,
+    syncState,
+  });
   const syncStatusText = t(
     syncStatus.messageKey,
     syncStatus.lastSuccessfulSyncAt
@@ -79,11 +84,11 @@ export default function HomeScreen() {
         mimeType: file.mimeType,
         size: file.size,
       }));
-      const intake = connected
+      const intake = profileConfigured
         ? await prepareDocuments(files, 'picker')
         : await importDocuments(files, { source: 'picker' });
       await hapticFeedback('confirm');
-      if (connected && intake.batchId) {
+      if (profileConfigured && intake.batchId) {
         router.push({ pathname: '/intake', params: { batchId: intake.batchId } });
       } else {
         router.push('/inbox');
@@ -240,7 +245,7 @@ export default function HomeScreen() {
         </Pressable>
       </View>
 
-      {!!(importError || (connected && connectionError)) && (
+      {!!(importError || (profileConfigured && connectionError)) && (
         <View accessibilityLiveRegion="polite" style={styles.errorBanner}>
           <Text style={styles.errorText}>{importError || connectionError}</Text>
         </View>
@@ -265,10 +270,10 @@ export default function HomeScreen() {
       <View style={styles.statsCard}>
         <View>
           <Text style={styles.statsValue}>
-            {formatNumber(connected ? totalDocuments : documents.length)}
+            {formatNumber(profileConfigured ? totalDocuments : documents.length)}
           </Text>
           <Text style={styles.statsLabel}>
-            {connected ? t('home.libraryDocuments') : t('home.sampleDocuments')}
+            {profileConfigured ? t('home.libraryDocuments') : t('home.sampleDocuments')}
           </Text>
         </View>
         <View style={styles.statsDivider} />

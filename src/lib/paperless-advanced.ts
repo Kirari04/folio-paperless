@@ -121,14 +121,19 @@ export function normalizePermissionSet(value: unknown): PaperlessPermissionSet {
 
 function canonicalPermissionSet(value: unknown): PaperlessPermissionSet {
   const permissions = normalizePermissionSet(value);
+  const changeUsers = canonicalIds(permissions.change.users);
+  const changeGroups = canonicalIds(permissions.change.groups);
   return {
     view: {
-      users: canonicalIds(permissions.view.users),
-      groups: canonicalIds(permissions.view.groups),
+      // Paperless 3.0.x always grants view alongside change. Canonicalize the
+      // request before submission so exact readback verification compares with
+      // the server's stored ACL rather than an impossible change-only shape.
+      users: canonicalIds([...permissions.view.users, ...changeUsers]),
+      groups: canonicalIds([...permissions.view.groups, ...changeGroups]),
     },
     change: {
-      users: canonicalIds(permissions.change.users),
-      groups: canonicalIds(permissions.change.groups),
+      users: changeUsers,
+      groups: changeGroups,
     },
   };
 }
@@ -748,7 +753,7 @@ export function mergePermissionSets(
   current: PaperlessPermissionSet,
   addition: PaperlessPermissionSet,
 ): PaperlessPermissionSet {
-  return {
+  return canonicalPermissionSet({
     view: {
       users: mergeIds(current.view.users, addition.view.users),
       groups: mergeIds(current.view.groups, addition.view.groups),
@@ -757,7 +762,7 @@ export function mergePermissionSets(
       users: mergeIds(current.change.users, addition.change.users),
       groups: mergeIds(current.change.groups, addition.change.groups),
     },
-  };
+  });
 }
 
 export function planPermissionMutation(
@@ -780,7 +785,7 @@ export function planPermissionMutation(
   const permissions =
     mutation.mode === 'merge'
       ? mergePermissionSets(current.permissions!, mutation.permissions)
-      : normalizePermissionSet(mutation.permissions);
+      : canonicalPermissionSet(mutation.permissions);
   const userId = context.currentUserId;
   const groupIds = new Set(context.currentUserGroupIds?.filter(isPositiveInteger) ?? []);
   const hasDirectAccess = userId !== null && (
@@ -1677,6 +1682,76 @@ export class PaperlessAdvancedApi {
       };
     }
 
+    if (operation.kind === 'setOwner') {
+      const gate = capability(this.capabilities.permissions.document.change === true
+        ? ({ supported: true, source: 'ui-settings' } satisfies PaperlessCapabilityStatus)
+        : ({ supported: false, reason: this.capabilities.permissions.document.change === false ? 'permission-denied' : 'permission-unknown', source: 'ui-settings' } satisfies PaperlessCapabilityStatus), true);
+      if (!gate.supported) return gate;
+      if (operation.value !== null) assertPositiveId(operation.value, 'Owner ID');
+      const succeeded: number[] = [];
+      const failed: PaperlessOperationFailure[] = [];
+      await mapConcurrent(eligible, options.concurrency ?? 3, async (candidate) => {
+        try {
+          // A sparse document PATCH changes only the owner. In contrast,
+          // bulk set_permissions with merge=true cannot replace/clear an
+          // existing owner, while merge=false would replace the object's ACL.
+          const patched = await this.client.patch<unknown>(
+            `/api/documents/${candidate.remoteId}/`,
+            { owner: operation.value },
+            options.signal,
+          );
+          const patchConfirmsOwner = isRecord(patched.data)
+            && patched.data.id === candidate.remoteId
+            && (patched.data.owner ?? null) === operation.value;
+          try {
+            const verified = await this.client.get<unknown>(
+              `/api/documents/${candidate.remoteId}/`,
+              options.signal,
+            );
+            if (
+              !isRecord(verified.data)
+              || verified.data.id !== candidate.remoteId
+              || (verified.data.owner ?? null) !== operation.value
+            ) {
+              throw new PaperlessClientError('Paperless owner readback did not match the requested owner.', {
+                code: 'owner-verification-failed',
+                responseBody: verified.data,
+              });
+            }
+          } catch (error) {
+            // Transferring ownership can immediately remove the caller's
+            // object-level view permission. Paperless's successful PATCH
+            // response is serialized after the synchronous write, so its exact
+            // owner value is sufficient only for this expected loss-of-access
+            // readback case. Other readback failures remain per-target errors.
+            if (
+              !patchConfirmsOwner
+              || !(error instanceof PaperlessClientError)
+              || (error.status !== 403 && error.status !== 404)
+            ) {
+              throw error;
+            }
+          }
+          succeeded.push(candidate.remoteId);
+        } catch (error) {
+          failed.push(failureFromError(error, candidate));
+        }
+      });
+      return {
+        supported: true,
+        value: {
+          operation,
+          accepted: succeeded.length > 0,
+          pending: [],
+          succeeded,
+          failed,
+          skipped,
+          requestCount: eligible.length,
+          taskIds: [],
+        },
+      };
+    }
+
     const status =
       operation.kind === 'trash'
         ? this.capabilities.features.deleteDocuments
@@ -1708,17 +1783,6 @@ export class PaperlessAdvancedApi {
         method: 'modify_tags',
         parameters: { add_tags: [], remove_tags: uniquePositiveIds(operation.inboxTagIds, 'Inbox tag IDs') },
       };
-    } else if (operation.kind === 'setOwner') {
-      if (operation.value !== null) assertPositiveId(operation.value, 'Owner ID');
-      payload = {
-        documents: documentIds,
-        method: 'set_permissions',
-        parameters: {
-          owner: operation.value,
-          set_permissions: { view: { users: [], groups: [] }, change: { users: [], groups: [] } },
-          merge: true,
-        },
-      };
     } else {
       if (operation.value !== null) assertPositiveId(operation.value);
       const methods = {
@@ -1741,13 +1805,18 @@ export class PaperlessAdvancedApi {
     try {
       const response = await this.client.post<unknown>(path, payload, options.signal);
       const taskIds = extractTaskIds(response.data, response.headers);
+      const remainsPending = operation.kind === 'reprocess' || taskIds.length > 0;
       return {
         supported: true,
         value: {
           operation,
           accepted: true,
-          pending: taskIds.length ? documentIds : [],
-          succeeded: taskIds.length ? [] : documentIds,
+          // Paperless 3.0.0-3.0.5 queues one reprocess task per document but
+          // returns only { result: "OK" }. Without task IDs, acceptance is not
+          // terminal success; the durable bulk path records uncorrelated
+          // pending items as non-retryable attention work.
+          pending: remainsPending ? documentIds : [],
+          succeeded: remainsPending ? [] : documentIds,
           failed: [],
           skipped,
           requestCount: 1,
@@ -1924,6 +1993,16 @@ export class PaperlessAdvancedApi {
         reason: permission === false ? 'permission-denied' : 'permission-unknown',
       };
     }
+    const unconfirmedPlan = planPermissionMutation(current, {
+      ...mutation,
+      confirmSelfLockout: false,
+    }, {
+      currentUserId: this.capabilities.permissions.currentUserId,
+      isSuperuser: this.capabilities.permissions.isSuperuser,
+    });
+    const confirmedSelfLockout = mutation.confirmSelfLockout === true
+      && !unconfirmedPlan.supported
+      && unconfirmedPlan.reason === 'self-lockout';
     let plan = planPermissionMutation(current, mutation, {
       currentUserId: this.capabilities.permissions.currentUserId,
       isSuperuser: this.capabilities.permissions.isSuperuser,
@@ -1941,7 +2020,30 @@ export class PaperlessAdvancedApi {
     if (!plan.supported) return plan;
     const path = `${PERMISSION_RESOURCE_PATHS[resource]}${id}/`;
     await this.client.patch(path, plan.value, signal);
-    const verified = await this.client.get<unknown>(`${path}?full_perms=true`, signal);
+    let verified: { data: unknown };
+    try {
+      verified = await this.client.get<unknown>(`${path}?full_perms=true`, signal);
+    } catch (error) {
+      if (
+        !confirmedSelfLockout
+        || !(error instanceof PaperlessClientError)
+        || (error.status !== 403 && error.status !== 404)
+      ) {
+        throw error;
+      }
+      // The mutation returned success before the independent read. A confirmed
+      // self-lockout is expected to make that read impossible, so report the
+      // applied canonical state as intentionally no longer readable instead of
+      // surfacing a failure that invites an unsafe blind retry.
+      return {
+        supported: true,
+        value: {
+          ownerId: plan.value.owner,
+          permissions: canonicalPermissionSet(plan.value.set_permissions),
+          verified: false,
+        },
+      };
+    }
     if (!isRecord(verified.data)) {
       throw new PaperlessClientError('Paperless returned invalid permissions after update.', {
         code: 'invalid-response',

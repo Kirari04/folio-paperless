@@ -200,7 +200,7 @@ export default function ScanScreen() {
   const [completedSwitchId, setCompletedSwitchId] = useState<string | null>(null);
   const {
     activeProfile,
-    connected,
+    profileConfigured,
     importDocument,
     isBootstrapping,
     prepareDocuments,
@@ -352,9 +352,9 @@ export default function ScanScreen() {
         ? { ...scanSession, pdfUri: file.uri }
         : scanSession;
       if (preparedSession !== scanSession) rememberScanSession(preparedSession);
-      setSavingLabel(connected ? t('scan.securingCopy') : t('scan.adding'));
-      const intake = connected ? await prepareDocuments([file], 'camera') : null;
-      if (!connected) await importDocument(file);
+      setSavingLabel(profileConfigured ? t('scan.securingCopy') : t('scan.adding'));
+      const intake = profileConfigured ? await prepareDocuments([file], 'camera') : null;
+      if (!profileConfigured) await importDocument(file);
       await hapticFeedback('confirm');
       scanSessionRef.current = null;
       await discardSmartScan(preparedSession);
@@ -397,7 +397,7 @@ export default function ScanScreen() {
     if (result.canceled) return;
     setDestinationVisible(false);
     setIsSaving(true);
-    setSavingLabel(connected ? t('scan.securingCopies') : t('scan.adding'));
+    setSavingLabel(profileConfigured ? t('scan.securingCopies') : t('scan.adding'));
     setScanError(null);
     try {
       const files = result.assets.map((file) => ({
@@ -406,8 +406,8 @@ export default function ScanScreen() {
         mimeType: file.mimeType,
         size: file.size,
       }));
-      const intake = connected ? await prepareDocuments(files, 'picker') : null;
-      if (!connected) await Promise.all(files.map((file) => importDocument(file)));
+      const intake = profileConfigured ? await prepareDocuments(files, 'picker') : null;
+      if (!profileConfigured) await Promise.all(files.map((file) => importDocument(file)));
       await hapticFeedback('confirm');
       if (intake?.batchId) {
         router.replace({ pathname: '/intake', params: { batchId: intake.batchId } });
@@ -574,10 +574,10 @@ export default function ScanScreen() {
                 {isSaving
                   ? savingLabel
                   : scanError
-                    ? connected
+                    ? profileConfigured
                       ? t('scan.retryUpload')
                       : t('scan.retryAdding')
-                    : connected
+                    : profileConfigured
                     ? pageCount === 1
                       ? t('scan.uploadOne')
                       : t('scan.uploadMany', { pages: pluralPages(pageCount, t, formatNumber) })

@@ -39,12 +39,21 @@ test('background work fails closed throughout a pending profile removal', () => 
   );
   assert.match(
     backgroundRuntimeSource,
-    /const executionGuard = async \(\) => \{[\s\S]*if \(await profileRemovalPending\(\)\) return false;/,
+    /const executionGuard = async \(\) => \{[\s\S]*if \(await profileRemovalPending\(\)\) return false;[\s\S]*const before = await profiles\.getSnapshot\(\);[\s\S]*const currentSecrets = await secrets\.read\(profileId\);[\s\S]*const after = await profiles\.getSnapshot\(\);[\s\S]*after\.revision !== before\.revision[\s\S]*if \(await profileRemovalPending\(\)\) return false;/,
   );
   assert.match(
     backgroundRuntimeSource,
     /await repository\.initialize\(\);[\s\S]*if \(await profileRemovalPending\(\)\) return 'failed' as const;[\s\S]*profiles\.getSnapshot\(\)/,
   );
+});
+
+test('background work never replays a legacy identity-provider token to Paperless', () => {
+  assert.match(
+    backgroundRuntimeSource,
+    /if \(secret\.oidc\) return null;[\s\S]*const token = secret\.apiToken \?\? '';[\s\S]*authorizationScheme: 'Token'/,
+  );
+  assert.doesNotMatch(backgroundRuntimeSource, /secret\.oidc\?\.accessToken/);
+  assert.doesNotMatch(backgroundRuntimeSource, /authorizationScheme: secret\.oidc \? 'Bearer'/);
 });
 
 test('background registration clamps Android minimum interval and never promises a schedule', async () => {

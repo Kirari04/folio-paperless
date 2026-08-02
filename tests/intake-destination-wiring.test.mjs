@@ -14,6 +14,7 @@ const rejectionListSource = await readFile(
   'utf8',
 );
 const appContextSource = await readFile(new URL('../src/context/app-context.tsx', import.meta.url), 'utf8');
+const paperlessSource = await readFile(new URL('../src/lib/paperless.ts', import.meta.url), 'utf8');
 
 test('incoming shares wait for a completed, rendered destination switch before staging', () => {
   assert.match(gatewaySource, /await switchProfile\(profileId\)/);
@@ -28,6 +29,19 @@ test('incoming payloads are cleared only after intake or an explicit discard act
   assert.match(gatewaySource, /await prepareDocuments\(candidates, 'share'\)[\s\S]*clearSharedPayloads\(\)/);
 });
 
+test('native share resolver errors never expose untrusted provider details', () => {
+  assert.match(gatewaySource, /resolveError \? t\('share\.stagingError'\) : null/);
+  assert.doesNotMatch(gatewaySource, /resolveError\?\.message/);
+});
+
+test('plain-text share contents survive the app-context intake boundary', () => {
+  assert.match(appContextSource, /type ImportFile = \{[\s\S]*textContent\?: string/);
+  assert.match(
+    appContextSource,
+    /files\.map\(\(file\) => \(\{[\s\S]*textContent: file\.textContent,[\s\S]*\}\)\)/,
+  );
+});
+
 test('intake rejection notices survive picker navigation and present every filename with its reason', () => {
   assert.match(appContextSource, /intakeRejectionBatches/);
   assert.match(appContextSource, /name: sanitizeIntakeFilename\(item\.candidate\.name\)/);
@@ -37,7 +51,7 @@ test('intake rejection notices survive picker navigation and present every filen
   assert.match(appContextSource, /writeTasks\(durableTasks\)/);
   assert.match(appContextSource, /retryable: false/);
   assert.match(appContextSource, /return \{ \.\.\.staged, accepted, batchId \}/);
-  assert.match(homeSource, /connected && intake\.batchId[\s\S]*pathname: '\/intake'/);
+  assert.match(homeSource, /profileConfigured && intake\.batchId[\s\S]*pathname: '\/intake'/);
   assert.ok(scanSource.match(/intake\?\.batchId/g)?.length >= 2);
   assert.match(intakeEditorSource, /notice\.batchId === batchId/);
   assert.match(intakeEditorSource, /<IntakeRejectionList/);
@@ -49,8 +63,8 @@ test('intake rejection notices survive picker navigation and present every filen
 
 test('an all-invalid incoming share stays visible with per-file retry and discard actions', () => {
   const allInvalidBranch = gatewaySource.slice(
-    gatewaySource.indexOf('if (connected && !result.accepted.length)'),
-    gatewaySource.indexOf('clearSharedPayloads();', gatewaySource.indexOf('if (connected && !result.accepted.length)')),
+    gatewaySource.indexOf('if (profileConfigured && !result.accepted.length)'),
+    gatewaySource.indexOf('clearSharedPayloads();', gatewaySource.indexOf('if (profileConfigured && !result.accepted.length)')),
   );
   assert.match(allInvalidBranch, /setRejectedItems/);
   assert.doesNotMatch(allInvalidBranch, /setVisible\(false\)|clearSharedPayloads/);
@@ -117,4 +131,15 @@ test('foreground upload completion fetches owner capabilities only for an explic
     appContextSource,
     /const requestedOwner = task\.metadata\?\.owner;[\s\S]*if \(!requestedOwner \|\| requestedOwner\.state === 'unset'\) return;[\s\S]*const capabilities = await liveCreationCapabilities\(\)/,
   );
+});
+
+test('post-upload owner verification recognizes an exact visibility-losing transfer', () => {
+  const ownerPath = paperlessSource.slice(
+    paperlessSource.indexOf('export async function applyPaperlessUploadOwner'),
+    paperlessSource.indexOf('export async function updatePaperlessDocument'),
+  );
+  assert.match(ownerPath, /const patched = await sendJson<ApiDocument>/);
+  assert.match(ownerPath, /patchConfirmsOwner/);
+  assert.match(ownerPath, /error\.status === 403 \|\| error\.status === 404/);
+  assert.match(ownerPath, /\(verified\.owner \?\? null\) !== ownerId/);
 });

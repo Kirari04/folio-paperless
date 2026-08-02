@@ -36,7 +36,7 @@ export function AppShell({
   showDemoBanner = true,
   showNav = true,
 }: AppShellProps) {
-  const { connected } = useApp();
+  const { profileConfigured } = useApp();
 
   return (
     <View style={styles.root}>
@@ -65,12 +65,12 @@ export function AppShell({
               !showNav && styles.scrollContentWithoutNav,
               contentStyle,
             ]}>
-            {!connected && showDemoBanner && <DemoModeBanner />}
+            {!profileConfigured && showDemoBanner && <DemoModeBanner />}
             {children}
           </ScrollView>
         ) : (
           <View style={[styles.staticContent, contentStyle]}>
-            {!connected && showDemoBanner && <DemoModeBanner />}
+            {!profileConfigured && showDemoBanner && <DemoModeBanner />}
             {children}
           </View>
         )}

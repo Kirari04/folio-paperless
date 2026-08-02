@@ -116,6 +116,7 @@ const DocumentsScreen = memo(function DocumentsScreen({
   const { width } = useWindowDimensions();
   const {
     connected,
+    profileConfigured,
     credentials,
     activeProfile,
     documents,
@@ -837,7 +838,7 @@ const DocumentsScreen = memo(function DocumentsScreen({
 
   const listHeader = (
     <View style={styles.listHeader}>
-      {!connected && <DemoModeBanner />}
+      {!profileConfigured && <DemoModeBanner />}
       <View style={styles.header}>
         {selectionActive ? (
           <>
@@ -896,7 +897,7 @@ const DocumentsScreen = memo(function DocumentsScreen({
           autoCorrect={false}
           onChangeText={updateQuery}
           accessibilityLabel={t('library.searchLabel')}
-          placeholder={connected ? t('library.searchConnected') : t('library.searchDemo')}
+          placeholder={profileConfigured ? t('library.searchConnected') : t('library.searchDemo')}
           placeholderTextColor={palette.faint}
           returnKeyType="search"
           style={styles.searchInput}

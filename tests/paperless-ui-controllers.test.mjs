@@ -214,6 +214,83 @@ test('durable bulk submission sends only pending failed targets', async () => {
   assert.equal(submission.paperlessTaskId, 'paperless-retry-task');
 });
 
+test('durable owner retries use sparse per-document PATCH and exact readback', async () => {
+  for (const owner of [12, null]) {
+    const requests = [];
+    const submission = await submitPersistentBulkTask({}, {
+      schemaVersion: 2,
+      id: `owner-${owner ?? 'clear'}`,
+      profileId: 'profile-a',
+      kind: 'bulk-operation',
+      stage: 'queued',
+      source: 'unknown',
+      progress: 0,
+      retryCount: 1,
+      bulk: {
+        operation: { kind: 'setOwner', value: owner },
+        targets: [{ localId: 'one', remoteDocumentId: 4 }],
+      },
+      result: {
+        bulkOutcomes: [{ localId: 'one', remoteDocumentId: 4, state: 'pending' }],
+      },
+      createdAt: '2026-08-02T12:00:00.000Z',
+      updatedAt: '2026-08-02T12:01:00.000Z',
+    }, {
+      async request(path, init) {
+        requests.push({ path, method: init.method, body: init.body });
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          async text() { return JSON.stringify({ id: 4, owner }); },
+        };
+      },
+    });
+
+    assert.deepEqual(requests.map(({ path, method }) => [path, method]), [
+      ['/api/documents/4/', 'PATCH'],
+      ['/api/documents/4/', 'GET'],
+    ]);
+    assert.deepEqual(JSON.parse(requests[0].body), { owner });
+    assert.equal(submission.paperlessTaskId, undefined);
+    assert.match(submission.summary, /verified/);
+  }
+});
+
+test('durable owner retry accepts only confirmed visibility loss and rejects server failures', async () => {
+  const task = {
+    schemaVersion: 2,
+    id: 'owner-lockout',
+    profileId: 'profile-a',
+    kind: 'bulk-operation',
+    stage: 'queued',
+    source: 'unknown',
+    progress: 0,
+    retryCount: 1,
+    bulk: {
+      operation: { kind: 'setOwner', value: 12 },
+      targets: [{ localId: 'one', remoteDocumentId: 4 }],
+    },
+    result: { bulkOutcomes: [{ localId: 'one', remoteDocumentId: 4, state: 'pending' }] },
+    createdAt: '2026-08-02T12:00:00.000Z',
+    updatedAt: '2026-08-02T12:01:00.000Z',
+  };
+  const run = (readbackStatus) => submitPersistentBulkTask({}, task, {
+    async request(_path, init) {
+      const patch = init.method === 'PATCH';
+      return {
+        ok: patch,
+        status: patch ? 200 : readbackStatus,
+        headers: new Headers(),
+        async text() { return patch ? JSON.stringify({ id: 4, owner: 12 }) : '{}'; },
+      };
+    },
+  });
+
+  await assert.doesNotReject(() => run(403));
+  await assert.rejects(() => run(503), (error) => error.status === 503);
+});
+
 test('bulk mutation rejects mismatched and stale profile executions before the API sink', async () => {
   let calls = 0;
   const api = {

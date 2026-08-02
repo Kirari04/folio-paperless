@@ -1356,16 +1356,14 @@ test('builds isolated token headers and applies a custom Authorization override 
   assert.deepEqual(result.warnings, ['authorization-overrides-profile-auth']);
 });
 
-test('builds a Bearer header from only the requested profile OIDC secret', async () => {
+test('never builds a Paperless authorization header from a legacy IdP token', async () => {
   const secrets = new ProfileSecretStore(new MemoryStore());
   await secrets.write('profile-oidc', {
     oidc: { accessToken: 'oidc-access-token', idToken: 'oidc-id-token' },
   });
   await secrets.write('profile-token', { apiToken: 'paperless-token' });
 
-  assert.deepEqual((await secrets.requestHeaders('profile-oidc')).headers, {
-    authorization: 'Bearer oidc-access-token',
-  });
+  assert.deepEqual((await secrets.requestHeaders('profile-oidc')).headers, {});
   assert.deepEqual((await secrets.requestHeaders('profile-token')).headers, {
     authorization: 'Token paperless-token',
   });
