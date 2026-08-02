@@ -1,12 +1,31 @@
 import Foundation
 
+enum FolioMtlsCertificateSignatureAlgorithm {
+  case rsaPkcs1Sha1
+  case rsaPkcs1Sha224
+  case rsaPkcs1Sha256
+  case rsaPkcs1Sha384
+  case rsaPkcs1Sha512
+  case rsaPssSha1
+  case rsaPssSha224
+  case rsaPssSha256
+  case rsaPssSha384
+  case rsaPssSha512
+  case ecdsaSha1
+  case ecdsaSha224
+  case ecdsaSha256
+  case ecdsaSha384
+  case ecdsaSha512
+}
+
 struct FolioMtlsCertificateFields {
   let subject: String?
   let issuer: String?
-  let subjectDer: Data
-  let issuerDer: Data
   let notBefore: Date
   let notAfter: Date
+  let signedData: Data
+  let signature: Data
+  let signatureAlgorithm: FolioMtlsCertificateSignatureAlgorithm?
 }
 
 enum FolioMtlsCertificateParser {
@@ -96,9 +115,12 @@ enum FolioMtlsCertificateParser {
 
     var certificateReader = Reader(data: certificate.contents)
     let toBeSigned = try certificateReader.read(expectedTag: 0x30)
-    _ = try certificateReader.read(expectedTag: 0x30) // signature algorithm
-    _ = try certificateReader.read(expectedTag: 0x03) // signature value
+    let signatureAlgorithm = try certificateReader.read(expectedTag: 0x30)
+    let signatureValue = try certificateReader.read(expectedTag: 0x03)
     guard certificateReader.isAtEnd else { throw ParserError.malformedCertificate }
+    guard signatureValue.contents.count > 1, signatureValue.contents.first == 0 else {
+      throw ParserError.malformedCertificate
+    }
 
     var fields = Reader(data: toBeSigned.contents)
     if fields.nextTag == 0xa0 {
@@ -120,11 +142,109 @@ enum FolioMtlsCertificateParser {
     return FolioMtlsCertificateFields(
       subject: try? parseName(subject),
       issuer: try? parseName(issuer),
-      subjectDer: subject.encoded,
-      issuerDer: issuer.encoded,
       notBefore: notBefore,
-      notAfter: notAfter
+      notAfter: notAfter,
+      signedData: toBeSigned.encoded,
+      signature: Data(signatureValue.contents.dropFirst()),
+      signatureAlgorithm: try? parseSignatureAlgorithm(signatureAlgorithm)
     )
+  }
+
+  private static func parseSignatureAlgorithm(
+    _ element: Element
+  ) throws -> FolioMtlsCertificateSignatureAlgorithm? {
+    let identifier = try parseAlgorithmIdentifier(element)
+    switch identifier.oid {
+    case "1.2.840.113549.1.1.5": return .rsaPkcs1Sha1
+    case "1.2.840.113549.1.1.14": return .rsaPkcs1Sha224
+    case "1.2.840.113549.1.1.11": return .rsaPkcs1Sha256
+    case "1.2.840.113549.1.1.12": return .rsaPkcs1Sha384
+    case "1.2.840.113549.1.1.13": return .rsaPkcs1Sha512
+    case "1.2.840.113549.1.1.10": return try parseRsaPss(identifier.parameters)
+    case "1.2.840.10045.4.1": return .ecdsaSha1
+    case "1.2.840.10045.4.3.1": return .ecdsaSha224
+    case "1.2.840.10045.4.3.2": return .ecdsaSha256
+    case "1.2.840.10045.4.3.3": return .ecdsaSha384
+    case "1.2.840.10045.4.3.4": return .ecdsaSha512
+    default: return nil
+    }
+  }
+
+  private static func parseAlgorithmIdentifier(
+    _ element: Element
+  ) throws -> (oid: String, parameters: Element?) {
+    guard element.tag == 0x30 else { throw ParserError.malformedCertificate }
+    var reader = Reader(data: element.contents)
+    let oid = try oidString(reader.read(expectedTag: 0x06).contents)
+    let parameters = reader.isAtEnd ? nil : try reader.read()
+    guard reader.isAtEnd else { throw ParserError.malformedCertificate }
+    return (oid, parameters)
+  }
+
+  private static func parseRsaPss(
+    _ parameters: Element?
+  ) throws -> FolioMtlsCertificateSignatureAlgorithm? {
+    guard let parameters, parameters.tag == 0x30 else {
+      throw ParserError.malformedCertificate
+    }
+
+    // RFC 4055 defaults are SHA-1, MGF1-SHA-1, a 20-byte salt, and trailer 1.
+    var hashOid = "1.3.14.3.2.26"
+    var maskHashOid = "1.3.14.3.2.26"
+    var saltLength = 20
+    var trailerField = 1
+    var seen = Set<UInt8>()
+    var reader = Reader(data: parameters.contents)
+    while !reader.isAtEnd {
+      let field = try reader.read()
+      guard (0xa0...0xa3).contains(field.tag), seen.insert(field.tag).inserted else {
+        throw ParserError.malformedCertificate
+      }
+      var explicit = Reader(data: field.contents)
+      switch field.tag {
+      case 0xa0:
+        let hash = try parseAlgorithmIdentifier(explicit.read(expectedTag: 0x30))
+        hashOid = hash.oid
+      case 0xa1:
+        let mask = try parseAlgorithmIdentifier(explicit.read(expectedTag: 0x30))
+        guard mask.oid == "1.2.840.113549.1.1.8", let maskParameters = mask.parameters else {
+          return nil
+        }
+        maskHashOid = try parseAlgorithmIdentifier(maskParameters).oid
+      case 0xa2:
+        saltLength = try positiveInteger(explicit.read(expectedTag: 0x02).contents)
+      case 0xa3:
+        trailerField = try positiveInteger(explicit.read(expectedTag: 0x02).contents)
+      default:
+        throw ParserError.malformedCertificate
+      }
+      guard explicit.isAtEnd else { throw ParserError.malformedCertificate }
+    }
+
+    guard hashOid == maskHashOid, trailerField == 1 else { return nil }
+    switch (hashOid, saltLength) {
+    case ("1.3.14.3.2.26", 20): return .rsaPssSha1
+    case ("2.16.840.1.101.3.4.2.4", 28): return .rsaPssSha224
+    case ("2.16.840.1.101.3.4.2.1", 32): return .rsaPssSha256
+    case ("2.16.840.1.101.3.4.2.2", 48): return .rsaPssSha384
+    case ("2.16.840.1.101.3.4.2.3", 64): return .rsaPssSha512
+    default: return nil
+    }
+  }
+
+  private static func positiveInteger(_ data: Data) throws -> Int {
+    let bytes = [UInt8](data)
+    guard !bytes.isEmpty, bytes[0] & 0x80 == 0 else {
+      throw ParserError.malformedCertificate
+    }
+    var value = 0
+    for byte in bytes {
+      guard value <= (Int.max - Int(byte)) / 256 else {
+        throw ParserError.malformedCertificate
+      }
+      value = value * 256 + Int(byte)
+    }
+    return value
   }
 
   private static func parseTime(_ element: Element) throws -> Date {

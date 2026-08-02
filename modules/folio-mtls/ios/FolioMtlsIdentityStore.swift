@@ -51,7 +51,9 @@ final class FolioMtlsIdentityStore {
         message: "The PKCS#12 file does not contain a client identity."
       )
     }
-    let importedChain = (imported[kSecImportItemCertChain as String] as? [SecCertificate]) ?? []
+    guard let importedTrust = secTrust(imported[kSecImportItemTrust as String]) else {
+      throw invalidChain("The PKCS#12 identity does not contain an evaluable certificate chain.")
+    }
     let leaf = try certificate(for: identity)
     let fingerprint = fingerprintSha256(leaf)
     if let existing = try list().first(where: {
@@ -74,7 +76,7 @@ final class FolioMtlsIdentityStore {
       throw FolioMtlsNativeFailure(code: "IMPORT", message: "The identity could not be saved in Keychain.")
     }
     do {
-      let chain = try normalizedChain(importedChain, leaf: leaf)
+      let chain = try intermediates(from: importedTrust, leaf: leaf)
       try saveChain(chain, identifier: identifier)
       guard let stored = try load(reference) else {
         throw FolioMtlsNativeFailure(code: "IDENTITY_NOT_FOUND", message: "The saved identity could not be reopened.")
@@ -179,45 +181,174 @@ final class FolioMtlsIdentityStore {
     return certificate
   }
 
-  private func normalizedChain(
-    _ imported: [SecCertificate],
+  private func intermediates(
+    from trust: SecTrust,
     leaf: SecCertificate
   ) throws -> [SecCertificate] {
     let leafData = SecCertificateCopyData(leaf) as Data
-    let leafFields = try FolioMtlsCertificateParser.parse(leafData)
-    var seen = Set<Data>([leafData])
-    var candidates: [(certificate: SecCertificate, fields: FolioMtlsCertificateFields)] = []
-    // URLCredential already receives the leaf through `identity`; its
-    // certificates argument contains only its ordered intermediates. Ignore
-    // roots and unrelated PKCS#12 extras instead of disclosing them to a peer.
-    for certificate in imported {
-      let data = SecCertificateCopyData(certificate) as Data
-      guard seen.insert(data).inserted,
-        let fields = try? FolioMtlsCertificateParser.parse(data)
-      else { continue }
-      candidates.append((certificate, fields))
+    let evaluated = try certificateChain(from: trust)
+    guard let first = evaluated.first,
+      SecCertificateCopyData(first) as Data == leafData
+    else {
+      throw invalidChain("The evaluated client certificate chain does not begin with its identity.")
     }
 
-    var expectedSubject = leafFields.issuerDer
-    var intermediates: [SecCertificate] = []
-    while true {
-      let matches = candidates.filter { $0.fields.subjectDer == expectedSubject }
-      guard matches.count <= 1 else {
-        throw FolioMtlsNativeFailure(
-          code: "IMPORT",
-          message: "The client certificate chain is ambiguous."
-        )
-      }
-      guard let next = matches.first else { break }
-      if next.fields.subjectDer == next.fields.issuerDer { break }
-      intermediates.append(next.certificate)
-      expectedSubject = next.fields.issuerDer
-      let nextData = SecCertificateCopyData(next.certificate) as Data
-      candidates.removeAll { candidate in
-        SecCertificateCopyData(candidate.certificate) as Data == nextData
+    var seen = Set<Data>()
+    for certificate in evaluated {
+      let data = SecCertificateCopyData(certificate) as Data
+      guard seen.insert(data).inserted else {
+        throw invalidChain("The evaluated client certificate chain contains a duplicate certificate.")
       }
     }
-    return intermediates
+
+    // SecTrust establishes the ordered path cryptographically. Rechecking each
+    // edge with an anchor-limited two-certificate trust also protects chains
+    // reconstructed from persisted public certificates below.
+    if evaluated.count > 1 {
+      for index in 0..<(evaluated.count - 1) {
+        guard try certificate(evaluated[index], wasIssuedBy: evaluated[index + 1]) else {
+          throw invalidChain("The evaluated client certificate chain has an invalid issuer relationship.")
+        }
+      }
+    }
+
+    var result = Array(evaluated.dropFirst())
+    // URLCredential receives the leaf through `identity`; its certificate list
+    // therefore contains only intermediates. Omit only a self-issued certificate
+    // whose signature verifies under its own public key. A cross-signed or local
+    // non-self-signed anchor may still be required by the peer and must remain.
+    if let last = result.last, isCryptographicallySelfSigned(last) {
+      result.removeLast()
+    }
+    return result
+  }
+
+  private func rebuiltIntermediates(
+    _ stored: [SecCertificate],
+    leaf: SecCertificate
+  ) throws -> [SecCertificate] {
+    let leafData = SecCertificateCopyData(leaf) as Data
+    var seen = Set<Data>([leafData])
+    let candidates = stored.filter { certificate in
+      seen.insert(SecCertificateCopyData(certificate) as Data).inserted
+    }
+    guard !candidates.isEmpty else { return [] }
+
+    let trust = try makeTrust(certificates: [leaf] + candidates)
+    guard SecTrustSetNetworkFetchAllowed(trust, false) == errSecSuccess else {
+      throw invalidChain("The saved client certificate chain could not be evaluated safely.")
+    }
+    _ = SecTrustEvaluateWithError(trust, nil)
+    return try intermediates(from: trust, leaf: leaf)
+  }
+
+  private func certificate(
+    _ certificate: SecCertificate,
+    wasIssuedBy issuer: SecCertificate
+  ) throws -> Bool {
+    let trust = try makeTrust(certificates: [certificate, issuer])
+    guard SecTrustSetAnchorCertificates(trust, [issuer] as CFArray) == errSecSuccess,
+      SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess,
+      SecTrustSetNetworkFetchAllowed(trust, false) == errSecSuccess,
+      SecTrustSetVerifyDate(trust, try verificationDate(for: [certificate, issuer]) as CFDate) == errSecSuccess,
+      SecTrustEvaluateWithError(trust, nil)
+    else {
+      return false
+    }
+
+    let evaluated = try certificateChain(from: trust)
+    return evaluated.count == 2
+      && SecCertificateCopyData(evaluated[0]) as Data == SecCertificateCopyData(certificate) as Data
+      && SecCertificateCopyData(evaluated[1]) as Data == SecCertificateCopyData(issuer) as Data
+  }
+
+  private func isCryptographicallySelfSigned(_ certificate: SecCertificate) -> Bool {
+    guard
+      let normalizedSubject = SecCertificateCopyNormalizedSubjectSequence(certificate) as Data?,
+      let normalizedIssuer = SecCertificateCopyNormalizedIssuerSequence(certificate) as Data?,
+      normalizedSubject == normalizedIssuer,
+      let fields = try? FolioMtlsCertificateParser.parse(SecCertificateCopyData(certificate) as Data),
+      let signatureAlgorithm = fields.signatureAlgorithm,
+      let publicKey = SecCertificateCopyKey(certificate)
+    else { return false }
+    let algorithm = securityAlgorithm(signatureAlgorithm)
+    guard SecKeyIsAlgorithmSupported(publicKey, .verify, algorithm) else { return false }
+    return SecKeyVerifySignature(
+      publicKey,
+      algorithm,
+      fields.signedData as CFData,
+      fields.signature as CFData,
+      nil
+    )
+  }
+
+  private func securityAlgorithm(
+    _ algorithm: FolioMtlsCertificateSignatureAlgorithm
+  ) -> SecKeyAlgorithm {
+    switch algorithm {
+    case .rsaPkcs1Sha1: return .rsaSignatureMessagePKCS1v15SHA1
+    case .rsaPkcs1Sha224: return .rsaSignatureMessagePKCS1v15SHA224
+    case .rsaPkcs1Sha256: return .rsaSignatureMessagePKCS1v15SHA256
+    case .rsaPkcs1Sha384: return .rsaSignatureMessagePKCS1v15SHA384
+    case .rsaPkcs1Sha512: return .rsaSignatureMessagePKCS1v15SHA512
+    case .rsaPssSha1: return .rsaSignatureMessagePSSSHA1
+    case .rsaPssSha224: return .rsaSignatureMessagePSSSHA224
+    case .rsaPssSha256: return .rsaSignatureMessagePSSSHA256
+    case .rsaPssSha384: return .rsaSignatureMessagePSSSHA384
+    case .rsaPssSha512: return .rsaSignatureMessagePSSSHA512
+    case .ecdsaSha1: return .ecdsaSignatureMessageX962SHA1
+    case .ecdsaSha224: return .ecdsaSignatureMessageX962SHA224
+    case .ecdsaSha256: return .ecdsaSignatureMessageX962SHA256
+    case .ecdsaSha384: return .ecdsaSignatureMessageX962SHA384
+    case .ecdsaSha512: return .ecdsaSignatureMessageX962SHA512
+    }
+  }
+
+  private func verificationDate(for certificates: [SecCertificate]) throws -> Date {
+    let fields: [FolioMtlsCertificateFields]
+    do {
+      fields = try certificates.map {
+        try FolioMtlsCertificateParser.parse(SecCertificateCopyData($0) as Data)
+      }
+    } catch {
+      throw invalidChain("The client certificate chain validity period is unreadable.")
+    }
+    guard
+      let lowerBound = fields.map(\.notBefore).max(),
+      let upperBound = fields.map(\.notAfter).min(),
+      lowerBound < upperBound
+    else {
+      throw invalidChain("The client certificate chain has no common validity period.")
+    }
+    return lowerBound.addingTimeInterval(upperBound.timeIntervalSince(lowerBound) / 2)
+  }
+
+  private func makeTrust(certificates: [SecCertificate]) throws -> SecTrust {
+    var trust: SecTrust?
+    let status = SecTrustCreateWithCertificates(
+      certificates as CFArray,
+      SecPolicyCreateBasicX509(),
+      &trust
+    )
+    guard status == errSecSuccess, let trust else {
+      throw invalidChain("The client certificate chain could not be evaluated.")
+    }
+    return trust
+  }
+
+  private func certificateChain(from trust: SecTrust) throws -> [SecCertificate] {
+    guard let values = SecTrustCopyCertificateChain(trust) as? [Any] else {
+      throw invalidChain("The client certificate chain is unavailable.")
+    }
+    let certificates = values.compactMap { secCertificate($0) }
+    guard certificates.count == values.count, !certificates.isEmpty else {
+      throw invalidChain("The client certificate chain is malformed.")
+    }
+    return certificates
+  }
+
+  private func invalidChain(_ message: String) -> FolioMtlsNativeFailure {
+    FolioMtlsNativeFailure(code: "IMPORT", message: message)
   }
 
   private func saveChain(_ chain: [SecCertificate], identifier: String) throws {
@@ -251,9 +382,15 @@ final class FolioMtlsIdentityStore {
     guard status == errSecSuccess, let data = result as? Data else {
       throw FolioMtlsNativeFailure(code: "IDENTITY_NOT_FOUND", message: "The certificate chain is unavailable.")
     }
-    let raw = try PropertyListSerialization.propertyList(from: data, format: nil) as? [Data] ?? []
+    let propertyList = try PropertyListSerialization.propertyList(from: data, format: nil)
+    guard let raw = propertyList as? [Data] else {
+      throw invalidChain("The saved client certificate chain is malformed.")
+    }
     let certificates = raw.compactMap { SecCertificateCreateWithData(nil, $0 as CFData) }
-    return try normalizedChain(certificates, leaf: leaf)
+    guard certificates.count == raw.count else {
+      throw invalidChain("The saved client certificate chain is malformed.")
+    }
+    return try rebuiltIntermediates(certificates, leaf: leaf)
   }
 
   private func metadata(certificate: SecCertificate, identityId: String) throws -> [String: Any] {
@@ -283,6 +420,20 @@ final class FolioMtlsIdentityStore {
     // Security returns opaque CFTypeRef values. Swift 6 rejects a conditional
     // Core Foundation downcast, so narrow only after checking the runtime type.
     return unsafeDowncast(reference, to: SecIdentity.self)
+  }
+
+  private func secTrust(_ value: Any?) -> SecTrust? {
+    guard let value else { return nil }
+    let reference = value as CFTypeRef
+    guard CFGetTypeID(reference) == SecTrustGetTypeID() else { return nil }
+    return unsafeDowncast(reference, to: SecTrust.self)
+  }
+
+  private func secCertificate(_ value: Any?) -> SecCertificate? {
+    guard let value else { return nil }
+    let reference = value as CFTypeRef
+    guard CFGetTypeID(reference) == SecCertificateGetTypeID() else { return nil }
+    return unsafeDowncast(reference, to: SecCertificate.self)
   }
 
   private func fingerprintSha256(_ certificate: SecCertificate) -> String {
