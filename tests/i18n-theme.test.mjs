@@ -319,6 +319,11 @@ test('Android semantic accents have exact light and night resources', async () =
   const integrations = require('../plugins/withFolioPlatformIntegrations.js');
   const themeSource = await readFile(new URL('../src/constants/theme.ts', import.meta.url), 'utf8');
   assert.match(themeSource, /PlatformColor\(androidRole \?\? `@color\/folio_\$\{name\.replaceAll\('-', '_'\)\}`\)/);
+  assert.doesNotMatch(themeSource, /\?attr\/colorSurfaceContainerHigh/);
+  assert.match(
+    themeSource,
+    /paperStrong: semanticColor\([^\n]+\?android:attr\/colorBackgroundFloating/,
+  );
 
   for (const mode of ['light', 'dark']) {
     const expected = Object.fromEntries(Object.entries(integrations.ANDROID_THEME_COLORS[mode])

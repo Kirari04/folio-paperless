@@ -32,7 +32,10 @@ function semanticColor(
 export const palette = {
   canvas: semanticColor('canvas', themeHex.light.canvas, themeHex.dark.canvas, '?android:attr/colorBackground'),
   paper: semanticColor('paper', themeHex.light.paper, themeHex.dark.paper, '?android:attr/colorBackgroundFloating'),
-  paperStrong: semanticColor('paper-strong', themeHex.light.paperStrong, themeHex.dark.paperStrong, '?attr/colorSurfaceContainerHigh'),
+  // AppTheme inherits AppCompat rather than Material 3, so its theme does not
+  // define colorSurfaceContainerHigh. Resolving that attribute through
+  // PlatformColor crashes the native view mount instead of falling back.
+  paperStrong: semanticColor('paper-strong', themeHex.light.paperStrong, themeHex.dark.paperStrong, '?android:attr/colorBackgroundFloating'),
   ink: semanticColor('ink', themeHex.light.ink, themeHex.dark.ink, '?android:attr/textColorPrimary'),
   inkSoft: semanticColor('ink-soft', themeHex.light.inkSoft, themeHex.dark.inkSoft, '?android:attr/textColorSecondary'),
   muted: semanticColor('muted', themeHex.light.muted, themeHex.dark.muted, '?android:attr/textColorSecondary'),
