@@ -1,5 +1,6 @@
 import { isValidIsoDate } from './validation.ts';
 import { translateRuntime } from '../i18n/runtime.ts';
+import type { TranslationKey } from '../i18n/catalogs.ts';
 import type { PaperlessCatalog, PaperlessOption } from '../types/document.ts';
 import type {
   ExplicitValue,
@@ -230,11 +231,54 @@ function validateCustomField(
   return [];
 }
 
+const STANDARD_UPLOAD_METADATA_FIELDS = [
+  'title',
+  'created',
+  'correspondent',
+  'documentType',
+  'tags',
+  'storagePath',
+  'archiveSerialNumber',
+  'owner',
+  'workflow',
+] as const satisfies readonly Exclude<keyof UploadMetadataDraft, 'customFields'>[];
+
+type StandardUploadMetadataField = (typeof STANDARD_UPLOAD_METADATA_FIELDS)[number];
+
+const STANDARD_UPLOAD_METADATA_FIELD_LABELS = {
+  title: 'intake.title',
+  created: 'intake.createdDate',
+  correspondent: 'intake.correspondent',
+  documentType: 'intake.documentType',
+  tags: 'intake.tags',
+  storagePath: 'intake.storagePath',
+  archiveSerialNumber: 'intake.archiveSerial',
+  owner: 'intake.owner',
+  workflow: 'intake.workflow',
+} as const satisfies Record<StandardUploadMetadataField, TranslationKey>;
+
+function standardUploadClearIssues(draft: UploadMetadataDraft) {
+  return STANDARD_UPLOAD_METADATA_FIELDS.flatMap<UploadMetadataValidationIssue>((field) => (
+    (draft[field] as { state?: unknown }).state === 'clear'
+      ? [{
+          field,
+          message: unsupportedStandardUploadClearMessage(field),
+        }]
+      : []
+  ));
+}
+
+export function unsupportedStandardUploadClearMessage(field: StandardUploadMetadataField) {
+  return translateRuntime('uploadValidation.standardClearUnsupported', {
+    field: translateRuntime(STANDARD_UPLOAD_METADATA_FIELD_LABELS[field]),
+  });
+}
+
 export function validateUploadMetadata(
   draft: UploadMetadataDraft,
   options: UploadMetadataValidationOptions = {},
 ) {
-  const issues: UploadMetadataValidationIssue[] = [];
+  const issues: UploadMetadataValidationIssue[] = standardUploadClearIssues(draft);
   if (draft.title.state === 'value' && !draft.title.value.trim()) {
     issues.push({ field: 'title', message: translateRuntime('uploadValidation.titleWhitespace') });
   }
@@ -247,7 +291,7 @@ export function validateUploadMetadata(
   ) {
     issues.push({ field: 'archiveSerialNumber', message: translateRuntime('uploadValidation.asnPositive') });
   }
-  if (draft.workflow.state !== 'unset' && options.workflowOverrideSupported !== true) {
+  if (draft.workflow.state === 'value' && options.workflowOverrideSupported !== true) {
     issues.push({ field: 'workflow', message: translateRuntime('uploadValidation.workflowUnsupported') });
   }
 

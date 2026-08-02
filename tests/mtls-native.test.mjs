@@ -304,10 +304,11 @@ test('bootstrap reconciles managed identities only after removal, fence, and pro
 });
 
 test('native source contract keeps secrets native, uses OS identities, and preserves platform trust', async () => {
-  const [android, iosModule, iosIdentity, iosTransfer, tsBinding] = await Promise.all([
+  const [android, iosModule, iosIdentity, iosCertificateParser, iosTransfer, tsBinding] = await Promise.all([
     readFile(new URL('../modules/folio-mtls/android/src/main/java/app/folio/mtls/FolioMtlsModule.kt', import.meta.url), 'utf8'),
     readFile(new URL('../modules/folio-mtls/ios/FolioMtlsModule.swift', import.meta.url), 'utf8'),
     readFile(new URL('../modules/folio-mtls/ios/FolioMtlsIdentityStore.swift', import.meta.url), 'utf8'),
+    readFile(new URL('../modules/folio-mtls/ios/FolioMtlsCertificateParser.swift', import.meta.url), 'utf8'),
     readFile(new URL('../modules/folio-mtls/ios/FolioMtlsTransfer.swift', import.meta.url), 'utf8'),
     readFile(new URL('../src/lib/auth/native-mtls-module.ts', import.meta.url), 'utf8'),
   ]);
@@ -324,9 +325,37 @@ test('native source contract keeps secrets native, uses OS identities, and prese
   assert.match(iosModule, /read\(upToCount: folioMtlsMaxPkcs12Bytes \+ 1\)/);
   assert.doesNotMatch(iosModule, /Data\(contentsOf: url/);
   assert.match(iosIdentity, /input\.count <= folioMtlsMaxPkcs12Bytes/);
+  assert.match(iosIdentity, /CFGetTypeID\(reference\) == SecIdentityGetTypeID\(\)/);
+  assert.match(iosIdentity, /unsafeDowncast\(reference, to: SecIdentity\.self\)/);
+  assert.doesNotMatch(iosIdentity, /unsafeBitCast/);
+  assert.match(iosIdentity, /kSecImportItemTrust/);
+  assert.match(iosIdentity, /SecTrustCopyCertificateChain/);
+  assert.doesNotMatch(iosIdentity, /kSecImportItemCertChain/);
+  assert.match(iosIdentity, /SecTrustSetAnchorCertificatesOnly\(trust, true\)/);
+  assert.match(iosIdentity, /SecTrustEvaluateWithError/);
+  assert.match(iosIdentity, /SecKeyVerifySignature/);
+  assert.match(iosIdentity, /SecCertificateCopyNormalizedSubjectSequence/);
+  assert.match(iosIdentity, /SecCertificateCopyNormalizedIssuerSequence/);
+  assert.match(iosIdentity, /normalizedSubject == normalizedIssuer/);
+  assert.match(iosIdentity, /var result = Array\(evaluated\.dropFirst\(\)\)/);
+  assert.match(iosIdentity, /if let last = result\.last, isCryptographicallySelfSigned\(last\)/);
+  assert.doesNotMatch(iosIdentity, /private func isTrustAnchor|configured intermediate anchor|system\/user anchor/);
+  assert.match(iosIdentity, /makeTrust\(certificates: \[leaf\] \+ candidates\)/);
+  assert.doesNotMatch(iosIdentity, /subjectDer|issuerDer|expectedSubject/);
+  assert.match(iosIdentity, /if status == errSecItemNotFound \{ return \[\] \}/);
+  assert.doesNotMatch(iosIdentity, /SecCertificateCopyValues|kSecOIDX509V1|kSecPropertyKey/);
+  assert.match(iosCertificateParser, /case 0x17:[\s\S]*case 0x18:/);
+  assert.match(iosCertificateParser, /notBefore < notAfter/);
+  assert.match(iosCertificateParser, /signature: Data\(signatureValue\.contents\.dropFirst\(\)\)/);
+  assert.match(iosCertificateParser, /case "1\.2\.840\.113549\.1\.1\.10": return try parseRsaPss/);
   assert.match(iosTransfer, /NSURLAuthenticationMethodClientCertificate/);
   assert.match(iosTransfer, /challenge\.protectionSpace\.host\.lowercased\(\) == expectedProtectionSpace\.host/);
-  assert.match(iosTransfer, /challenge\.protectionSpace\.isProxy == false/);
+  assert.match(iosTransfer, /challenge\.protectionSpace\.isProxy\(\) == false/);
+  assert.match(iosTransfer, /certificates: chain\.isEmpty \? nil : chain/);
+  assert.match(
+    iosTransfer,
+    /willPerformHTTPRedirection response: HTTPURLResponse,[\s\S]*newRequest request: URLRequest/,
+  );
   assert.match(iosTransfer, /completionHandler\(\.performDefaultHandling, nil\)/);
   assert.match(iosTransfer, /completionHandler\(nil\)/);
   assert.match(iosTransfer, /totalBytesWritten > maximum/);

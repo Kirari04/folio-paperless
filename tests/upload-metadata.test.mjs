@@ -63,6 +63,24 @@ test('leaves unset fields out and represents explicit custom-field clearing', ()
   assert.equal(JSON.parse(entries[0][1])['11'], null);
 });
 
+test('Paperless 3 upload metadata distinguishes unset from unsupported standard-field clear', () => {
+  const unset = defaultUploadMetadataDraft();
+  assert.deepEqual(serializeUploadMetadata(unset), []);
+
+  const legacyClear = {
+    ...unset,
+    correspondent: { state: 'clear' },
+  };
+  assert.deepEqual(
+    validateUploadMetadata(legacyClear).map(({ field }) => field),
+    ['correspondent'],
+  );
+  assert.throws(
+    () => serializeUploadMetadata(legacyClear),
+    /do not support clearing correspondent/i,
+  );
+});
+
 test('Paperless 3.0.5 upload serialization never sends unsupported owner or workflow fields', () => {
   const ownerDraft = {
     ...defaultUploadMetadataDraft('Owned document'),

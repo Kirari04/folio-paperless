@@ -7,6 +7,8 @@ import {
   testPaperlessProfileConnection,
 } from '../src/lib/auth/fetch-adapter.ts';
 import {
+  discoverPaperlessOidcProvider,
+  exchangePaperlessOidcToken,
   prepareConnectionProfile,
   persistPreparedConnectionProfile,
   preparedProfileRebindsAuthority,
@@ -50,6 +52,25 @@ function jsonResponse(body, status = 200, headers = {}) {
     status,
     headers: { 'content-type': 'application/json', ...headers },
   });
+}
+
+function paperlessOidcConfig(overrides = {}) {
+  return {
+    status: 200,
+    data: {
+      account: {},
+      socialaccount: {
+        providers: [{
+          id: 'company-sso',
+          name: 'Company SSO',
+          client_id: 'folio',
+          openid_configuration_url: 'https://id.example.com/.well-known/openid-configuration',
+          flows: ['provider_token'],
+          ...overrides,
+        }],
+      },
+    },
+  };
 }
 
 test('real connection test preserves the server subpath and classifies user, version, and permissions', async () => {
@@ -214,7 +235,9 @@ test('OIDC cancellation leaves profile and secret repositories untouched', async
       },
       {},
       {
-        authHttpClient: { request: async () => ({ status: 500 }) },
+        authHttpClient: {
+          request: async () => ({ status: 200, body: paperlessOidcConfig() }),
+        },
         testConnection: async () => assert.fail('connection test must not run after cancellation'),
         loginOidc: async () => {
           throw cancellation;
@@ -225,6 +248,254 @@ test('OIDC cancellation leaves profile and secret repositories untouched', async
   );
   assert.equal((await profiles.getSnapshot()).profiles.length, 0);
   assert.equal(await secrets.read('oidc-profile'), null);
+});
+
+test('OIDC preparation discovers Paperless capability and stores only the exchanged DRF token', async () => {
+  const requests = [];
+  let testedCredentials;
+  const prepared = await prepareConnectionProfile(
+    {
+      displayName: 'OIDC archive',
+      serverUrl: 'https://paper.example.com/paperless/',
+      auth: {
+        kind: 'oidc',
+        issuer: 'https://id.example.com/',
+        clientId: 'folio',
+        redirectUri: 'folio-paperless://oauth/callback',
+        scopes: ['profile'],
+        forceLogin: true,
+      },
+    },
+    {},
+    {
+      authHttpClient: {
+        request: async (request) => {
+          requests.push(request);
+          if (request.method === 'GET') {
+            return { status: 200, body: paperlessOidcConfig() };
+          }
+          return {
+            status: 200,
+            body: {
+              status: 200,
+              data: { user: { id: 7 } },
+              meta: { is_authenticated: true, access_token: 'paperless-drf-token' },
+            },
+          };
+        },
+      },
+      loginOidc: async (input) => {
+        assert.equal(input.issuer, 'https://id.example.com');
+        assert.deepEqual(input.scopes, ['openid', 'profile']);
+        return {
+          accessToken: 'raw-idp-access-token',
+          refreshToken: 'raw-idp-refresh-token',
+          idToken: 'raw-idp-id-token',
+          expiresAt: '2026-08-02T11:00:00.000Z',
+          subject: 'alice',
+        };
+      },
+      testConnection: async (credentials) => {
+        testedCredentials = credentials;
+        return {
+          apiVersion: '10',
+          serverVersion: '3.0.5',
+          username: 'alice',
+          permissions: ['view_document'],
+          isSuperuser: false,
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(requests.map(({ method, url }) => ({ method, url })), [
+    {
+      method: 'GET',
+      url: 'https://paper.example.com/paperless/api/auth/headless/app/v1/config',
+    },
+    {
+      method: 'POST',
+      url: 'https://paper.example.com/paperless/api/auth/headless/app/v1/auth/provider/token',
+    },
+  ]);
+  assert.deepEqual(JSON.parse(requests[1].body), {
+    provider: 'company-sso',
+    process: 'login',
+    token: {
+      client_id: 'folio',
+      access_token: 'raw-idp-access-token',
+      id_token: 'raw-idp-id-token',
+    },
+  });
+  assert.equal(requests[1].redirect, 'manual');
+  assert.deepEqual(prepared.secrets, { apiToken: 'paperless-drf-token' });
+  assert.deepEqual(prepared.credentials, {
+    serverUrl: 'https://paper.example.com/paperless',
+    token: 'paperless-drf-token',
+    authorizationScheme: 'Token',
+  });
+  assert.deepEqual(testedCredentials, prepared.credentials);
+  assert.doesNotMatch(
+    JSON.stringify(prepared),
+    /raw-idp-access-token|raw-idp-refresh-token|raw-idp-id-token/,
+  );
+});
+
+test('an unchanged OIDC profile reuses only its saved Paperless token', async () => {
+  const existingProfile = createConnectionProfile({
+    id: 'profile-oidc',
+    displayName: 'OIDC archive',
+    serverUrl: 'https://paper.example.com',
+    auth: {
+      kind: 'oidc',
+      issuer: 'https://id.example.com',
+      clientId: 'folio',
+      redirectUri: 'folio-paperless://oauth/callback',
+      scopes: ['openid', 'profile'],
+    },
+    now: NOW,
+  });
+  let testedCredentials;
+  const prepared = await prepareConnectionProfile(
+    {
+      profileId: existingProfile.id,
+      displayName: existingProfile.displayName,
+      serverUrl: existingProfile.serverUrl,
+      auth: { ...existingProfile.auth, forceLogin: false },
+    },
+    {
+      existingProfile,
+      existingSecrets: { apiToken: 'saved-paperless-token' },
+    },
+    {
+      authHttpClient: {
+        request: async () => assert.fail('saved Paperless tokens need no OIDC request'),
+      },
+      loginOidc: async () => assert.fail('saved Paperless tokens need no IdP login'),
+      testConnection: async (credentials) => {
+        testedCredentials = credentials;
+        return {
+          apiVersion: '10',
+          serverVersion: '3.0.5',
+          permissions: ['view_document'],
+          isSuperuser: false,
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(prepared.secrets, { apiToken: 'saved-paperless-token' });
+  assert.deepEqual(testedCredentials, {
+    serverUrl: 'https://paper.example.com',
+    token: 'saved-paperless-token',
+    authorizationScheme: 'Token',
+  });
+});
+
+test('Paperless OIDC capability discovery fails before IdP login when headless auth is unavailable', async () => {
+  let loginAttempts = 0;
+  await assert.rejects(
+    () => prepareConnectionProfile(
+      {
+        displayName: 'OIDC archive',
+        serverUrl: 'https://paper.example.com',
+        auth: {
+          kind: 'oidc',
+          issuer: 'https://id.example.com',
+          clientId: 'folio',
+          redirectUri: 'folio-paperless://oauth/callback',
+          scopes: ['openid'],
+          forceLogin: true,
+        },
+      },
+      {},
+      {
+        authHttpClient: { request: async () => ({ status: 404 }) },
+        loginOidc: async () => {
+          loginAttempts += 1;
+          assert.fail('IdP login must not start without Paperless headless OIDC support');
+        },
+        testConnection: async () => assert.fail('connection test must not run'),
+      },
+    ),
+    (error) => error.code === 'headless-unavailable' && !error.retryable,
+  );
+  assert.equal(loginAttempts, 0);
+});
+
+test('Paperless OIDC provider discovery matches issuer and client ID and requires the token flow', async () => {
+  const base = {
+    serverUrl: 'https://paper.example.com',
+    issuer: 'https://id.example.com',
+    clientId: 'folio',
+  };
+  await assert.rejects(
+    () => discoverPaperlessOidcProvider(base, {
+      request: async () => ({
+        status: 200,
+        body: paperlessOidcConfig({ client_id: 'another-client' }),
+      }),
+    }),
+    (error) => error.code === 'provider-not-configured',
+  );
+  await assert.rejects(
+    () => discoverPaperlessOidcProvider(base, {
+      request: async () => ({
+        status: 200,
+        body: paperlessOidcConfig({ flows: ['provider_redirect'] }),
+      }),
+    }),
+    (error) => error.code === 'provider-token-unsupported',
+  );
+});
+
+test('Paperless OIDC exchange classifies incomplete auth without exposing provider tokens', async () => {
+  const idpToken = 'sensitive-provider-token';
+  await assert.rejects(
+    () => exchangePaperlessOidcToken(
+      {
+        serverUrl: 'https://paper.example.com',
+        providerId: 'company-sso',
+        clientId: 'folio',
+        accessToken: idpToken,
+        idToken: 'sensitive-id-token',
+      },
+      {
+        request: async () => ({
+          status: 401,
+          body: {
+            data: { flows: [{ id: 'mfa_authenticate', is_pending: true }] },
+            errors: [{ message: idpToken }],
+          },
+        }),
+      },
+    ),
+    (error) =>
+      error.code === 'additional-auth-required'
+      && !error.message.includes(idpToken)
+      && !error.retryable,
+  );
+});
+
+test('Paperless OIDC exchange never follows authentication redirects', async () => {
+  await assert.rejects(
+    () => exchangePaperlessOidcToken(
+      {
+        serverUrl: 'https://paper.example.com',
+        providerId: 'company-sso',
+        clientId: 'folio',
+        accessToken: 'provider-token',
+        idToken: 'provider-id-token',
+      },
+      {
+        request: async () => ({
+          status: 302,
+          headers: { location: 'https://evil.example.com/steal' },
+        }),
+      },
+    ),
+    (error) => error.code === 'unsafe-redirect',
+  );
 });
 
 test('prepared profiles support multiple users on one URL and make removal ownership explicit', async () => {
@@ -535,6 +806,24 @@ test('authority comparisons reject stale token, OIDC, custom-header, and mTLS ca
     token: 'access-a',
     authorizationScheme: 'Bearer',
   }, oidcProfile, { oidc: { accessToken: 'access-b' } }), false);
+  assert.equal(credentialsMatchStoredProfile({
+    profileId: oidcProfile.id,
+    serverUrl: oidcProfile.serverUrl,
+    token: 'legacy-idp-access',
+    authorizationScheme: 'Bearer',
+  }, oidcProfile, { oidc: { accessToken: 'legacy-idp-access' } }), false);
+  assert.equal(credentialsMatchStoredProfile({
+    profileId: oidcProfile.id,
+    serverUrl: oidcProfile.serverUrl,
+    token: 'paperless-drf-token',
+    authorizationScheme: 'Token',
+  }, oidcProfile, { apiToken: 'paperless-drf-token' }), true);
+  assert.equal(credentialsMatchStoredProfile({
+    profileId: oidcProfile.id,
+    serverUrl: oidcProfile.serverUrl,
+    token: 'paperless-drf-token',
+    authorizationScheme: 'Bearer',
+  }, oidcProfile, { apiToken: 'paperless-drf-token' }), false);
 
   const customProfile = {
     ...tokenProfile,

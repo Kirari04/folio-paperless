@@ -153,7 +153,7 @@ final class FolioMtlsTransfer: NSObject, URLSessionDataDelegate, URLSessionDownl
       guard
         let expectedProtectionSpace,
         challenge.previousFailureCount == 0,
-        challenge.protectionSpace.isProxy == false,
+        challenge.protectionSpace.isProxy() == false,
         challenge.protectionSpace.protocol?.lowercased() == "https",
         challenge.protectionSpace.host.lowercased() == expectedProtectionSpace.host,
         challengePort == expectedProtectionSpace.port
@@ -163,7 +163,7 @@ final class FolioMtlsTransfer: NSObject, URLSessionDataDelegate, URLSessionDownl
       }
       let credential = URLCredential(
         identity: identity,
-        certificates: chain,
+        certificates: chain.isEmpty ? nil : chain,
         persistence: .forSession
       )
       completionHandler(.useCredential, credential)
@@ -177,11 +177,11 @@ final class FolioMtlsTransfer: NSObject, URLSessionDataDelegate, URLSessionDownl
   func urlSession(
     _ session: URLSession,
     task: URLSessionTask,
-    willPerformHTTPRedirection newRequest: URLRequest,
-    newResponse: HTTPURLResponse,
+    willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest,
     completionHandler: @escaping (URLRequest?) -> Void
   ) {
-    response = newResponse
+    self.response = response
     completionHandler(nil)
   }
 
