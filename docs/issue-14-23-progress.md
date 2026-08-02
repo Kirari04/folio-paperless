@@ -42,14 +42,14 @@ Status language is intentionally strict:
   **1**.
 - The ten issue bodies contain **121** acceptance criteria. This record maps all
   **121/121**: **107** are software-verified and **14** remain external/manual.
-- Independently run on the candidate tree on 2026-08-02:
-  - `npm test` — pass, **573/573** tests; 0 failed, 0 skipped, 0 todo.
+- Independently run on the candidate tree on 2026-08-03:
+  - `npm test` — pass, **575/575** tests; 0 failed, 0 skipped, 0 todo.
   - `npx tsc --noEmit` — pass.
   - `npm run lint` — pass.
   - `npx expo-doctor` — pass, **20/20** checks.
   - Clean GitHub-flavor Android release APK — pass; APK signature verified and
-    installed as an in-place upgrade on a connected Android 16 device without
-    changing its original install time or clearing application data.
+    installed with ADB's non-incremental streamed installer on an Android 16 QA
+    device. Final QA used the isolated Demo workspace only.
   - Clean store-flavor Android release AAB — build pass; the local artifact is
     not a Play-signed candidate and does not satisfy store signing verification.
 - Disposable Paperless 3.0.0 and 3.0.5 stacks were exercised with full and
@@ -66,11 +66,11 @@ Status language is intentionally strict:
 | #17 | Bulk library operations | 13/13 | 0/13 | Software acceptance verified; live error-matrix QA open | Restricted 403 and permission readback were exercised on both versions. Live 404/429, mixed partial results, retry, export, and reprocess task correlation remain. |
 | #18 | Offline and Task Center | 14/15 | 1/15 | Durable restart verified; background device matrix open | Android intake state survived force-stop/relaunch. Reboot, OS scheduler timing, notification routing, connectivity return, disk pressure, and iOS process behavior remain. |
 | #19 | Saved views and catalogs | 14/14 | 0/14 | Software acceptance verified; live CRUD/web-UI readback open | Full/restricted catalog visibility was exercised on both versions; mutation ownership, concurrent edits, and Paperless web-UI parity were not. |
-| #20 | Appearance and localization | 7/10 | 3/10 | Software path verified; visual/device QA open | No physical runtime OS-theme/locale run, frame-by-frame cold-start review, or approximately 200% text audit was performed. |
-| #21 | Platform and distribution | 6/10 | 4/10 | Android artifacts/registration verified; device/store QA open | A connected Android device resolves the custom routes, shortcuts, share targets, widget provider, and background job; release APK/AAB builds pass. Final rendered routing, widget/search/notification UI, Play signing, TestFlight, store-console, iOS, and owned-domain association remain. |
+| #20 | Appearance and localization | 7/10 | 3/10 | Android runtime theme/locale QA passed; iOS/full visual matrix open | Android 16 live System/Light/Dark changes, OS night-mode changes, German rendering, and 200% text were exercised and restored. Frame-by-frame splash/biometric review, every screen/modal, native widget/shortcut localization, and iOS remain. |
+| #21 | Platform and distribution | 6/10 | 4/10 | Android artifacts, links, and share intake verified; device/store QA open | A connected Android device resolves the custom routes and native scan route; text and invalid-provider shares reached bounded intake without leaking provider details. Widget/search/notification UI, shortcut invocation, Play signing, TestFlight, store-console, iOS, and owned-domain association remain. |
 | #22 | Viewer and public sharing | 9/11 | 2/11 | Software path verified; device/live-server QA open | No physical printing/search/highlight/share run and no live Paperless public-link lifecycle test were performed. |
 | #23 | Paperless 3 capabilities | 10/11 | 1/11 | Live minimum/current compatibility partially verified | Paperless 3.0.0/3.0.5 full and restricted documents, catalog denial, owner/ACL shapes, metadata filename, OIDC capability, and PDF schemas were exercised. Configured AI/OIDC and actual PDF jobs/failures/restart remain. |
-| **Total** | **All ten issues** | **107/121** | **14/121** | **All criteria mapped; external verification remains open** | **Device, live-service, signed-artifact, store-console, and visual/manual checks are not claimed.** |
+| **Total** | **All ten issues** | **107/121** | **14/121** | **All criteria mapped; external verification remains open** | **Completed Android and disposable-server checks are recorded; the remaining iOS, signed-artifact, store-console, live-auth, and full visual/manual matrices are not claimed.** |
 
 ## External environment facts
 
@@ -78,10 +78,13 @@ Status language is intentionally strict:
   concrete `FolioMtls` Swift/Security API errors; the candidate tree replaces
   those APIs and delegate signatures, but the corrected source still needs a new
   hosted archive. No signed IPA or TestFlight candidate was produced.
-- A Samsung SM-G781B on Android 16/API 36 is connected through ADB. The GitHub
-  release APK was rebuilt, signature-matched to the installed QA app, and upgraded
-  in place. The device is currently locked, so the post-fix rendered deep-link,
-  theme, locale, widget, and large-text matrix remains pending unlock.
+- A Samsung SM-G781B on Android 16/API 36 was exercised through ADB with a
+  non-incrementally installed GitHub release APK. Warm/cold allowlisted deep
+  links, native scan launch, text and invalid-provider share intake, live
+  System/Light/Dark changes, OS night-mode changes, German copy, and 200% text
+  rendering were exercised. QA ended in Demo mode with System language, system
+  dark appearance, and font scale 1.0. Widget/search/notification presentation,
+  physical shortcuts, every screen/modal, and biometric paths remain pending.
 - A store-flavor AAB was built and structurally audited locally, but protected
   Play signing credentials, the expected store certificate, EAS project/owner
   credentials, Apple team identity, and store accounts are unavailable.
@@ -99,8 +102,9 @@ Primary local evidence: `tests/incoming-share.test.mjs`, `tests/intake.test.mjs`
 `src/app/tasks.tsx`, and the generated native integration contracts.
 
 - [ ] **External/manual:** Folio appears as a share/open target for supported files
-  on Android and iOS. The manifest/extension configuration and handoff source
-  contracts are locally asserted, but OS registration was not exercised.
+  on Android and iOS. Android text sharing and a deliberately invalid private
+  provider URI reached the native destination/intake flow on the connected
+  device; iOS and the complete provider/file matrix remain unverified.
 - [x] **Software-verified:** Sharing one or multiple files retains every valid
   candidate through bounded private staging before temporary input expires, while
   preserving individual provider failures.
@@ -396,14 +400,17 @@ resources.
 - [ ] **External/manual:** Automated WCAG contrast assertions pass for semantic
   roles, but every first-party screen/modal must still be inspected at roughly
   200% text scaling in both themes, including longer German copy, reachability,
-  clipping, and non-color status cues.
+  clipping, and non-color status cues. The connected Android device passed a
+  German 200% library/settings sample; this is not the complete screen matrix.
 - [x] **Software-verified:** Automated tests cover stored preferences, system
   reactivity/fallback, locale formatting, complete catalogs, diagnostic mappings,
   representative provider renders, semantic contrast, and native locale/widget
   resource parity.
 - [ ] **External/manual:** Change System theme and locale at runtime on physical
   Android and iOS devices and verify the app plus native widget/shortcut surfaces
-  update without bypassing authentication or exposing protected data.
+  update without bypassing authentication or exposing protected data. Android
+  app content passed live System/Light/Dark and OS night-mode transitions plus a
+  German override; iOS and native widget/shortcut presentation remain.
 
 ## Issue #21 — deep links, OS integrations, and distribution
 
