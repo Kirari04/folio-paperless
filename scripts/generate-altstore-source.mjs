@@ -198,7 +198,7 @@ export function validateAltStoreSource(source, expected) {
   );
   assert(
     JSON.stringify(sortedObject(app.appPermissions.privacy)) ===
-      JSON.stringify(expected.metadata.privacy),
+      JSON.stringify(sortedObject(expected.metadata.privacy)),
     "Source privacy permissions do not match the IPA metadata.",
   );
   assert(
