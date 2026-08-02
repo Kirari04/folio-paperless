@@ -43,15 +43,16 @@ Status language is intentionally strict:
 - The ten issue bodies contain **121** acceptance criteria. This record maps all
   **121/121**: **107** are software-verified and **14** remain external/manual.
 - Independently run on the candidate tree on 2026-08-03:
-  - `npm test` — pass, **575/575** tests; 0 failed, 0 skipped, 0 todo.
+  - `npm test` — pass, **576/576** tests; 0 failed, 0 skipped, 0 todo.
   - `npx tsc --noEmit` — pass.
   - `npm run lint` — pass.
   - `npx expo-doctor` — pass, **20/20** checks.
   - Clean GitHub-flavor Android release APK — pass; APK signature verified and
     installed with ADB's non-incremental streamed installer on an Android 16 QA
     device. Final QA used the isolated Demo workspace only.
-  - Clean store-flavor Android release AAB — build pass; the local artifact is
-    not a Play-signed candidate and does not satisfy store signing verification.
+  - Clean store-flavor Android release AAB — build and structural flavor audit
+    pass; the local debug-signed artifact is not a Play-signed candidate and does
+    not satisfy protected store-certificate verification.
 - Disposable Paperless 3.0.0 and 3.0.5 stacks were exercised with full and
   restricted users. Identity-provider, real mTLS, iOS-device, printer, and store
   account checks remain unavailable.
