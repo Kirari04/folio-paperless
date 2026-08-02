@@ -65,6 +65,14 @@ function I18nProbe() {
   );
 }
 
+let nativeSchemeProbeRenders = 0;
+
+function NativeSchemeProbe() {
+  const { colorScheme, nativePaletteKey } = useI18n();
+  nativeSchemeProbeRenders += 1;
+  return createElement('folio-native-scheme-probe', { colorScheme, nativePaletteKey });
+}
+
 function StatefulI18nHarness({ systemLocales, systemScheme }) {
   const [settings, setSettings] = useState({ appearance: 'system', language: 'system' });
   const setAppearance = useCallback(async (appearance) => {
@@ -638,6 +646,56 @@ test('stored appearance and locale are the first visible provider render before 
   assert.match(providerSource, /useLayoutEffect\(\(\) => \{[\s\S]*dataset\.folioTheme/);
   assert.match(appSource, /SplashScreen\.preventAutoHideAsync\(\)/);
   assert.match(appSource, /if \(ready\) SplashScreen\.hide\(\)/);
+});
+
+test('native scheme completion republishes explicit-theme PlatformColor consumers', async () => {
+  const settings = { appearance: 'dark', language: 'system' };
+  const setAppearance = async () => {};
+  const setLanguage = async () => {};
+  const child = createElement(NativeSchemeProbe);
+  const renderProvider = (systemScheme) => createElement(
+    I18nRenderProvider,
+    {
+      nativePaletteRemountEnabled: true,
+      ready: true,
+      settings,
+      setAppearance,
+      setLanguage,
+      systemLocales: englishLocales,
+      systemScheme,
+    },
+    child,
+  );
+
+  nativeSchemeProbeRenders = 0;
+  let renderer;
+  await act(async () => {
+    renderer = create(renderProvider('light'));
+  });
+  assert.equal(nativeSchemeProbeRenders, 1);
+  assert.equal(renderer.root.findByType('folio-native-scheme-probe').props.colorScheme, 'dark');
+  assert.equal(
+    renderer.root.findByType('folio-native-scheme-probe').props.nativePaletteKey,
+    'light',
+  );
+
+  await act(async () => {
+    renderer.update(renderProvider('dark'));
+  });
+  assert.equal(nativeSchemeProbeRenders, 2);
+  assert.equal(renderer.root.findByType('folio-native-scheme-probe').props.colorScheme, 'dark');
+  assert.equal(
+    renderer.root.findByType('folio-native-scheme-probe').props.nativePaletteKey,
+    'dark',
+  );
+  await act(async () => renderer.unmount());
+
+  const appSource = await readFile(
+    new URL('../src/App.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(appSource, /key=\{nativePaletteKey\}/);
+  assert.equal(appSource.match(/key=\{nativePaletteKey\}/g)?.length, 1);
 });
 
 test('file sizes use locale-aware decimal separators', () => {

@@ -155,6 +155,7 @@ export function I18nProvider({ children }: PropsWithChildren) {
 
   return (
     <I18nRenderProvider
+      nativePaletteRemountEnabled={Platform.OS === 'android'}
       ready={ready}
       settings={settings}
       setAppearance={setAppearance}

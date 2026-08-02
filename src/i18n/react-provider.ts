@@ -28,6 +28,7 @@ export type UIContextValue = StoredUiPreferences & {
   locale: SupportedLocale;
   localeTag: string;
   colorScheme: 'light' | 'dark';
+  nativePaletteKey: string;
   setAppearance: (appearance: AppearancePreference) => Promise<void>;
   setLanguage: (language: LanguagePreference) => Promise<void>;
   t: (key: TranslationKey, values?: InterpolationValues) => string;
@@ -43,6 +44,7 @@ type I18nRenderProviderProps = PropsWithChildren<{
   settings: StoredUiPreferences;
   systemLocales: readonly LocaleDescriptor[];
   systemScheme: 'light' | 'dark' | 'unspecified' | null | undefined;
+  nativePaletteRemountEnabled?: boolean;
   setAppearance: UIContextValue['setAppearance'];
   setLanguage: UIContextValue['setLanguage'];
   now?: () => Date;
@@ -58,6 +60,7 @@ const currentDate = () => new Date();
  */
 export function I18nRenderProvider({
   children,
+  nativePaletteRemountEnabled = false,
   now = currentDate,
   ready,
   settings,
@@ -72,6 +75,9 @@ export function I18nRenderProvider({
   );
   const localeTag = resolveLocaleTag(locale, systemLocales);
   const colorScheme = resolveColorScheme(settings.appearance, systemScheme);
+  const nativePaletteKey = nativePaletteRemountEnabled
+    ? systemScheme === 'dark' ? 'dark' : 'light'
+    : 'static';
 
   // Runtime/background presenters must observe the same locale before any
   // newly visible descendant can create user-facing copy during this render.
@@ -127,33 +133,42 @@ export function I18nRenderProvider({
     [localeTag],
   );
 
-  const value = useMemo<UIContextValue>(() => ({
-    ...settings,
-    ready,
-    locale,
-    localeTag,
+  const value = useMemo<UIContextValue>(() => {
+    // An explicit preference can keep `colorScheme` unchanged while Android
+    // finishes applying a forced native uiMode. Republish after that
+    // useColorScheme signal so consumers reapply semantic PlatformColor props.
+    void systemScheme;
+    return {
+      ...settings,
+      ready,
+      locale,
+      localeTag,
+      colorScheme,
+      nativePaletteKey,
+      setAppearance,
+      setLanguage,
+      t,
+      formatDate,
+      formatDocumentDate,
+      formatNumber,
+      formatList,
+      formatFileSize,
+    };
+  }, [
     colorScheme,
-    setAppearance,
-    setLanguage,
-    t,
     formatDate,
     formatDocumentDate,
-    formatNumber,
-    formatList,
-    formatFileSize,
-  }), [
-    colorScheme,
-    formatDate,
-    formatDocumentDate,
     formatFileSize,
     formatList,
     formatNumber,
     locale,
     localeTag,
+    nativePaletteKey,
     ready,
     setAppearance,
     setLanguage,
     settings,
+    systemScheme,
     t,
   ]);
 

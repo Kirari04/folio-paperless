@@ -291,7 +291,7 @@ function ProtectedApp() {
 }
 
 function LocalizedApp() {
-  const { colorScheme, ready } = useI18n();
+  const { colorScheme, nativePaletteKey, ready } = useI18n();
 
   useEffect(() => {
     if (ready) SplashScreen.hide();
@@ -306,7 +306,12 @@ function LocalizedApp() {
           <UpdateProvider>
             <NavigationProvider>
               <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
-              <View style={{ flex: 1, backgroundColor: palette.canvas }}>
+              {/* Android resolves PlatformColor values when native views mount.
+                  Recreate only the presentation tree after AppCompat finishes
+                  its uiMode change; profile and durable app state stay above. */}
+              <View
+                key={nativePaletteKey}
+                style={{ flex: 1, backgroundColor: palette.canvas }}>
                 <ProtectedApp />
               </View>
             </NavigationProvider>
