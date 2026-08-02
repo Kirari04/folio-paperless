@@ -10,7 +10,6 @@ function semanticColor(
   name: string,
   light: string,
   dark: string,
-  androidRole?: string,
 ): string {
   // react-native-svg and a few Expo-facing props still type colors as strings,
   // even though React Native accepts dynamic platform colors at runtime.
@@ -23,25 +22,22 @@ function semanticColor(
     }) as unknown as string;
   }
   if (Platform.OS === 'android') {
-    return PlatformColor(androidRole ?? `@color/folio_${name.replaceAll('-', '_')}`) as unknown as string;
+    return PlatformColor(`@color/folio_${name.replaceAll('-', '_')}`) as unknown as string;
   }
   if (Platform.OS === 'web') return `var(--folio-${name})`;
   return light;
 }
 
 export const palette = {
-  canvas: semanticColor('canvas', themeHex.light.canvas, themeHex.dark.canvas, '?android:attr/colorBackground'),
-  paper: semanticColor('paper', themeHex.light.paper, themeHex.dark.paper, '?android:attr/colorBackgroundFloating'),
-  // AppTheme inherits AppCompat rather than Material 3, so its theme does not
-  // define colorSurfaceContainerHigh. Resolving that attribute through
-  // PlatformColor crashes the native view mount instead of falling back.
-  paperStrong: semanticColor('paper-strong', themeHex.light.paperStrong, themeHex.dark.paperStrong, '?android:attr/colorBackgroundFloating'),
-  ink: semanticColor('ink', themeHex.light.ink, themeHex.dark.ink, '?android:attr/textColorPrimary'),
-  inkSoft: semanticColor('ink-soft', themeHex.light.inkSoft, themeHex.dark.inkSoft, '?android:attr/textColorSecondary'),
-  muted: semanticColor('muted', themeHex.light.muted, themeHex.dark.muted, '?android:attr/textColorSecondary'),
-  faint: semanticColor('faint', themeHex.light.faint, themeHex.dark.faint, '?android:attr/textColorSecondary'),
-  line: semanticColor('line', themeHex.light.line, themeHex.dark.line, '?android:attr/colorControlNormal'),
-  lineStrong: semanticColor('line-strong', themeHex.light.lineStrong, themeHex.dark.lineStrong, '?android:attr/colorControlNormal'),
+  canvas: semanticColor('canvas', themeHex.light.canvas, themeHex.dark.canvas),
+  paper: semanticColor('paper', themeHex.light.paper, themeHex.dark.paper),
+  paperStrong: semanticColor('paper-strong', themeHex.light.paperStrong, themeHex.dark.paperStrong),
+  ink: semanticColor('ink', themeHex.light.ink, themeHex.dark.ink),
+  inkSoft: semanticColor('ink-soft', themeHex.light.inkSoft, themeHex.dark.inkSoft),
+  muted: semanticColor('muted', themeHex.light.muted, themeHex.dark.muted),
+  faint: semanticColor('faint', themeHex.light.faint, themeHex.dark.faint),
+  line: semanticColor('line', themeHex.light.line, themeHex.dark.line),
+  lineStrong: semanticColor('line-strong', themeHex.light.lineStrong, themeHex.dark.lineStrong),
   lime: semanticColor('lime', themeHex.light.lime, themeHex.dark.lime),
   limeSurface: semanticColor('lime-surface', themeHex.light.limeSurface, themeHex.dark.limeSurface),
   limeDark: semanticColor('lime-dark', themeHex.light.limeDark, themeHex.dark.limeDark),
@@ -50,7 +46,7 @@ export const palette = {
   lavender: semanticColor('lavender', themeHex.light.lavender, themeHex.dark.lavender),
   sky: semanticColor('sky', themeHex.light.sky, themeHex.dark.sky),
   rose: semanticColor('rose', themeHex.light.rose, themeHex.dark.rose),
-  danger: semanticColor('danger', themeHex.light.danger, themeHex.dark.danger, '?android:attr/colorError'),
+  danger: semanticColor('danger', themeHex.light.danger, themeHex.dark.danger),
   dangerSurface: semanticColor('danger-surface', themeHex.light.dangerSurface, themeHex.dark.dangerSurface),
   scrim: 'rgba(11,15,12,0.62)',
   inverseScrim: 'rgba(11,15,12,0.92)',

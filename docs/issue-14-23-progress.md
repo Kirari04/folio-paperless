@@ -3,9 +3,10 @@
 This document reconciles the current working tree with the complete GitHub issue
 bodies for [#14](https://github.com/Kirari04/folio-paperless/issues/14) through
 [#23](https://github.com/Kirari04/folio-paperless/issues/23). The issues were
-read through the authenticated GitHub API on 2026-08-02. All ten issues are open,
-and all ten have zero comments, so there are no comment-level acceptance changes
-to merge into the checklists below.
+read through the authenticated GitHub API on 2026-08-02. All ten issues are open
+and each has one implementation-status comment. Those comments do not change the
+issue bodies' acceptance criteria; this record supersedes their older test counts
+and verification notes.
 
 Status language is intentionally strict:
 
@@ -23,11 +24,14 @@ Status language is intentionally strict:
 
 ## Candidate-tree baseline
 
-- Branch: `feat/issues-14-23`.
+- Stack tip: `stack/issues-20-21-platform`, above
+  `stack/issues-17-19-22-23-workflows`, `stack/issues-14-16-intake`, and
+  `stack/issues-14-23-foundation`.
 - Integration base: `216664347245d42ca540586a01301de0ea122085`
   (`origin/dev`, including merged PRs #24, #13, and #26).
-- Delivery state: the implementation is organized as a dependency-ordered
-  stacked commit series for review and integration.
+- Delivery state: draft PRs #27–#30 are open in dependency order. Final hardening
+  is split into its owning stack layers and propagated bottom-up without history
+  rewrites.
 - Local database schema: **version 7**
   (`FOLIO_DATABASE_VERSION` in `src/lib/database-schema.ts`).
 - Persistent task payload schema: **version 4**
@@ -39,45 +43,53 @@ Status language is intentionally strict:
 - The ten issue bodies contain **121** acceptance criteria. This record maps all
   **121/121**: **107** are software-verified and **14** remain external/manual.
 - Independently run on the candidate tree on 2026-08-02:
-  - `npm test` — pass, **546/546** tests; 0 failed, 0 skipped, 0 todo.
+  - `npm test` — pass, **573/573** tests; 0 failed, 0 skipped, 0 todo.
   - `npx tsc --noEmit` — pass.
   - `npm run lint` — pass.
-- These three gates do not build native binaries, exercise a physical device,
-  connect to Paperless or an identity provider, sign an artifact, or inspect a
-  store-upload candidate.
+  - `npx expo-doctor` — pass, **20/20** checks.
+  - Clean GitHub-flavor Android release APK — pass; APK signature verified and
+    installed as an in-place upgrade on a connected Android 16 device without
+    changing its original install time or clearing application data.
+  - Clean store-flavor Android release AAB — build pass; the local artifact is
+    not a Play-signed candidate and does not satisfy store signing verification.
+- Disposable Paperless 3.0.0 and 3.0.5 stacks were exercised with full and
+  restricted users. Identity-provider, real mTLS, iOS-device, printer, and store
+  account checks remain unavailable.
 
 ## Live summary
 
 | Issue | Workstream | Software-verified criteria | External/manual criteria | Status | Precise remaining blocker |
 | --- | --- | ---: | ---: | --- | --- |
-| #14 | Intake and durable upload | 11/13 | 2/13 | Software path verified; native intake QA open | No connected Android/iOS devices; share-target registration and real Files/Mail/browser/scanner handoffs were not exercised. |
+| #14 | Intake and durable upload | 11/13 | 2/13 | Android PDF/text intake and restart verified; cross-platform matrix open | Android registration, a real Files PDF share, synthetic text share, durable staging, and restart were exercised. iOS plus Mail/browser/scanner, biometric-entry, and full multi-provider device coverage remain. |
 | #15 | Profiles and authentication | 12/13 | 1/13 | Software path verified; native mTLS/live auth QA open | Linux cannot build/test the iOS Keychain/`URLSession` path; no device certificate identity or live OTP/OIDC/Paperless fixtures were available. |
-| #16 | Upload metadata and presets | 11/11 | 0/11 | Software acceptance verified; live compatibility QA open | No configured live Paperless server was used to read back matching, workflow, permission, or custom-field results. |
-| #17 | Bulk library operations | 13/13 | 0/13 | Software acceptance verified; live error-matrix QA open | No live Paperless accounts/versions were available for real 403/404/429, permission, partial-result, and export behavior. |
-| #18 | Offline and Task Center | 14/15 | 1/15 | Software path verified; device background QA open | No physical process-death, reboot, scheduler, notification-timing, or disk-pressure run was performed on Android or iOS. |
-| #19 | Saved views and catalogs | 14/14 | 0/14 | Software acceptance verified; live web-UI readback open | No live server was available for CRUD ownership/permission behavior or comparison with the Paperless web UI. |
+| #16 | Upload metadata and presets | 11/11 | 0/11 | Software acceptance verified; live compatibility partially exercised | Both Paperless versions accepted a multipart upload and exact title/date/tag/filename readback. Workflow, custom-field clear/value matrix, owner-transfer visibility loss, matching, and preset UI still need device/live coverage. |
+| #17 | Bulk library operations | 13/13 | 0/13 | Software acceptance verified; live error-matrix QA open | Restricted 403 and permission readback were exercised on both versions. Live 404/429, mixed partial results, retry, export, and reprocess task correlation remain. |
+| #18 | Offline and Task Center | 14/15 | 1/15 | Durable restart verified; background device matrix open | Android intake state survived force-stop/relaunch. Reboot, OS scheduler timing, notification routing, connectivity return, disk pressure, and iOS process behavior remain. |
+| #19 | Saved views and catalogs | 14/14 | 0/14 | Software acceptance verified; live CRUD/web-UI readback open | Full/restricted catalog visibility was exercised on both versions; mutation ownership, concurrent edits, and Paperless web-UI parity were not. |
 | #20 | Appearance and localization | 7/10 | 3/10 | Software path verified; visual/device QA open | No physical runtime OS-theme/locale run, frame-by-frame cold-start review, or approximately 200% text audit was performed. |
-| #21 | Platform and distribution | 6/10 | 4/10 | Software/configuration path verified; artifacts/device QA open | No connected devices, protected signing credentials, Play AAB, TestFlight-ready archive, store-console review, or owned HTTPS association domain was available. |
+| #21 | Platform and distribution | 6/10 | 4/10 | Android artifacts/registration verified; device/store QA open | A connected Android device resolves the custom routes, shortcuts, share targets, widget provider, and background job; release APK/AAB builds pass. Final rendered routing, widget/search/notification UI, Play signing, TestFlight, store-console, iOS, and owned-domain association remain. |
 | #22 | Viewer and public sharing | 9/11 | 2/11 | Software path verified; device/live-server QA open | No physical printing/search/highlight/share run and no live Paperless public-link lifecycle test were performed. |
-| #23 | Paperless 3 capabilities | 10/11 | 1/11 | Software path verified; compatibility matrix open | No live minimum Paperless 3.0.0 server and current 3.0.x server were available with full/restricted accounts and advertised AI/PDF capabilities. |
+| #23 | Paperless 3 capabilities | 10/11 | 1/11 | Live minimum/current compatibility partially verified | Paperless 3.0.0/3.0.5 full and restricted documents, catalog denial, owner/ACL shapes, metadata filename, OIDC capability, and PDF schemas were exercised. Configured AI/OIDC and actual PDF jobs/failures/restart remain. |
 | **Total** | **All ten issues** | **107/121** | **14/121** | **All criteria mapped; external verification remains open** | **Device, live-service, signed-artifact, store-console, and visual/manual checks are not claimed.** |
 
 ## External environment facts
 
-- The verification host is Linux. `xcodebuild`, CocoaPods, and the EAS CLI are
-  not installed, so no iOS compile, archive, code-signing, entitlement inspection,
-  or TestFlight candidate was produced.
-- `adb` is installed but `adb devices -l` reports no connected device. The shell
-  exposes no `ANDROID_HOME`/`ANDROID_SDK_ROOT`, release signing variables, EAS
-  project/owner variables, Apple team ID, or expected Android store certificate.
-- No release-signed Android App Bundle or iOS archive was supplied for artifact
-  scanning. Configuration assertions are not a substitute for inspecting those
-  packaged outputs.
+- The verification host is Linux. A previous hosted Xcode 26.6 archive exposed
+  concrete `FolioMtls` Swift/Security API errors; the candidate tree replaces
+  those APIs and delegate signatures, but the corrected source still needs a new
+  hosted archive. No signed IPA or TestFlight candidate was produced.
+- A Samsung SM-G781B on Android 16/API 36 is connected through ADB. The GitHub
+  release APK was rebuilt, signature-matched to the installed QA app, and upgraded
+  in place. The device is currently locked, so the post-fix rendered deep-link,
+  theme, locale, widget, and large-text matrix remains pending unlock.
+- A store-flavor AAB was built and structurally audited locally, but protected
+  Play signing credentials, the expected store certificate, EAS project/owner
+  credentials, Apple team identity, and store accounts are unavailable.
 - No owned HTTPS domain or Apple/Android association files were supplied, so
   universal links/App Links correctly remain deferred and unclaimed.
-- No live Paperless, OIDC provider, OTP challenge, client-certificate matrix,
-  printer, OS share destination, Spotlight/AppSearch surface, or store console was
-  attached to this verification environment.
+- Disposable Paperless 3.0.0 and 3.0.5 servers are attached locally. No configured
+  OIDC provider, OTP challenge, client-certificate matrix, printer, iOS device,
+  Spotlight surface, or store console is attached.
 
 ## Issue #14 — intake and durable upload
 
@@ -152,7 +164,11 @@ Primary local evidence: `tests/auth-foundation.test.mjs`,
   invalid/expired OTP states without retaining a password or OTP.
 - [x] **Software-verified:** OIDC uses the system authorization flow with S256
   PKCE and validates state, callback URI, issuer, audience, nonce, expiry, and the
-  RS256 signature before persisting tokens.
+  RS256 signature. Folio capability-discovers the matching Paperless headless
+  provider, exchanges the verified IdP tokens through the provider-token endpoint,
+  and persists only the returned Paperless DRF token. Legacy raw-IdP-token
+  profiles fail closed in foreground and background work and reconnect through
+  the existing transactional authority-rebind path.
 - [ ] **External/manual:** A supported mTLS connection must be built and exercised
   with a real securely stored client identity, including selection/import,
   password-protected identity, missing private key, expiry, replacement, hostname

@@ -56,6 +56,10 @@ const appContextSource = fs.readFileSync(
   new URL('../src/context/app-context.tsx', import.meta.url),
   'utf8',
 );
+const externalRoutingGatewaySource = fs.readFileSync(
+  new URL('../src/components/external-routing-gateway.tsx', import.meta.url),
+  'utf8',
+);
 
 const READY = {
   bootstrap: 'ready',
@@ -266,6 +270,22 @@ test('identical warm URLs remain distinct events and each clears the native cach
   ]);
 });
 
+test('deep links drain synchronously after consuming the SDK 57 native cache', () => {
+  const acceptDeepLink = externalRoutingGatewaySource.slice(
+    externalRoutingGatewaySource.indexOf('const acceptDeepLink'),
+    externalRoutingGatewaySource.indexOf('// Subscribe first'),
+  );
+  assert.match(
+    acceptDeepLink,
+    /runtime\.current\.acceptUrl\(input, 'deep-link'\)[\s\S]*if \(accepted\.accepted\) \{\s*drainExternalRoutes\(\)/,
+  );
+  assert.match(
+    acceptDeepLink,
+    /acceptRoute\(\{ kind: 'home', source: 'deep-link' \}\);\s*drainExternalRoutes\(\)/,
+  );
+  assert.doesNotMatch(acceptDeepLink, /requestAnimationFrame|scheduleDrain/);
+});
+
 test('notification contents are redacted by default and metadata is strict', () => {
   const notification = createNotificationContent({
     kind: 'document-ready',
@@ -373,7 +393,7 @@ test('background credentials remain bound to unchanged metadata and captured sec
   assert.match(source, /if \(secret\.connectionFingerprint !== fingerprint\) return null/);
   assert.match(
     source,
-    /connectionProfileAuthFingerprint\(profile\) !== connectionFingerprint[\s\S]*currentSecrets\.connectionFingerprint === connectionFingerprint[\s\S]*profileSecretsAuthorizeSameContext\(authoritySecrets, currentSecrets\)[\s\S]*credentialsMatchStoredProfile\(credentials, profile, currentSecrets\)/,
+    /connectionProfileAuthFingerprint\(profile\) !== connectionFingerprint[\s\S]*after\.revision !== before\.revision[\s\S]*connectionProfileAuthFingerprint\(currentProfile\) !== connectionFingerprint[\s\S]*currentSecrets\.connectionFingerprint === connectionFingerprint[\s\S]*profileSecretsAuthorizeSameContext\(authoritySecrets, currentSecrets\)[\s\S]*credentialsMatchStoredProfile\(credentials, currentProfile, currentSecrets\)/,
   );
   assert.match(source, /authoritySecrets: secret/);
   assert.match(source, /async upload\(task, onProgress\) \{[\s\S]*if \(!await executionGuard\(\)\)/);

@@ -5,10 +5,20 @@ profile ID. Remote document IDs, task IDs, and server URLs are not global
 identities. The ID is stable for rename/non-authority edits; an authority-changing
 edit deliberately allocates a fresh ID.
 
-- API/OIDC tokens, custom-header values, and client-identity references are stored
+- Paperless API tokens, custom-header values, and client-identity references are stored
   separately from profile metadata through the platform secret adapter. They are
   never written to the SQLite document/task database, filenames, notifications,
   route URLs, or logs.
+- OIDC provider access, refresh, and ID tokens are transient. After local
+  signature and claim validation, Folio sends them only to Paperless's advertised
+  headless provider-token endpoint and retains only Paperless's returned DRF API
+  token. A provider token is never used directly as a Bearer credential for the
+  Paperless document API.
+- Legacy protected records that predate the Paperless exchange may contain an
+  `oidc` provider token. Request-header construction, foreground credential
+  loading, and worker authority validation all reject it. The cached workspace
+  remains profile-scoped while Settings offers an explicit reconnect; a fresh
+  Paperless token is published before the legacy authority namespace is retired.
 - Native profile secrets use Keychain/Keystore through Expo SecureStore. Expo
   SecureStore does not support web. Browser builds are development/demo-only,
   remain token-only, and disclose that their origin-scoped `localStorage` token
@@ -19,7 +29,7 @@ edit deliberately allocates a fresh ID.
   (historically around 2,048 bytes on some iOS releases). The native string-store
   adapter therefore keeps every physical SecureStore value at or below a
   conservative 1,536-byte UTF-8 ceiling. Values up to 1,400 bytes remain direct
-  single-key records; larger profile indexes, OIDC/custom-header bundles, and
+  single-key records; larger profile indexes, custom-header bundles, and
   notification-route registries are split into at most 188 chunks with a 256 KiB
   logical-record limit. Each hashed logical-key namespace has two generations.
   A versioned staging manifest is written before its chunks, the complete
@@ -127,12 +137,13 @@ edit deliberately allocates a fresh ID.
   committed.
 
 Background execution is best effort. Headless workers skip mTLS profiles because
-the native client identity cannot be safely selected there, and they do not refresh
-an expired OIDC token; foreground recovery remains authoritative for those cases.
+the native client identity cannot be safely selected there. OIDC profiles use the
+Paperless DRF token obtained during interactive setup, so workers never need an
+identity-provider token or provider refresh flow.
 Each worker captures its complete authority-bearing secret values and compares
 them directly with the current protected record at execution boundaries, in
-addition to checking the non-secret connection fingerprint. Token, OIDC-session,
-or custom-header rotation therefore invalidates stale captured requests without
+addition to checking the non-secret connection fingerprint. Token or
+custom-header rotation therefore invalidates stale captured requests without
 logging, hashing, or persisting secret derivatives.
 Cancellation after Paperless returns a task ID stops local polling only and never
 claims to cancel server processing.

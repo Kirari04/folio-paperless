@@ -132,21 +132,13 @@ export function ExternalRoutingGateway() {
   }, [drainExternalRoutes]);
 
   useEffect(() => {
-    const frames = new Set<number>();
-    const scheduleDrain = () => {
-      const frame = requestAnimationFrame(() => {
-        frames.delete(frame);
-        drainExternalRoutes();
-      });
-      frames.add(frame);
-    };
     const acceptDeepLink = (input: string) => {
       const accepted = runtime.current.acceptUrl(input, 'deep-link');
       if (accepted.accepted) {
-        scheduleDrain();
+        drainExternalRoutes();
       } else if (accepted.reason === 'invalid-url') {
         runtime.current.acceptRoute({ kind: 'home', source: 'deep-link' });
-        scheduleDrain();
+        drainExternalRoutes();
       }
     };
 
@@ -159,7 +151,6 @@ export function ExternalRoutingGateway() {
 
     return () => {
       subscription.remove();
-      for (const frame of frames) cancelAnimationFrame(frame);
     };
   }, [drainExternalRoutes]);
 

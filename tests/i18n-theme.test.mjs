@@ -315,22 +315,19 @@ test('semantic application surfaces, statuses, and control boundaries retain AA 
   }
 });
 
-test('Android semantic accents have exact light and night resources', async () => {
+test('Android semantic colors have exact light and night resources', async () => {
   const integrations = require('../plugins/withFolioPlatformIntegrations.js');
   const themeSource = await readFile(new URL('../src/constants/theme.ts', import.meta.url), 'utf8');
-  assert.match(themeSource, /PlatformColor\(androidRole \?\? `@color\/folio_\$\{name\.replaceAll\('-', '_'\)\}`\)/);
-  assert.doesNotMatch(themeSource, /\?attr\/colorSurfaceContainerHigh/);
-  assert.match(
-    themeSource,
-    /paperStrong: semanticColor\([^\n]+\?android:attr\/colorBackgroundFloating/,
-  );
+  assert.match(themeSource, /PlatformColor\(`@color\/folio_\$\{name\.replaceAll\('-', '_'\)\}`\)/);
+  assert.doesNotMatch(themeSource, /\?(?:android:)?attr\//);
 
   for (const mode of ['light', 'dark']) {
     const expected = Object.fromEntries(Object.entries(integrations.ANDROID_THEME_COLORS[mode])
       .map(([name, value]) => [name.replaceAll('_', ''), value]));
     const actual = Object.fromEntries([
-      'lime', 'limeSurface', 'limeDark', 'mint', 'apricot', 'lavender', 'sky', 'rose',
-      'dangerSurface', 'viewerSurface',
+      'canvas', 'paper', 'paperStrong', 'ink', 'inkSoft', 'muted', 'faint', 'line',
+      'lineStrong', 'lime', 'limeSurface', 'limeDark', 'mint', 'apricot', 'lavender',
+      'sky', 'rose', 'danger', 'dangerSurface', 'viewerSurface',
     ].map((name) => [name.replaceAll('_', '').toLocaleLowerCase(), themeHex[mode][name]]));
     assert.deepEqual(
       Object.fromEntries(Object.entries(expected).map(([name, value]) => [name.toLocaleLowerCase(), value])),
@@ -348,6 +345,10 @@ test('known Folio authentication errors localize while unknown server text stays
   assert.equal(
     presentAuthError(Object.assign(new Error('English implementation detail'), { code: 'otp-required' })),
     'Dieses Paperless-Konto benötigt einen Einmalcode.',
+  );
+  assert.equal(
+    presentAuthError(Object.assign(new Error('English headless detail'), { code: 'headless-unavailable' })),
+    'Dieser Paperless-Server unterstützt keine OIDC-Anmeldung für Apps. Verwende ein API-Token oder aktualisiere Paperless.',
   );
   assert.equal(presentAuthError(new Error('Paperless custom policy response')), 'Paperless custom policy response');
   setRuntimeLocale('en');
@@ -481,6 +482,20 @@ test('Android widget resources have complete English and German label parity', a
   assert.deepEqual(names(german), names(english));
   assert.match(german, /Gesperrt/);
   assert.match(german, /Schnellscan/);
+});
+
+test('Android widget copy remains visible under large text and longer translations', async () => {
+  const layout = await readFile(
+    new URL('../modules/folio-platform/android/src/main/res/layout/folio_inbox_widget.xml', import.meta.url),
+    'utf8',
+  );
+  for (const id of ['folio_widget_primary', 'folio_widget_secondary']) {
+    const field = layout.match(new RegExp(`<TextView\\s+android:id="@\\+id/${id}"[\\s\\S]*?\\/>`))?.[0] ?? '';
+    assert.match(field, /android:layout_width="match_parent"/);
+    assert.match(field, /android:autoSizeTextType="uniform"/);
+    assert.match(field, /android:maxLines="2"/);
+    assert.doesNotMatch(field, /android:maxLines="1"/);
+  }
 });
 
 test('native shortcut and widget metadata have complete English and German catalogs', async () => {
@@ -672,6 +687,7 @@ test('Expo config declares automatic appearance, native locales, and incoming sh
   assert.equal(splash[1].dark.backgroundColor, themeHex.dark.canvas);
   assert.equal(sharing[1].ios.activationRule.supportsFileWithMaxCount, 20);
   assert.equal(sharing[1].ios.activationRule.supportsImageWithMaxCount, 20);
+  assert.equal(sharing[1].ios.activationRule.supportsText, true);
   assert.deepEqual(sharing[1].android.singleShareMimeTypes, sharing[1].android.multipleShareMimeTypes);
   assert.ok(sharing[1].android.singleShareMimeTypes.includes('text/plain'));
   assert.equal(widgets[1].widgets[0].displayName, 'folio_widget_display_name');

@@ -84,6 +84,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const {
     connected,
+    profileConfigured,
     activeProfile,
     connectionInfo,
     isSyncing,
@@ -111,7 +112,12 @@ export default function SettingsScreen() {
       ? { supported: false, engine: 'unsupported', reason: 'native-module-unavailable' }
       : null
   ));
-  const syncStatus = presentSyncStatus({ connected, lastSynced, online, syncState });
+  const syncStatus = presentSyncStatus({
+    connected: profileConfigured,
+    lastSynced,
+    online,
+    syncState,
+  });
   const syncStatusText = t(
     syncStatus.messageKey,
     syncStatus.lastSuccessfulSyncAt
@@ -352,7 +358,7 @@ export default function SettingsScreen() {
           </Pressable>
         )}
 
-        {connected && !!connectionError && (
+        {profileConfigured && !!connectionError && (
           <Text accessibilityLiveRegion="polite" style={styles.error}>
             {connectionError}
           </Text>

@@ -135,6 +135,7 @@
             "appGroupId": "group.app.folio.paperless.share",
             "extensionBundleIdentifier": "app.folio.paperless.share-extension",
             "activationRule": {
+              "supportsText": true,
               "supportsFileWithMaxCount": 20,
               "supportsImageWithMaxCount": 20
             }
