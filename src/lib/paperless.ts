@@ -1,4 +1,5 @@
-import { File, UploadType } from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
+import { fetch as expoFetch } from 'expo/fetch';
 import { Platform } from 'react-native';
 
 import {
@@ -24,6 +25,22 @@ import {
 
 import { matchesLibraryFilters } from '@/lib/library-filters';
 import { normalizePaperlessServerUrl, ServerUrlError } from '@/lib/server-url';
+import { getNativeMtlsTransport } from '@/lib/auth/native-mtls-module';
+import { assertNativeMtlsRequestUrl, validateNativeMtlsResponseUrl } from '@/lib/auth/native-mtls-adapter';
+import { NativeMtlsCapabilityError } from '@/lib/auth/session';
+import { serializeUploadMetadata } from '@/lib/upload-metadata';
+import { buildVisibleTagOptions } from '@/lib/tag-hierarchy';
+import {
+  appendPaperlessSavedViewRules,
+  isFolioEditableSavedViewRule,
+} from '@/lib/saved-view-controller';
+import { translateRuntime } from '../i18n/runtime.ts';
+import type { UploadMetadataDraft } from '@/types/tasks';
+import {
+  DOWNLOAD_STORAGE_RESERVE_BYTES,
+  effectiveDownloadLimit,
+  MAX_DOCUMENT_DOWNLOAD_BYTES,
+} from '@/lib/download-policy';
 
 type ApiList<T> = {
   count: number;
@@ -36,6 +53,9 @@ type ApiNamedItem = {
   id: number;
   name: string;
   color?: string;
+  parent?: number | null;
+  children?: number[];
+  is_inbox_tag?: boolean;
 };
 
 type ApiUser = {
@@ -76,6 +96,7 @@ type ApiDocument = {
   notes?: ApiNote[];
   versions?: ApiDocumentVersion[];
   root_document?: number | null;
+  duplicate_documents?: unknown;
 };
 
 type ApiCustomField = {
@@ -108,12 +129,12 @@ type ApiDocumentVersion = {
   is_root: boolean;
 };
 
-type ApiSavedView = {
+type ApiSavedView = Record<string, unknown> & {
   id: number;
   name: string;
   sort_field?: string;
   sort_reverse?: boolean;
-  filter_rules?: { rule_type: number; value: string | null }[];
+  filter_rules?: ({ rule_type: number; value: string | null } & Record<string, unknown>)[];
   page_size?: number;
   display_mode?: string;
   display_fields?: (string | number)[];
@@ -129,6 +150,7 @@ export type PaperlessTask = {
   taskId: string;
   status: string;
   documentId?: number;
+  duplicateDocumentIds?: number[];
   message?: string;
 };
 
@@ -136,9 +158,16 @@ type ApiTask = {
   task_id?: string;
   id?: string | number;
   status?: string;
+  status_display?: string;
   state?: string;
   related_document?: number | string | null;
   result?: unknown;
+  result_data?: unknown;
+  related_document_ids?: unknown;
+  duplicate_document_ids?: unknown;
+  duplicate_documents?: unknown;
+  duplicates?: unknown;
+  duplicate_of?: unknown;
   message?: string;
   messages?: string[];
 };
@@ -146,6 +175,8 @@ type ApiTask = {
 const API_VERSION = '10';
 const REQUEST_TIMEOUT_MS = 20_000;
 const UPLOAD_TIMEOUT_MS = 5 * 60_000;
+export const MAX_PAPERLESS_API_RESPONSE_BYTES = 32 * 1024 * 1024;
+const MAX_UPLOAD_RESPONSE_BYTES = 1024 * 1024;
 const cardColors = ['#C9E1EB', '#EDC7C1', '#D8D2F1', '#CDE8D4', '#F2B486', '#D8F678'];
 
 type PaperlessUploadFile = {
@@ -160,6 +191,7 @@ type PaperlessUploadOptions = {
 
 export class PaperlessApiError extends Error {
   status?: number;
+  duplicateDocumentIds?: number[];
 
   constructor(message: string, status?: number) {
     super(message);
@@ -184,11 +216,154 @@ export function paperlessHeaders(token: string): Record<string, string> {
   };
 }
 
+function mergeCredentialHeaders(
+  base: Record<string, string>,
+  customHeaders: Record<string, string> = {},
+) {
+  const merged = new Map<string, [string, string]>();
+  Object.entries(base).forEach(([name, value]) => merged.set(name.toLocaleLowerCase(), [name, value]));
+  Object.entries(customHeaders).forEach(([name, value]) => {
+    merged.set(name.toLocaleLowerCase(), [name, value]);
+  });
+  return Object.fromEntries(merged.values());
+}
+
+export function paperlessRequestHeaders(
+  credentials: PaperlessCredentials,
+  accept = `application/json; version=${API_VERSION}`,
+) {
+  return mergeCredentialHeaders({
+    Accept: accept,
+    ...(credentials.token.trim()
+      ? { Authorization: `${credentials.authorizationScheme ?? 'Token'} ${credentials.token.trim()}` }
+      : {}),
+  }, credentials.customHeaders);
+}
+
 export function paperlessFileHeaders(token: string): Record<string, string> {
   return {
     Accept: '*/*',
     Authorization: `Token ${token.trim()}`,
   };
+}
+
+export function paperlessCredentialFileHeaders(credentials: PaperlessCredentials) {
+  return paperlessRequestHeaders(credentials, '*/*');
+}
+
+/**
+ * Confines an authenticated file request to the configured Paperless origin
+ * and installation subpath. This is intentionally separate from a generic
+ * same-origin check: reverse proxies commonly host Paperless below a path, and
+ * credentials must never be attached to a sibling application on that origin.
+ */
+export function assertPaperlessResourceUrl(serverUrl: string, requestUrl: string) {
+  const base = new URL(normalizeServerUrl(serverUrl));
+  let target: URL;
+  try {
+    target = new URL(requestUrl);
+  } catch {
+    throw new PaperlessApiError('Paperless returned an invalid file URL.');
+  }
+  const basePath = base.pathname.replace(/\/+$/, '');
+  const targetInBasePath = basePath === ''
+    || target.pathname === basePath
+    || target.pathname.startsWith(`${basePath}/`);
+  if (
+    target.protocol !== base.protocol
+    || !['http:', 'https:'].includes(target.protocol)
+    || target.origin !== base.origin
+    || target.username
+    || target.password
+    || target.hash
+    || !targetInBasePath
+  ) {
+    throw new PaperlessApiError(
+      'Folio refused to send Paperless credentials outside the configured server and subpath.',
+    );
+  }
+  return target.toString();
+}
+
+export function usesNativeMutualTls(credentials: PaperlessCredentials) {
+  return typeof credentials.clientIdentityRef === 'string' && credentials.clientIdentityRef.length > 0;
+}
+
+async function withNativeMtlsSession<T>(
+  credentials: PaperlessCredentials,
+  operation: (session: import('./auth/session').AuthenticatedProfileSession) => Promise<T>,
+): Promise<T> {
+  if (!usesNativeMutualTls(credentials)) {
+    throw new NativeMtlsCapabilityError(
+      'native-mtls-transport-unavailable',
+      'This Paperless connection has no saved client identity.',
+    );
+  }
+  if (!credentials.profileId?.trim()) {
+    throw new NativeMtlsCapabilityError(
+      'client-identity-request-failed',
+      'A stable profile ID is required for a mutual-TLS request.',
+    );
+  }
+  const transport = getNativeMtlsTransport();
+  if (!transport || !(await transport.isAvailable())) {
+    throw new NativeMtlsCapabilityError(
+      'native-mtls-transport-unavailable',
+      'This build has no certificate-aware native transport.',
+    );
+  }
+  const session = await transport.openAuthenticatedSession({
+    profileId: credentials.profileId,
+    clientIdentityRef: credentials.clientIdentityRef!,
+    serverUrl: credentials.serverUrl,
+  });
+  try {
+    return await operation(session);
+  } finally {
+    await session.dispose();
+  }
+}
+
+function responseFromNative(
+  requestUrl: string,
+  native: import('./auth/session').NativeMtlsHttpResponse,
+) {
+  validateNativeMtlsResponseUrl(requestUrl, native.responseUrl);
+  return new Response(
+    native.status === 204 || native.status === 205 ? null : native.body,
+    { status: native.status, headers: native.headers as Record<string, string> },
+  );
+}
+
+export async function downloadPaperlessFileWithCredentials(
+  credentials: PaperlessCredentials,
+  requestUrl: string,
+  destinationUri: string,
+  options: {
+    signal?: AbortSignal;
+    onProgress?: (fraction: number | null) => void;
+    maxBytes?: number;
+  } = {},
+) {
+  const url = assertNativeMtlsRequestUrl(credentials.serverUrl, requestUrl);
+  const maxBytes = effectiveDownloadLimit({
+    maxBytes: options.maxBytes ?? MAX_DOCUMENT_DOWNLOAD_BYTES,
+    availableBytes: Paths.availableDiskSpace,
+    reserveBytes: DOWNLOAD_STORAGE_RESERVE_BYTES,
+  });
+  return withNativeMtlsSession(credentials, async (session) => {
+    const response = await session.download({
+      url,
+      method: 'GET',
+      headers: paperlessCredentialFileHeaders(credentials),
+      destinationUri,
+      maxBytes,
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+    });
+    validateNativeMtlsResponseUrl(url, response.responseUrl);
+    return response;
+  });
 }
 
 export function getPaperlessDocumentUrl(
@@ -248,7 +423,64 @@ function readUploadError(body: string) {
   }
 }
 
+export async function readPaperlessResponseTextWithinLimit(
+  response: Pick<Response, 'body' | 'headers' | 'text'>,
+  maxBytes = MAX_PAPERLESS_API_RESPONSE_BYTES,
+) {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new PaperlessApiError('Paperless returned a response that exceeds Folio\'s safety limit.');
+  }
+  if (!response.body) {
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > maxBytes) {
+      throw new PaperlessApiError('Paperless returned a response that exceeds Folio\'s safety limit.');
+    }
+    return text;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new PaperlessApiError('Paperless returned a response that exceeds Folio\'s safety limit.');
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+    return chunks.join('');
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function configuredPaperlessRequestUrl(credentials: PaperlessCredentials, path: string) {
+  const baseUrl = normalizeServerUrl(credentials.serverUrl);
+  const base = new URL(baseUrl);
+  const target = /^https?:/i.test(path) ? new URL(path) : new URL(`${baseUrl}${path}`);
+  const apiPrefix = `${base.pathname.replace(/\/+$/, '')}/api/`.replace(/^\/\//, '/');
+  if (
+    (!/^https?:/i.test(path) && !path.startsWith('/api/'))
+    || target.origin !== base.origin
+    || !target.pathname.startsWith(apiPrefix)
+    || target.username
+    || target.password
+  ) {
+    throw new PaperlessApiError('Folio refused a Paperless request outside the configured API origin.');
+  }
+  return target.toString();
+}
+
 function uploadFileError(error: unknown) {
+  if (error instanceof NativeMtlsCapabilityError) {
+    return paperlessNativeMtlsError(error);
+  }
   const message = error instanceof Error ? error.message : String(error);
   if (/no such file|file.?not.?found|enoent|permission denied|could not read|cannot read/i.test(message)) {
     return new PaperlessApiError(
@@ -265,11 +497,58 @@ function uploadFileError(error: unknown) {
   );
 }
 
+function paperlessNativeMtlsError(error: NativeMtlsCapabilityError) {
+  switch (error.code) {
+    case 'client-identity-expired':
+      return new PaperlessApiError(
+        'The saved client certificate has expired. Select a replacement in connection settings.',
+      );
+    case 'client-identity-not-yet-valid':
+      return new PaperlessApiError(
+        'The saved client certificate is not valid yet. Check the device clock or select a replacement.',
+      );
+    case 'client-identity-not-found':
+    case 'client-identity-missing-private-key':
+      return new PaperlessApiError(
+        'The saved client identity is no longer available. Select or import a replacement in connection settings.',
+      );
+    case 'native-mtls-transport-unavailable':
+      return new PaperlessApiError(
+        'This build cannot make certificate-aware requests. Use a supported native build.',
+      );
+    case 'client-identity-origin-mismatch':
+      return new PaperlessApiError(
+        'Folio refused to present the client identity outside the saved HTTPS server.',
+      );
+    case 'client-identity-selection-canceled':
+    case 'client-identity-request-canceled':
+      return new PaperlessApiError('The certificate-aware request was canceled.');
+    case 'client-identity-import-failed':
+      return new PaperlessApiError(
+        'The client identity could not be imported. Check the PKCS#12 file and password.',
+      );
+    case 'client-identity-request-failed':
+      return new PaperlessApiError(
+        'The certificate-aware request failed. Check the client identity and server TLS configuration.',
+      );
+  }
+}
+
 async function uploadPaperlessMultipart<T>(
   credentials: PaperlessCredentials,
   path: string,
   file: PaperlessUploadFile,
   parameters: Record<string, string>,
+  options: PaperlessUploadOptions = {},
+) {
+  return uploadPaperlessFormData<T>(credentials, path, file, Object.entries(parameters), options);
+}
+
+async function uploadPaperlessFormData<T>(
+  credentials: PaperlessCredentials,
+  path: string,
+  file: PaperlessUploadFile,
+  parameters: readonly (readonly [string, string])[],
   options: PaperlessUploadOptions = {},
 ) {
   let uploadFile: File;
@@ -290,34 +569,64 @@ async function uploadPaperlessMultipart<T>(
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
-  const baseUrl = normalizeServerUrl(credentials.serverUrl);
+  const form = new FormData();
+  form.append('document', uploadFile as unknown as Blob, file.name);
+  for (const [name, value] of parameters) form.append(name, value);
   options.onProgress?.(0);
 
   try {
-    const response = await uploadFile.upload(`${baseUrl}${path}`, {
-      fieldName: 'document',
-      headers: paperlessHeaders(credentials.token),
-      httpMethod: 'POST',
-      mimeType: file.mimeType || uploadFile.type || 'application/octet-stream',
-      onProgress: ({ bytesSent, totalBytes }) => {
-        if (totalBytes > 0) options.onProgress?.(Math.min(1, bytesSent / totalBytes));
-      },
-      parameters,
-      sessionType: 'foreground',
-      signal: controller.signal,
-      uploadType: UploadType.MULTIPART,
-    });
-
-    if (response.status < 200 || response.status >= 300) {
-      throw new PaperlessApiError(
-        readableError(response.status, readUploadError(response.body)),
-        response.status,
+    if (usesNativeMutualTls(credentials)) {
+      const requestUrl = `${normalizeServerUrl(credentials.serverUrl)}${path}`;
+      const response = await withNativeMtlsSession(credentials, (session) =>
+        session.uploadMultipart({
+          url: assertNativeMtlsRequestUrl(credentials.serverUrl, requestUrl),
+          method: 'POST',
+          headers: paperlessRequestHeaders(credentials),
+          fileUri: uploadFile.uri,
+          fieldName: 'document',
+          fileName: file.name,
+          mimeType: file.mimeType || uploadFile.type || 'application/octet-stream',
+          parameters,
+          signal: controller.signal,
+          onProgress: (fraction) => options.onProgress?.(fraction ?? 0),
+        }),
       );
+      validateNativeMtlsResponseUrl(requestUrl, response.responseUrl);
+      if (new TextEncoder().encode(response.body).byteLength > MAX_UPLOAD_RESPONSE_BYTES) {
+        throw new PaperlessApiError('Paperless returned an oversized upload response.');
+      }
+      if (response.status < 200 || response.status >= 300) {
+        throw new PaperlessApiError(
+          readableError(response.status, readUploadError(response.body)),
+          response.status,
+        );
+      }
+      options.onProgress?.(1);
+      try {
+        return JSON.parse(response.body) as T;
+      } catch {
+        throw new PaperlessApiError(
+          'Paperless received the file but returned an unexpected response. Check the Inbox before trying again.',
+        );
+      }
     }
-
+    // expo/fetch streams native File instances without materializing the whole
+    // upload in JavaScript. Fetch does not currently expose upload byte events,
+    // so the durable task reports an honest indeterminate uploading state.
+    const response = await expoFetch(`${normalizeServerUrl(credentials.serverUrl)}${path}`, {
+      method: 'POST',
+      headers: paperlessRequestHeaders(credentials),
+      body: form,
+      redirect: 'manual',
+      signal: controller.signal,
+    });
+    const body = await readPaperlessResponseTextWithinLimit(response, MAX_UPLOAD_RESPONSE_BYTES);
+    if (!response.ok) {
+      throw new PaperlessApiError(readableError(response.status, readUploadError(body)), response.status);
+    }
     options.onProgress?.(1);
     try {
-      return JSON.parse(response.body) as T;
+      return JSON.parse(body) as T;
     } catch {
       throw new PaperlessApiError(
         'Paperless received the file but returned an unexpected response. Check the Inbox before trying again.',
@@ -336,33 +645,72 @@ async function uploadPaperlessMultipart<T>(
   }
 }
 
-async function request(
+export async function requestPaperlessRawResponse(
   credentials: PaperlessCredentials,
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
   const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (init.signal?.aborted) controller.abort();
+  else init.signal?.addEventListener('abort', abort, { once: true });
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  const baseUrl = normalizeServerUrl(credentials.serverUrl);
-  const url = path.startsWith('http') ? path : `${baseUrl}${path}`;
+  const url = configuredPaperlessRequestUrl(credentials, path);
 
   try {
-    const response = await fetch(url, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        ...paperlessHeaders(credentials.token),
-        ...init.headers,
-      },
+    const headerInput = new Headers(paperlessRequestHeaders(credentials));
+    new Headers(init.headers).forEach((value, name) => headerInput.set(name, value));
+    const headers: Record<string, string> = {};
+    new Headers(headerInput).forEach((value, name) => {
+      headers[name] = value;
     });
-    if (!response.ok) {
-      throw new PaperlessApiError(readableError(response.status, await readError(response)), response.status);
+    const response = usesNativeMutualTls(credentials)
+      ? await withNativeMtlsSession(credentials, async (session) => {
+          const method = (init.method ?? 'GET').toUpperCase();
+          if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(method)) {
+            throw new PaperlessApiError('This request uses an unsupported HTTP method.');
+          }
+          if (init.body !== undefined && typeof init.body !== 'string') {
+            throw new PaperlessApiError('This request body cannot use the native mutual-TLS transport.');
+          }
+          const requestUrl = assertNativeMtlsRequestUrl(credentials.serverUrl, url);
+          const native = await session.request({
+            url: requestUrl,
+            method: method as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS',
+            headers,
+            ...(typeof init.body === 'string' ? { body: init.body } : {}),
+            signal: controller.signal,
+          });
+          return responseFromNative(requestUrl, native);
+        })
+      : await fetch(url, {
+          ...init,
+          redirect: 'manual',
+          signal: controller.signal,
+          headers,
+        });
+    if (!usesNativeMutualTls(credentials)) {
+      if (response.status >= 300 && response.status < 400) {
+        throw new PaperlessApiError('Paperless redirected an authenticated API request; Folio did not forward credentials.');
+      }
+      if (response.url) configuredPaperlessRequestUrl(credentials, response.url);
     }
-    return response;
+    if (response.status === 204 || response.status === 205 || init.method?.toUpperCase() === 'HEAD') {
+      return response;
+    }
+    const body = await readPaperlessResponseTextWithinLimit(response);
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   } catch (error) {
     if (error instanceof PaperlessApiError) throw error;
     if (error instanceof Error && error.name === 'AbortError') {
       throw new PaperlessApiError('The Paperless server took too long to respond. Try again.');
+    }
+    if (error instanceof NativeMtlsCapabilityError) {
+      throw paperlessNativeMtlsError(error);
     }
     throw new PaperlessApiError(
       Platform.OS === 'ios'
@@ -371,11 +719,27 @@ async function request(
     );
   } finally {
     clearTimeout(timeout);
+    init.signal?.removeEventListener('abort', abort);
   }
 }
 
+export async function requestPaperlessResponse(
+  credentials: PaperlessCredentials,
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const response = await requestPaperlessRawResponse(credentials, path, init);
+  if (!response.ok) {
+    throw new PaperlessApiError(
+      readableError(response.status, await readError(response)),
+      response.status,
+    );
+  }
+  return response;
+}
+
 async function getJson<T>(credentials: PaperlessCredentials, path: string): Promise<T> {
-  const response = await request(credentials, path);
+  const response = await requestPaperlessResponse(credentials, path);
   return response.json() as Promise<T>;
 }
 
@@ -385,7 +749,7 @@ async function sendJson<T>(
   method: 'POST' | 'PATCH' | 'DELETE',
   body?: unknown,
 ): Promise<T> {
-  const response = await request(credentials, path, {
+  const response = await requestPaperlessResponse(credentials, path, {
     method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -401,10 +765,12 @@ function safeNextPath(credentials: PaperlessCredentials, next: string) {
   // internal hostname. We deliberately discard that origin and send only API
   // paths back to the server address the user trusted, so the token never
   // leaves the configured origin.
-  if (!target.pathname.startsWith('/api/')) {
+  const basePath = base.pathname.replace(/\/+$/, '');
+  const apiPrefix = `${basePath}/api/`.replace(/^\/\//, '/');
+  if (!target.pathname.startsWith(apiPrefix)) {
     throw new PaperlessApiError('Paperless returned an invalid pagination address.');
   }
-  return `${target.pathname}${target.search}`;
+  return `${target.pathname.slice(basePath.length)}${target.search}`;
 }
 
 async function getAllPages<T>(credentials: PaperlessCredentials, initialPath: string) {
@@ -444,17 +810,19 @@ function buildCatalog(
   owners: ApiUser[],
   customFields: ApiCustomField[],
   savedViews: ApiSavedView[],
+  workflows: ApiNamedItem[] = [],
 ): PaperlessCatalog {
   return {
     correspondents: correspondents.map((item) => toOption('correspondent', item)),
     documentTypes: documentTypes.map((item) => toOption('type', item)),
-    tags: tags.map((item) => toOption('tag', item)),
+    tags: buildVisibleTagOptions(tags),
     storagePaths: storagePaths.map((item) => toOption('storage-path', item)),
     owners: owners.map((owner) => ({
       id: `remote-owner-${owner.id}`,
       remoteId: owner.id,
       name: [owner.first_name, owner.last_name].filter(Boolean).join(' ') || owner.username,
     })),
+    workflows: workflows.map((item) => toOption('workflow', item)),
     customFields: customFields.map(mapCustomFieldDefinition),
     savedViews: savedViews.map(mapSavedView),
   };
@@ -473,19 +841,36 @@ function mapCustomFieldDefinition(field: ApiCustomField): PaperlessCustomFieldDe
 }
 
 function mapSavedView(view: ApiSavedView): PaperlessSavedView {
+  const {
+    id,
+    name,
+    sort_field: sortField,
+    sort_reverse: sortReverse,
+    filter_rules: filterRules,
+    page_size: pageSize,
+    display_mode: displayMode,
+    display_fields: displayFields,
+    ...extra
+  } = view;
   return {
-    id: `remote-saved-view-${view.id}`,
-    remoteId: view.id,
-    name: view.name,
-    sortField: view.sort_field || 'added',
-    sortReverse: Boolean(view.sort_reverse),
-    filterRules: (view.filter_rules || []).map((rule) => ({
-      ruleType: rule.rule_type,
-      value: rule.value,
-    })),
-    pageSize: view.page_size || 50,
-    displayMode: view.display_mode,
-    displayFields: (view.display_fields || []).map(String),
+    id: `remote-saved-view-${id}`,
+    remoteId: id,
+    name,
+    sortField: sortField || 'added',
+    sortReverse: Boolean(sortReverse),
+    filterRules: (filterRules || []).map((rule) => {
+      const { rule_type: ruleType, value, ...extra } = rule;
+      return {
+        ruleType,
+        value,
+        known: isFolioEditableSavedViewRule(ruleType, value),
+        extra: Object.freeze(extra),
+      };
+    }),
+    pageSize: pageSize || 50,
+    displayMode,
+    displayFields: (displayFields || []).map(String),
+    extra: Object.freeze(extra),
   };
 }
 
@@ -516,20 +901,6 @@ function formatBytes(bytes?: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatAdded(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const today = new Date();
-  if (date.toDateString() === today.toDateString()) {
-    return `Today, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-  }
-  return date.toLocaleDateString([], {
-    day: '2-digit',
-    month: 'short',
-    ...(date.getFullYear() === today.getFullYear() ? {} : { year: 'numeric' }),
-  });
-}
-
 function mapDocument(document: ApiDocument, catalog: PaperlessCatalog): DocumentItem {
   const correspondent = catalog.correspondents.find((item) => item.remoteId === document.correspondent);
   const documentType = catalog.documentTypes.find((item) => item.remoteId === document.document_type);
@@ -539,22 +910,30 @@ function mapDocument(document: ApiDocument, catalog: PaperlessCatalog): Document
     .map((tagId) => catalog.tags.find((item) => item.remoteId === tagId))
     .filter((tag): tag is PaperlessOption => Boolean(tag));
   const content = document.content?.replace(/\s+/g, ' ').trim() || '';
+  const fileSizeBytes = document.archived_file_size || document.original_file_size;
 
   return {
     id: `remote-${document.id}`,
     remoteId: document.id,
-    title: document.title || `Document ${document.id}`,
-    correspondent: correspondent?.name || (document.correspondent ? 'Unknown correspondent' : 'No correspondent'),
+    title: document.title || translateRuntime('document.remoteTitle', { id: document.id }),
+    correspondent: correspondent?.name || (document.correspondent
+      ? translateRuntime('document.unknownCorrespondent')
+      : translateRuntime('document.noCorrespondent')),
     correspondentId: correspondent?.id,
-    documentType: documentType?.name || (document.document_type ? 'Document' : 'Unsorted'),
+    documentType: documentType?.name || (document.document_type
+      ? translateRuntime('document.remoteGenericType')
+      : translateRuntime('document.unsorted')),
     documentTypeId: documentType?.id,
-    storagePath: storagePath?.name || (document.storage_path ? 'Unknown storage path' : 'Automatic'),
+    storagePath: storagePath?.name || (document.storage_path
+      ? translateRuntime('document.unknownStoragePath')
+      : translateRuntime('document.automatic')),
     storagePathId: storagePath?.id,
     created: document.created,
-    added: formatAdded(document.added),
+    added: document.added,
     addedAt: document.added,
     pageCount: document.page_count || 1,
-    fileSize: formatBytes(document.archived_file_size || document.original_file_size),
+    fileSize: formatBytes(fileSizeBytes),
+    ...(fileSizeBytes ? { fileSizeBytes } : {}),
     tags: resolvedTags.map((tag) => tag.name),
     tagIds: resolvedTags.map((tag) => tag.id),
     status: resolvedTags.some((tag) => tag.name.toLocaleLowerCase() === 'inbox')
@@ -562,13 +941,17 @@ function mapDocument(document: ApiDocument, catalog: PaperlessCatalog): Document
       : 'archived',
     color: cardColors[document.id % cardColors.length],
     accent: '#354139',
-    excerpt: content.slice(0, 220) || 'No extracted text',
+    excerpt: content.slice(0, 220) || translateRuntime('document.noExtractedText'),
     fullText: content || undefined,
     originalFileName: document.original_filename,
     mimeType: document.mime_type,
     modifiedAt: document.modified,
     owner: owner?.name,
     ownerId: owner?.id,
+    // Paperless applies view permissions to the documents queryset. Presence
+    // in this authenticated response is the authoritative visibility signal;
+    // older cached rows without this field fail closed in OS search.
+    canView: true,
     canEdit: document.user_can_change !== false,
     deletedAt: document.deleted_at,
     archiveSerialNumber: document.archive_serial_number,
@@ -581,13 +964,16 @@ function mapDocument(document: ApiDocument, catalog: PaperlessCatalog): Document
     versions: (document.versions || []).map(mapVersion),
     rootDocumentId: document.root_document || document.id,
     source: 'remote',
+    ...(positiveIntegerIds(document.duplicate_documents).length
+      ? { duplicateDocumentIds: positiveIntegerIds(document.duplicate_documents) }
+      : {}),
   };
 }
 
 export async function testPaperlessConnection(
   credentials: PaperlessCredentials,
 ): Promise<PaperlessConnectionInfo> {
-  const response = await request(credentials, '/api/documents/?page_size=1&truncate_content=true');
+  const response = await requestPaperlessResponse(credentials, '/api/documents/?page_size=1&truncate_content=true');
   return {
     apiVersion: response.headers.get('X-Api-Version') || API_VERSION,
     serverVersion: response.headers.get('X-Version') || 'Unknown',
@@ -606,6 +992,15 @@ export async function fetchPaperlessCreationCapabilities(
     tag: canAdd('add_tag'),
     correspondent: canAdd('add_correspondent'),
     documentType: canAdd('add_documenttype'),
+    uploadDocument: canAdd('add_document'),
+    // Assigning an arbitrary owner changes document ownership and is more
+    // privileged than merely creating a document. Fail closed only when the
+    // server explicitly reports the permission absent.
+    assignOwner: canAdd('change_document'),
+    // Paperless 3.0.5's documented PostDocumentSerializer has no workflow
+    // override field. Keep this false until schema negotiation discovers and
+    // names an actual supported multipart parameter.
+    uploadWorkflowOverride: false,
   };
 }
 
@@ -621,6 +1016,7 @@ export async function fetchPaperlessWorkspace(
     ownersPage,
     customFieldsPage,
     savedViewsPage,
+    workflowsPage,
   ] = await Promise.all([
     getAllPages<ApiDocument>(
       credentials,
@@ -634,6 +1030,8 @@ export async function fetchPaperlessWorkspace(
       .catch(() => ({ results: [], total: 0 })),
     getAllPages<ApiCustomField>(credentials, '/api/custom_fields/?page_size=100&ordering=name'),
     getAllPages<ApiSavedView>(credentials, '/api/saved_views/?page_size=100&ordering=name'),
+    getAllPages<ApiNamedItem>(credentials, '/api/workflows/?page_size=100&ordering=name')
+      .catch(() => ({ results: [], total: 0 })),
   ]);
   const catalog = buildCatalog(
     correspondentsPage.results,
@@ -643,6 +1041,7 @@ export async function fetchPaperlessWorkspace(
     ownersPage.results,
     customFieldsPage.results,
     savedViewsPage.results,
+    workflowsPage.results,
   );
 
   return {
@@ -659,6 +1058,40 @@ export async function fetchPaperlessDocument(
 ) {
   const document = await getJson<ApiDocument>(credentials, `/api/documents/${remoteId}/`);
   return mapDocument(document, catalog);
+}
+
+/** Paperless 3.0.5 always assigns API uploads to the requesting user and does
+ * not accept `owner` in PostDocumentSerializer. Apply an explicitly requested
+ * owner only after consumption produced a real document, then verify it with
+ * an independent read so the queue never claims metadata the server ignored. */
+export async function applyPaperlessUploadOwner(
+  credentials: PaperlessCredentials,
+  remoteId: number,
+  metadata: UploadMetadataDraft | undefined,
+  capabilities: PaperlessCreationCapabilities,
+) {
+  const requestedOwner = metadata?.owner;
+  if (!requestedOwner || requestedOwner.state === 'unset') return false;
+  if (capabilities.assignOwner !== true) {
+    throw new PaperlessApiError(
+      translateRuntime('runtimeError.uploadOwnerPermission'),
+      403,
+    );
+  }
+  const ownerId = requestedOwner.state === 'clear'
+    ? null
+    : requestedOwner.value.remoteId;
+  if (ownerId !== null && (!Number.isSafeInteger(ownerId) || (ownerId ?? 0) <= 0)) {
+    throw new PaperlessApiError(translateRuntime('runtimeError.uploadOwnerStale'), 409);
+  }
+  await sendJson<ApiDocument>(credentials, `/api/documents/${remoteId}/`, 'PATCH', {
+    owner: ownerId,
+  });
+  const verified = await getJson<ApiDocument>(credentials, `/api/documents/${remoteId}/`);
+  if ((verified.owner ?? null) !== ownerId) {
+    throw new PaperlessApiError(translateRuntime('runtimeError.uploadOwnerReadback'), 409);
+  }
+  return true;
 }
 
 export async function updatePaperlessDocument(
@@ -772,86 +1205,8 @@ function normalizeCustomFieldValue(value: unknown): PaperlessCustomFieldValue['v
   return String(value);
 }
 
-const savedViewRuleMap: Record<number, {
-  parameter: string;
-  multi?: boolean;
-  boolean?: boolean;
-  nullParameter?: string;
-}> = {
-    0: { parameter: 'title_search' },
-    1: { parameter: 'content__icontains' },
-    2: { parameter: 'archive_serial_number' },
-    3: { parameter: 'correspondent__id', nullParameter: 'correspondent__isnull' },
-    4: { parameter: 'document_type__id', nullParameter: 'document_type__isnull' },
-    5: { parameter: 'is_in_inbox', boolean: true },
-    6: { parameter: 'tags__id__all', multi: true },
-    7: { parameter: 'is_tagged', boolean: true },
-    8: { parameter: 'created__date__lt' },
-    9: { parameter: 'created__date__gt' },
-    10: { parameter: 'created__year' },
-    11: { parameter: 'created__month' },
-    12: { parameter: 'created__day' },
-    13: { parameter: 'added__date__lt' },
-    14: { parameter: 'added__date__gt' },
-    15: { parameter: 'modified__date__lt' },
-    16: { parameter: 'modified__date__gt' },
-    17: { parameter: 'tags__id__none', multi: true },
-    18: { parameter: 'archive_serial_number__isnull', boolean: true },
-    19: { parameter: 'text' },
-    20: { parameter: 'query' },
-    21: { parameter: 'more_like_id' },
-    22: { parameter: 'tags__id__in', multi: true },
-    23: { parameter: 'archive_serial_number__gt' },
-    24: { parameter: 'archive_serial_number__lt' },
-    25: { parameter: 'storage_path__id', nullParameter: 'storage_path__isnull' },
-    26: { parameter: 'correspondent__id__in', multi: true },
-    27: { parameter: 'correspondent__id__none', multi: true },
-    28: { parameter: 'document_type__id__in', multi: true },
-    29: { parameter: 'document_type__id__none', multi: true },
-    30: { parameter: 'storage_path__id__in', multi: true },
-    31: { parameter: 'storage_path__id__none', multi: true },
-    32: { parameter: 'owner__id' },
-    33: { parameter: 'owner__id__in', multi: true },
-    34: { parameter: 'owner__isnull', boolean: true },
-    35: { parameter: 'owner__id__none', multi: true },
-    36: { parameter: 'custom_fields__icontains' },
-    37: { parameter: 'shared_by__id', multi: true },
-    38: { parameter: 'custom_fields__id__all', multi: true },
-    39: { parameter: 'custom_fields__id__in', multi: true },
-    40: { parameter: 'custom_fields__id__none', multi: true },
-    41: { parameter: 'has_custom_fields', boolean: true },
-    42: { parameter: 'custom_field_query' },
-    43: { parameter: 'created__date__lte' },
-    44: { parameter: 'created__date__gte' },
-    45: { parameter: 'added__date__lte' },
-    46: { parameter: 'added__date__gte' },
-    47: { parameter: 'mime_type' },
-    48: { parameter: 'title_search' },
-    49: { parameter: 'text' },
-};
-
 function appendSavedViewRules(params: URLSearchParams, rules: PaperlessSavedViewRule[]) {
-  for (const rule of rules) {
-    const mapping = savedViewRuleMap[rule.ruleType];
-    if (!mapping) continue;
-    if (mapping.nullParameter && rule.value === null) {
-      params.set(mapping.nullParameter, '1');
-      continue;
-    }
-    if (mapping.nullParameter && rule.value === '-1') {
-      params.set(mapping.nullParameter, '0');
-      continue;
-    }
-    if (rule.value === null) continue;
-    const value = mapping.boolean
-      ? rule.value === 'true' || rule.value === '1' ? '1' : '0'
-      : rule.value;
-    if (mapping.multi && params.has(mapping.parameter)) {
-      params.set(mapping.parameter, `${params.get(mapping.parameter)},${value}`);
-    } else {
-      params.set(mapping.parameter, value);
-    }
-  }
+  appendPaperlessSavedViewRules(params, rules);
 }
 
 function savedViewQuery(view: PaperlessSavedView) {
@@ -992,7 +1347,14 @@ function libraryQuery(request: PaperlessLibraryRequest, catalog: PaperlessCatalo
   const params = new URLSearchParams();
   appendSavedViewRules(params, request.extraRules || []);
   appendLibraryFilters(params, request.filters, catalog);
-  if (request.query.trim()) params.set('query', request.query.trim());
+  if (request.query.trim()) {
+    appendSavedViewRules(params, [{
+      ruleType: request.queryRuleType ?? 49,
+      value: request.query.trim(),
+      known: true,
+      extra: {},
+    }]);
+  }
   params.set('page_size', '100');
   params.set('truncate_content', 'true');
   return params.toString();
@@ -1124,12 +1486,15 @@ export async function deletePaperlessVersion(
 export async function uploadToPaperless(
   credentials: PaperlessCredentials,
   file: PaperlessUploadFile,
-  title?: string,
+  metadata?: string | UploadMetadataDraft,
   options?: PaperlessUploadOptions,
 ) {
-  const parameters: Record<string, string> = {};
-  if (title) parameters.title = title;
-  const result = await uploadPaperlessMultipart<string | { task_id?: string; id?: string }>(
+  const parameters = typeof metadata === 'string'
+    ? (metadata ? [['title', metadata] as const] : [])
+    : metadata
+      ? serializeUploadMetadata(metadata)
+      : [];
+  const result = await uploadPaperlessFormData<string | { task_id?: string; id?: string }>(
     credentials,
     '/api/documents/post_document/',
     file,
@@ -1152,7 +1517,57 @@ function documentIdFromTask(task: ApiTask) {
     if (typeof candidate === 'number') return candidate;
     if (typeof candidate === 'string' && /^\d+$/.test(candidate)) return Number(candidate);
   }
+  if (task.result_data && typeof task.result_data === 'object') {
+    const result = task.result_data as Record<string, unknown>;
+    const candidate = result.document_id || result.document || result.related_document;
+    if (typeof candidate === 'number') return candidate;
+    if (typeof candidate === 'string' && /^\d+$/.test(candidate)) return Number(candidate);
+  }
   return undefined;
+}
+
+function positiveIntegerIds(value: unknown): number[] {
+  const values = Array.isArray(value) ? value : value == null ? [] : [value];
+  return values.flatMap((entry) => {
+    const candidate = entry && typeof entry === 'object'
+      ? (entry as Record<string, unknown>).id
+      : entry;
+    if (typeof candidate === 'number' && Number.isSafeInteger(candidate) && candidate > 0) {
+      return [candidate];
+    }
+    if (typeof candidate === 'string' && /^\d+$/.test(candidate)) {
+      const parsed = Number(candidate);
+      return Number.isSafeInteger(parsed) && parsed > 0 ? [parsed] : [];
+    }
+    return [];
+  });
+}
+
+function duplicateDocumentIdsFromTask(task: ApiTask, documentId?: number) {
+  const records = [task, task.result, task.result_data]
+    .filter((value): value is Record<string, unknown> => Boolean(value && typeof value === 'object'));
+  const ids = records.flatMap((record) => [
+    ...positiveIntegerIds(record.duplicate_document_ids),
+    ...positiveIntegerIds(record.duplicate_documents),
+    ...positiveIntegerIds(record.duplicates),
+    ...positiveIntegerIds(record.duplicate_of),
+  ]);
+  return [...new Set(ids)].filter((id) => id !== documentId);
+}
+
+function taskMessage(task: ApiTask) {
+  if (task.message) return task.message;
+  if (task.messages?.length) return task.messages.join(' ');
+  if (task.result_data && typeof task.result_data === 'object') {
+    const result = task.result_data as Record<string, unknown>;
+    for (const candidate of [result.reason, result.error_message]) {
+      if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    }
+    if (positiveIntegerIds(result.duplicate_of).length) {
+      return 'Paperless identified this file as a duplicate of an existing document.';
+    }
+  }
+  return task.status_display;
 }
 
 export async function fetchPaperlessTask(credentials: PaperlessCredentials, taskId: string) {
@@ -1162,11 +1577,14 @@ export async function fetchPaperlessTask(credentials: PaperlessCredentials, task
   );
   const task = page.results[0];
   if (!task) return null;
+  const documentId = documentIdFromTask(task);
+  const duplicateDocumentIds = duplicateDocumentIdsFromTask(task, documentId);
   return {
     taskId: task.task_id || String(task.id || taskId),
     status: String(task.status || task.state || 'PENDING').toUpperCase(),
-    documentId: documentIdFromTask(task),
-    message: task.message || task.messages?.join(' '),
+    documentId,
+    ...(duplicateDocumentIds.length ? { duplicateDocumentIds } : {}),
+    message: taskMessage(task),
   } satisfies PaperlessTask;
 }
 
@@ -1182,12 +1600,16 @@ export async function waitForPaperlessTask(
     const task = await fetchPaperlessTask(credentials, taskId);
     if (task?.status === 'SUCCESS') return task;
     if (task && ['FAILURE', 'FAILED', 'REVOKED'].includes(task.status)) {
-      throw new PaperlessApiError(task.message || 'Paperless could not process this document.');
+      const error = new PaperlessApiError(
+        task.message || translateRuntime('runtimeError.paperlessProcess'),
+      );
+      error.duplicateDocumentIds = task.duplicateDocumentIds;
+      throw error;
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 
   throw new PaperlessApiError(
-    'Paperless is still processing this document. Pull to refresh in a moment.',
+    translateRuntime('runtimeError.paperlessStillProcessing'),
   );
 }

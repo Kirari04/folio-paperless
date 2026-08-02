@@ -5,6 +5,13 @@ export type PaperlessOption = {
   remoteId?: number;
   name: string;
   color?: string;
+  /** Present for tag options when the visible catalog contains a valid parent. */
+  parentRemoteId?: number;
+  /** A display-only breadcrumb assembled exclusively from visible tag names. */
+  pathLabel?: string;
+  depth?: number;
+  childRemoteIds?: number[];
+  isInboxTag?: boolean;
 };
 
 export type PaperlessCreatableOptionKind = 'tag' | 'correspondent' | 'documentType';
@@ -12,7 +19,13 @@ export type PaperlessCreatableOptionKind = 'tag' | 'correspondent' | 'documentTy
 export type PaperlessCreationCapabilities = Record<
   PaperlessCreatableOptionKind,
   boolean | null
->;
+> & {
+  uploadDocument: boolean | null;
+  assignOwner: boolean | null;
+  /** True only when the negotiated post_document schema advertises an upload
+   * workflow override. Paperless 3.0.5 does not expose one. */
+  uploadWorkflowOverride: boolean | null;
+};
 
 export type PaperlessCustomFieldDataType =
   | 'string'
@@ -65,6 +78,10 @@ export type PaperlessDocumentVersion = {
 export type PaperlessSavedViewRule = {
   ruleType: number;
   value: string | null;
+  /** False when Folio cannot faithfully project this rule into its editor. */
+  known?: boolean;
+  /** Supplemental server fields retained for lossless duplicate/save-as-new. */
+  extra?: Readonly<Record<string, unknown>>;
 };
 
 export type PaperlessSavedView = {
@@ -77,6 +94,8 @@ export type PaperlessSavedView = {
   pageSize: number;
   displayMode?: string;
   displayFields: string[];
+  /** Opaque presentation fields retained for lossless save-as-new. */
+  extra?: Readonly<Record<string, unknown>>;
 };
 
 export type PaperlessCatalog = {
@@ -85,6 +104,7 @@ export type PaperlessCatalog = {
   tags: PaperlessOption[];
   storagePaths: PaperlessOption[];
   owners: PaperlessOption[];
+  workflows?: PaperlessOption[];
   customFields: PaperlessCustomFieldDefinition[];
   savedViews: PaperlessSavedView[];
 };
@@ -136,8 +156,12 @@ export type LibrarySortOrder =
 
 export type PaperlessLibraryRequest = {
   query: string;
+  queryRuleType?: 19 | 20 | 48 | 49;
   filters: LibraryFilters;
   extraRules?: PaperlessSavedViewRule[];
+  /** Base saved view identity used only for exact profile-scoped offline snapshots. */
+  savedViewId?: string;
+  savedViewModified?: boolean;
 };
 
 export type DocumentItem = {
@@ -156,6 +180,8 @@ export type DocumentItem = {
   addedAt?: string;
   pageCount: number;
   fileSize: string;
+  /** Raw server-reported bytes used for locale-aware presentation. */
+  fileSizeBytes?: number;
   tags: string[];
   tagIds: string[];
   status: DocumentStatus;
@@ -168,6 +194,8 @@ export type DocumentItem = {
   modifiedAt?: string;
   owner?: string;
   ownerId?: string;
+  /** True only after the active Paperless account returned this document. */
+  canView?: boolean;
   canEdit?: boolean;
   deletedAt?: string | null;
   archiveSerialNumber?: number | null;
@@ -176,6 +204,7 @@ export type DocumentItem = {
   versions?: PaperlessDocumentVersion[];
   rootDocumentId?: number;
   processingError?: string;
+  duplicateDocumentIds?: number[];
   suggestion?: string;
   source: 'demo' | 'remote' | 'local';
 };
@@ -183,6 +212,11 @@ export type DocumentItem = {
 export type PaperlessCredentials = {
   serverUrl: string;
   token: string;
+  profileId?: string;
+  /** Opaque OS/native Keychain reference. It never contains certificate or key bytes. */
+  clientIdentityRef?: string;
+  authorizationScheme?: 'Token' | 'Bearer';
+  customHeaders?: Record<string, string>;
 };
 
 export type PaperlessConnectionInfo = {
@@ -209,4 +243,8 @@ export type PaperlessTrashWorkspace = {
 export type AppPreferences = {
   biometricLock: boolean;
   processingNotifications: boolean;
+  notificationPrivacy: 'redacted' | 'document-title';
+  osSearchEnabled: boolean;
+  osSearchMetadata: 'minimal' | 'document-title';
+  automaticCacheLimitBytes: number;
 };

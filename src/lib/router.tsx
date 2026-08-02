@@ -24,6 +24,10 @@ export type RoutePath =
   | '/settings'
   | '/trash'
   | '/scan'
+  | '/intake'
+  | '/tasks'
+  | '/saved-views'
+  | '/paperless-metadata'
   | '/document/[id]';
 
 export type TabRoutePath = Extract<RoutePath, '/' | '/documents' | '/inbox' | '/settings'>;
@@ -48,6 +52,10 @@ export type RootStackParamList = {
   Document: { id: string; from?: string };
   Scan: undefined;
   Trash: undefined;
+  Intake: { batchId?: string } | undefined;
+  Tasks: undefined;
+  SavedViews: { id?: string } | undefined;
+  PaperlessMetadata: undefined;
 };
 
 type Router = {
@@ -111,6 +119,14 @@ function nativeRouteFor(route: NavigationRoute) {
       return { name: 'Scan' as const, params: undefined };
     case '/trash':
       return { name: 'Trash' as const, params: undefined };
+    case '/intake':
+      return { name: 'Intake' as const, params: { batchId: route.params.batchId } };
+    case '/tasks':
+      return { name: 'Tasks' as const, params: undefined };
+    case '/saved-views':
+      return { name: 'SavedViews' as const, params: { id: route.params.id } };
+    case '/paperless-metadata':
+      return { name: 'PaperlessMetadata' as const, params: undefined };
     default:
       return null;
   }
@@ -159,12 +175,18 @@ export function NavigationProvider({ children }: PropsWithChildren) {
     const nativeRoute = nativeRouteFor(nextRoute);
     if (!nativeRoute || !navigationRef.isReady()) return;
     if (nextRoute.pathname === '/document/[id]') setLastDocument(nextRoute);
-    if (nativeRoute.name === 'Document') {
-      navigationRef.preload('Document', nativeRoute.params);
-    } else if (nativeRoute.name === 'Scan') {
-      navigationRef.preload('Scan');
-    } else {
-      navigationRef.preload('Trash');
+    switch (nativeRoute.name) {
+      case 'Document':
+        navigationRef.preload('Document', nativeRoute.params);
+        break;
+      case 'Intake':
+        navigationRef.preload('Intake', nativeRoute.params);
+        break;
+      case 'SavedViews':
+        navigationRef.preload('SavedViews', nativeRoute.params);
+        break;
+      default:
+        navigationRef.preload(nativeRoute.name);
     }
   }, [navigationRef]);
 
@@ -176,11 +198,15 @@ export function NavigationProvider({ children }: PropsWithChildren) {
     }
 
     const params = (nativeRoute.params ?? {}) as Record<string, string | number | undefined>;
-    const pathname = nativeRoute.name === 'Document'
-      ? '/document/[id]'
-      : nativeRoute.name === 'Scan'
-        ? '/scan'
-        : '/trash';
+    const pathname: RoutePath = ({
+      Document: '/document/[id]',
+      Scan: '/scan',
+      Trash: '/trash',
+      Intake: '/intake',
+      Tasks: '/tasks',
+      SavedViews: '/saved-views',
+      PaperlessMetadata: '/paperless-metadata',
+    } as const)[nativeRoute.name];
     setRoute(createRoute({ pathname, params }));
   }, [navigationRef]);
 
