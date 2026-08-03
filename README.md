@@ -91,8 +91,9 @@ sidestore://source?url=https%3A%2F%2Fgithub.com%2FKirari04%2Ffolio-paperless%2Fr
 ```
 
 The generated source is checked against the IPA's bundle ID, version, build number, minimum iOS
-version, size, SHA-256 digest, and privacy permissions before a release can be published. It
-deliberately omits `marketplaceID` because Folio is not notarized for an alternative marketplace.
+version, size, SHA-256 digest, privacy permissions, and the reviewed widget/share-extension
+entitlements before a release can be published. It deliberately omits `marketplaceID` because
+Folio is not notarized for an alternative marketplace.
 Signing validity, refresh requirements, and app limits depend on the Apple account and sideloading
 tool. Follow the current [AltStore](https://faq.altstore.io/altstore-classic/how-to-install-altstore-macos)
 or [SideStore](https://docs.sidestore.io/docs/installation/prerequisites) setup guide.
