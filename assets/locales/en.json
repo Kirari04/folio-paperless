@@ -1,0 +1,28 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "Folio for Paperless",
+    "NSCameraUsageDescription": "Allow Folio to scan paper documents.",
+    "NSFaceIDUsageDescription": "Allow Folio to protect your document previews with Face ID.",
+    "Localizable.strings": {
+      "folio_quick_scan_short": "Quick Scan",
+      "folio_quick_scan_long": "Scan a paper document",
+      "folio_inbox_short": "Inbox",
+      "folio_inbox_long": "Open your inbox",
+      "folio_search_short": "Search",
+      "folio_search_long": "Search documents",
+      "folio_widget_display_name": "Folio Inbox",
+      "folio_widget_description": "See an inbox count and open Folio without exposing document details."
+    }
+  },
+  "android": {
+    "CFBundleDisplayName": "Folio for Paperless",
+    "NSCameraUsageDescription": "Allow Folio to scan paper documents.",
+    "NSFaceIDUsageDescription": "Allow Folio to protect your document previews with Face ID.",
+    "folio_quick_scan_short": "Quick Scan",
+    "folio_quick_scan_long": "Scan a paper document",
+    "folio_inbox_short": "Inbox",
+    "folio_inbox_long": "Open your inbox",
+    "folio_search_short": "Search",
+    "folio_search_long": "Search documents"
+  }
+}

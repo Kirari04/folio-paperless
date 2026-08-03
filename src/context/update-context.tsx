@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
+import { File } from 'expo-file-system';
 import {
   PropsWithChildren,
   createContext,
@@ -18,6 +19,7 @@ import {
   EMPTY_UPDATE_CACHE,
   FolioRelease,
   FolioUpdateError,
+  MAX_APK_UPDATE_BYTES,
   UPDATE_REMINDER_INTERVAL_MS,
   UpdateCache,
   compareStableVersions,
@@ -30,10 +32,13 @@ import {
   versionCodeFor,
   writeUpdateCache,
 } from '@/lib/app-updates';
+import { downloadFileWithinLimit } from '@/lib/bounded-file-download';
+import { IN_APP_APK_UPDATES_ENABLED } from '@/lib/distribution-runtime';
 import {
   FolioInstallationInfo,
   getFolioUpdaterModule,
 } from '@/lib/folio-updater-native';
+import { translateRuntime } from '@/i18n/runtime';
 
 export type UpdateStatus =
   | 'idle'
@@ -51,6 +56,7 @@ export type UpdateStatus =
 export type UpdateSupport =
   | 'initializing'
   | 'supported'
+  | 'distribution-disabled'
   | 'android-release-only'
   | 'development-build'
   | 'module-unavailable';
@@ -78,9 +84,55 @@ type UpdateContextValue = {
 
 const UpdateContext = createContext<UpdateContextValue | null>(null);
 
+const ignoreAsync = () => Promise.resolve();
+const unsupportedUpdateContext: UpdateContextValue = {
+  status: 'unsupported',
+  support: 'android-release-only',
+  currentVersion: Constants.expoConfig?.version ?? '0.0.0',
+  release: null,
+  progress: 0,
+  error: null,
+  lastCheckedAt: null,
+  sheetVisible: false,
+  noticeVisible: false,
+  canRequestPackageInstalls: false,
+  checkForUpdates: ignoreAsync,
+  openUpdateSheet: () => {},
+  closeUpdateSheet: () => {},
+  remindLater: ignoreAsync,
+  downloadUpdate: ignoreAsync,
+  cancelDownload: ignoreAsync,
+  installUpdate: ignoreAsync,
+  retry: ignoreAsync,
+};
+const disabledAction = async () => undefined;
+
+function disabledUpdateContext(currentVersion: string): UpdateContextValue {
+  return {
+    status: 'unsupported',
+    support: 'distribution-disabled',
+    currentVersion,
+    release: null,
+    progress: 0,
+    error: null,
+    lastCheckedAt: null,
+    sheetVisible: false,
+    noticeVisible: false,
+    canRequestPackageInstalls: false,
+    checkForUpdates: disabledAction,
+    openUpdateSheet: () => undefined,
+    closeUpdateSheet: () => undefined,
+    remindLater: disabledAction,
+    downloadUpdate: disabledAction,
+    cancelDownload: disabledAction,
+    installUpdate: disabledAction,
+    retry: disabledAction,
+  };
+}
+
 function errorMessage(error: unknown) {
   if (error instanceof FolioUpdateError || error instanceof Error) return error.message;
-  return 'The update could not be completed. Try again.';
+  return translateRuntime('updates.errorGeneric');
 }
 
 function statusForRelease(release: FolioRelease | null, currentVersion: string): UpdateStatus {
@@ -90,6 +142,25 @@ function statusForRelease(release: FolioRelease | null, currentVersion: string):
 }
 
 export function UpdateProvider({ children }: PropsWithChildren) {
+  if (!IN_APP_APK_UPDATES_ENABLED) {
+    const currentVersion = Constants.expoConfig?.version ?? '0.0.0';
+    return (
+      <UpdateContext.Provider value={disabledUpdateContext(currentVersion)}>
+        {children}
+      </UpdateContext.Provider>
+    );
+  }
+  if (Platform.OS !== 'android') {
+    return (
+      <UpdateContext.Provider value={unsupportedUpdateContext}>
+        {children}
+      </UpdateContext.Provider>
+    );
+  }
+  return <AndroidUpdateProvider>{children}</AndroidUpdateProvider>;
+}
+
+function AndroidUpdateProvider({ children }: PropsWithChildren) {
   const nativeUpdater = getFolioUpdaterModule();
   const configuredVersion = Constants.expoConfig?.version ?? '0.0.0';
   const [status, setStatus] = useState<UpdateStatus>('idle');
@@ -104,7 +175,7 @@ export function UpdateProvider({ children }: PropsWithChildren) {
   const [canRequestPackageInstalls, setCanRequestPackageInstalls] = useState(false);
   const cacheRef = useRef<UpdateCache>(EMPTY_UPDATE_CACHE);
   const installationInfoRef = useRef<FolioInstallationInfo | null>(null);
-  const downloadRef = useRef<FileSystem.DownloadResumable | null>(null);
+  const downloadRef = useRef<AbortController | null>(null);
   const cancelRequestedRef = useRef(false);
   const checkInFlightRef = useRef<Promise<void> | null>(null);
   const awaitingPermissionRef = useRef(false);
@@ -112,7 +183,7 @@ export function UpdateProvider({ children }: PropsWithChildren) {
 
   useEffect(() => () => {
     mountedRef.current = false;
-    void downloadRef.current?.cancelAsync();
+    downloadRef.current?.abort();
   }, []);
 
   const persistCache = useCallback(async (nextCache: UpdateCache) => {
@@ -142,7 +213,7 @@ export function UpdateProvider({ children }: PropsWithChildren) {
       }
 
       if (nextStatus === 'error') {
-        setError('This GitHub release does not include the expected universal Android APK.');
+        setError(translateRuntime('updates.errorMissingApk'));
         setNoticeVisible(false);
         setStatus('error');
         return;
@@ -282,7 +353,7 @@ export function UpdateProvider({ children }: PropsWithChildren) {
   const launchInstaller = useCallback(async () => {
     const downloaded = cacheRef.current.downloaded;
     if (!nativeUpdater || !downloaded || !(await downloadedUpdateExists(downloaded))) {
-      setError('The verified update is no longer on this device. Download it again.');
+      setError(translateRuntime('updates.errorMissingDownload'));
       setStatus('error');
       return;
     }
@@ -314,7 +385,7 @@ export function UpdateProvider({ children }: PropsWithChildren) {
           setCanRequestPackageInstalls(allowed);
           if (allowed) await launchInstaller();
           else {
-            setError('Android still needs permission to install updates from Folio.');
+            setError(translateRuntime('updates.errorInstallPermission'));
             setStatus('ready');
           }
         });
@@ -363,19 +434,21 @@ export function UpdateProvider({ children }: PropsWithChildren) {
       const targetInfo = await FileSystem.getInfoAsync(targetUri);
       if (targetInfo.exists) await FileSystem.deleteAsync(targetUri, { idempotent: true });
 
-      const task = FileSystem.createDownloadResumable(
-        release.apk.downloadUrl,
-        targetUri,
-        { headers: { Accept: 'application/octet-stream' } },
-        ({ totalBytesExpectedToWrite, totalBytesWritten }) => {
-          if (!mountedRef.current || totalBytesExpectedToWrite <= 0) return;
-          setProgress(Math.min(1, Math.max(0, totalBytesWritten / totalBytesExpectedToWrite)));
+      const controller = new AbortController();
+      downloadRef.current = controller;
+      const result = await downloadFileWithinLimit({
+        url: release.apk.downloadUrl,
+        destination: new File(targetUri),
+        headers: { Accept: 'application/octet-stream' },
+        signal: controller.signal,
+        redirect: 'follow',
+        maxBytes: Math.min(release.apk.size, MAX_APK_UPDATE_BYTES),
+        onProgress: (fraction) => {
+          if (mountedRef.current && fraction !== null) setProgress(fraction);
         },
-      );
-      downloadRef.current = task;
-      const result = await task.downloadAsync();
+      });
       downloadRef.current = null;
-      if (cancelRequestedRef.current || !result?.uri) {
+      if (cancelRequestedRef.current || !result.uri) {
         setProgress(0);
         setStatus('available');
         return;
@@ -391,20 +464,20 @@ export function UpdateProvider({ children }: PropsWithChildren) {
       const expectedVersionCode = versionCodeFor(release.version);
 
       if (actualDigest.toLocaleLowerCase() !== expectedDigest) {
-        throw new FolioUpdateError('The downloaded APK failed its SHA-256 integrity check.');
+        throw new FolioUpdateError(translateRuntime('updates.errorDigest'));
       }
       if (apkInfo.packageName !== 'app.folio.paperless') {
-        throw new FolioUpdateError('The downloaded APK is not a Folio package.');
+        throw new FolioUpdateError(translateRuntime('updates.errorPackage'));
       }
       if (
         apkInfo.versionName !== release.version ||
         apkInfo.versionCode !== expectedVersionCode ||
         apkInfo.versionCode <= installationInfoRef.current.versionCode
       ) {
-        throw new FolioUpdateError('The APK version does not match the GitHub release.');
+        throw new FolioUpdateError(translateRuntime('updates.errorVersion'));
       }
       if (!apkInfo.hasOfficialCertificate) {
-        throw new FolioUpdateError('The APK is not signed by Folio’s official release key.');
+        throw new FolioUpdateError(translateRuntime('updates.errorSigner'));
       }
 
       const downloaded: DownloadedUpdate = {
@@ -433,10 +506,10 @@ export function UpdateProvider({ children }: PropsWithChildren) {
 
   const cancelDownload = useCallback(async () => {
     cancelRequestedRef.current = true;
-    const task = downloadRef.current;
-    downloadRef.current = null;
+      const controller = downloadRef.current;
+      downloadRef.current = null;
     try {
-      await task?.cancelAsync();
+      controller?.abort();
     } finally {
       if (release) {
         const targetUri = await getUpdateFileUri(release.version);

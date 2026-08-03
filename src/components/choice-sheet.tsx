@@ -1,4 +1,4 @@
-import { Check, Plus, Search, X } from 'lucide-react-native';
+import { Check, ChevronDown, ChevronRight, Plus, Search, X } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -18,6 +18,8 @@ import {
   hapticFeedback,
 } from '@/components/motion';
 import { fonts, palette, radii } from '@/constants/theme';
+import { useI18n } from '@/context/ui-preferences-context';
+import { presentRuntimeError } from '@/i18n/error-presentation';
 import { PaperlessOption } from '@/types/document';
 
 type ChoiceSheetProps = {
@@ -29,7 +31,6 @@ type ChoiceSheetProps = {
   allowNone?: boolean;
   createLabel?: string;
   creationAllowed?: boolean | null;
-  creationNoun?: string;
   onClose: () => void;
   onConfirm: (selected: PaperlessOption[]) => Promise<void> | void;
   onCreate?: (name: string) => Promise<PaperlessOption>;
@@ -46,11 +47,11 @@ export function ChoiceSheet({
   allowNone = false,
   createLabel,
   creationAllowed,
-  creationNoun,
   onClose,
   onConfirm,
   onCreate,
 }: ChoiceSheetProps) {
+  const { t, formatNumber } = useI18n();
   const sheetRef = useRef<KeyboardSheetHandle>(null);
   const wasVisible = useRef(false);
   const [draftIds, setDraftIds] = useState(selectedIds);
@@ -59,6 +60,7 @@ export function ChoiceSheet({
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [error, setError] = useState<string | null>(null);
   const [createdOptionName, setCreatedOptionName] = useState<string | null>(null);
+  const [expandedTagIds, setExpandedTagIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     if (visible && !wasVisible.current) {
@@ -68,15 +70,38 @@ export function ChoiceSheet({
       setBusyAction(null);
       setError(null);
       setCreatedOptionName(null);
+      setExpandedTagIds(new Set(options.flatMap((option) => (
+        option.remoteId && option.childRemoteIds?.length ? [option.remoteId] : []
+      ))));
     }
     wasVisible.current = visible;
   }, [options, selectedIds, visible]);
 
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const filtered = useMemo(() => {
-    if (!normalizedQuery) return localOptions;
-    return localOptions.filter((option) => option.name.toLocaleLowerCase().includes(normalizedQuery));
-  }, [localOptions, normalizedQuery]);
+    const hierarchical = localOptions.some((option) => option.pathLabel !== undefined);
+    const sorted = hierarchical
+      ? [...localOptions].sort((left, right) => (left.pathLabel || left.name).localeCompare(right.pathLabel || right.name))
+      : localOptions;
+    if (normalizedQuery) {
+      return sorted.filter((option) => (
+        option.name.toLocaleLowerCase().includes(normalizedQuery)
+        || option.pathLabel?.toLocaleLowerCase().includes(normalizedQuery)
+      ));
+    }
+    if (!hierarchical) return sorted;
+    const byRemoteId = new Map(sorted.flatMap((option) => option.remoteId ? [[option.remoteId, option] as const] : []));
+    return sorted.filter((option) => {
+      let parentId = option.parentRemoteId;
+      const visited = new Set<number>();
+      while (parentId) {
+        if (visited.has(parentId) || !expandedTagIds.has(parentId)) return false;
+        visited.add(parentId);
+        parentId = byRemoteId.get(parentId)?.parentRemoteId;
+      }
+      return true;
+    });
+  }, [expandedTagIds, localOptions, normalizedQuery]);
   const selectedOptions = useMemo(
     () => localOptions.filter((option) => draftIds.includes(option.id)),
     [draftIds, localOptions],
@@ -89,8 +114,6 @@ export function ChoiceSheet({
   const creationDenied = !!onCreate && creationAllowed === false;
   const saving = busyAction !== null;
   const canConfirm = multiple || allowNone || draftIds.length > 0;
-  const selectionNoun = creationNoun || (title.trim().toLocaleLowerCase() === 'tags' ? 'tag' : 'item');
-  const selectionNounPlural = `${selectionNoun}s`;
 
   function toggle(option: PaperlessOption) {
     setError(null);
@@ -112,7 +135,7 @@ export function ChoiceSheet({
       await hapticFeedback('confirm');
       sheetRef.current?.close();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Could not save this selection.');
+      setError(presentRuntimeError(nextError, t('choice.saveError')));
       await hapticFeedback('error');
     } finally {
       setBusyAction(null);
@@ -137,7 +160,7 @@ export function ChoiceSheet({
       setQuery('');
       await hapticFeedback('confirm');
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : `Could not create this ${selectionNoun}.`);
+      setError(presentRuntimeError(nextError, t('choice.createError')));
       await hapticFeedback('error');
     } finally {
       setBusyAction(null);
@@ -156,27 +179,29 @@ export function ChoiceSheet({
           }}
           style={[styles.option, !draftIds.length && styles.optionSelected]}>
           <View style={styles.optionCopy}>
-            <Text style={styles.optionName}>None</Text>
-            <Text style={styles.optionMeta}>Leave this field unassigned</Text>
+            <Text style={styles.optionName}>{t('choice.none')}</Text>
+            <Text style={styles.optionMeta}>{t('choice.noneSubtitle')}</Text>
           </View>
-          {!draftIds.length && <View style={styles.check}><Check color={palette.ink} size={16} /></View>}
+          {!draftIds.length && <View style={styles.check}><Check color={palette.accentInk} size={16} /></View>}
         </Pressable>
       )}
       {canCreate && (
         <Pressable
-          accessibilityHint={`Creates this ${selectionNoun} in Paperless and selects it`}
+          accessibilityHint={t('choice.createHint')}
           disabled={saving}
           haptic="none"
           onPress={createOption}
           style={styles.createOption}>
           <View style={styles.createIcon}>
             {busyAction === 'create'
-              ? <ActivityIndicator color={palette.ink} size="small" />
-              : <Plus color={palette.ink} size={18} />}
+              ? <ActivityIndicator color={palette.accentInk} size="small" />
+              : <Plus color={palette.accentInk} size={18} />}
           </View>
           <View style={styles.optionCopy}>
-            <Text numberOfLines={1} style={styles.createName}>Create “{query.trim()}”</Text>
-            <Text style={styles.optionMeta}>Create in Paperless · assign with Apply</Text>
+            <Text numberOfLines={1} style={styles.createName}>
+              {t('choice.create', { name: query.trim() })}
+            </Text>
+            <Text style={styles.optionMeta}>{t('choice.createSubtitle')}</Text>
           </View>
         </Pressable>
       )}
@@ -185,16 +210,16 @@ export function ChoiceSheet({
 
   return (
     <KeyboardSheet
-      accessibilityLabel={`${title} selection`}
+      accessibilityLabel={t('choice.selectionLabel', { title })}
       onDismiss={onClose}
       ref={sheetRef}
-      subtitle={multiple ? 'Choose one or more, then apply your changes.' : 'Choose an option to update this document.'}
+      subtitle={multiple ? t('choice.multipleSubtitle') : t('choice.singleSubtitle')}
       title={title}
       visible={visible}>
       <View style={styles.search}>
         <Search color={palette.muted} size={18} />
         <TextInput
-          accessibilityLabel={`Search ${title}`}
+          accessibilityLabel={t('choice.searchLabel', { title })}
           autoCapitalize="none"
           autoCorrect={false}
           onChangeText={(next) => {
@@ -202,14 +227,14 @@ export function ChoiceSheet({
             if (error) setError(null);
           }}
           onSubmitEditing={canCreate ? createOption : undefined}
-          placeholder={`Search ${title.toLocaleLowerCase()}`}
+          placeholder={t('choice.searchPlaceholder', { title: title.toLocaleLowerCase() })}
           placeholderTextColor={palette.faint}
           returnKeyType={canCreate ? 'done' : 'search'}
           style={styles.searchInput}
           value={query}
         />
         {!!query && (
-          <Pressable accessibilityLabel="Clear search" haptic="light" onPress={() => setQuery('')} style={styles.clearSearch}>
+          <Pressable accessibilityLabel={t('choice.clearSearch')} haptic="light" onPress={() => setQuery('')} style={styles.clearSearch}>
             <X color={palette.muted} size={16} />
           </Pressable>
         )}
@@ -218,25 +243,27 @@ export function ChoiceSheet({
       {canOfferCreation && !query && !createdOptionName && (
         <Text style={styles.createHint}>
           {createLabel
-            ? `${createLabel}: type a name above.`
-            : 'Type a new name to create it without leaving this sheet.'}
+            ? t('choice.createNamedHint', { label: createLabel })
+            : t('choice.createGenericHint')}
         </Text>
       )}
 
       {!!createdOptionName && !query && (
         <View accessibilityLiveRegion="polite" style={styles.createdBox}>
           <View style={styles.createdIcon}>
-            <Check color={palette.ink} size={14} />
+            <Check color={palette.accentInk} size={14} />
           </View>
           <Text style={styles.createdText}>
-            “{createdOptionName}” created in Paperless. Apply to assign it.
+            {t('choice.created', { name: createdOptionName })}
           </Text>
         </View>
       )}
 
       {multiple && !!selectedOptions.length && (
         <View style={styles.selectedSection}>
-          <Text style={styles.selectedCount}>{selectedOptions.length} SELECTED</Text>
+          <Text style={styles.selectedCount}>
+            {t('choice.selected', { count: formatNumber(selectedOptions.length) })}
+          </Text>
           <ScrollView
             contentContainerStyle={styles.selectedChips}
             horizontal
@@ -244,14 +271,14 @@ export function ChoiceSheet({
             showsHorizontalScrollIndicator={false}>
             {selectedOptions.map((option) => (
               <Pressable
-                accessibilityLabel={`Remove ${option.name}`}
+                accessibilityLabel={t('choice.removeOption', { name: option.pathLabel || option.name })}
                 haptic="light"
                 key={option.id}
                 onPress={() => toggle(option)}
                 style={styles.selectedChip}>
                 {!!option.color && <View style={[styles.colorDot, { backgroundColor: option.color }]} />}
-                <Text numberOfLines={1} style={styles.selectedChipText}>{option.name}</Text>
-                <X color={palette.ink} size={13} />
+                <Text numberOfLines={1} style={styles.selectedChipText}>{option.pathLabel || option.name}</Text>
+                <X color={palette.accentInk} size={13} />
               </Pressable>
             ))}
           </ScrollView>
@@ -274,14 +301,14 @@ export function ChoiceSheet({
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>
-              {canCreate || creationDenied ? 'No existing match' : 'No matches'}
+              {canCreate || creationDenied ? t('choice.noExistingMatch') : t('choice.noMatches')}
             </Text>
             <Text style={styles.emptyCopy}>
               {canCreate
-                ? `Create this ${selectionNoun} above, or try another name.`
+                ? t('choice.createAbove')
                 : creationDenied
-                  ? `Your Paperless account can't create ${selectionNounPlural}.`
-                  : 'Try another name.'}
+                  ? t('choice.creationDenied')
+                  : t('choice.tryAnother')}
             </Text>
           </View>
         }
@@ -289,15 +316,45 @@ export function ChoiceSheet({
         removeClippedSubviews={Platform.OS === 'android'}
         renderItem={({ item }) => {
           const selected = draftIds.includes(item.id);
+          const hasChildren = !!item.remoteId && !!item.childRemoteIds?.length;
           return (
             <Pressable
+              accessibilityLabel={item.pathLabel || item.name}
               accessibilityRole={multiple ? 'checkbox' : 'radio'}
               accessibilityState={{ checked: selected }}
               onPress={() => toggle(item)}
-              style={[styles.option, selected && styles.optionSelected]}>
+              style={[styles.option, item.pathLabel && { paddingLeft: 10 + Math.min(item.depth ?? 0, 12) * 14 }, selected && styles.optionSelected]}>
+              {hasChildren ? (
+                <Pressable
+                  accessibilityLabel={t(
+                    expandedTagIds.has(item.remoteId!) ? 'choice.collapse' : 'choice.expand',
+                    { name: item.pathLabel || item.name },
+                  )}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    setExpandedTagIds((current) => {
+                      const next = new Set(current);
+                      if (next.has(item.remoteId!)) next.delete(item.remoteId!);
+                      else next.add(item.remoteId!);
+                      return next;
+                    });
+                  }}
+                  style={styles.disclosure}>
+                  {expandedTagIds.has(item.remoteId!)
+                    ? <ChevronDown color={palette.muted} size={16} />
+                    : <ChevronRight color={palette.muted} size={16} />}
+                </Pressable>
+              ) : item.pathLabel ? <View style={styles.disclosure} /> : null}
               {!!item.color && <View style={[styles.colorDot, { backgroundColor: item.color }]} />}
-              <Text numberOfLines={2} style={styles.optionName}>{item.name}</Text>
-              {selected && <View style={styles.check}><Check color={palette.ink} size={16} /></View>}
+              <View style={styles.optionCopy}>
+                <Text numberOfLines={2} style={styles.optionName}>{item.name}</Text>
+                {(!!item.pathLabel && item.pathLabel !== item.name || item.isInboxTag) && (
+                  <Text numberOfLines={1} style={styles.optionMeta}>
+                    {item.pathLabel !== item.name ? item.pathLabel : ''}{item.pathLabel !== item.name && item.isInboxTag ? ' · ' : ''}{item.isInboxTag ? t('choice.inboxTag') : ''}
+                  </Text>
+                )}
+              </View>
+              {selected && <View style={styles.check}><Check color={palette.accentInk} size={16} /></View>}
             </Pressable>
           );
         }}
@@ -307,7 +364,7 @@ export function ChoiceSheet({
 
       <View style={styles.footer}>
         <Pressable haptic="light" onPress={() => sheetRef.current?.close()} style={styles.cancelButton}>
-          <Text style={styles.cancelText}>Cancel</Text>
+          <Text style={styles.cancelText}>{t('common.cancel')}</Text>
         </Pressable>
         <Pressable
           disabled={saving || !canConfirm}
@@ -315,12 +372,12 @@ export function ChoiceSheet({
           onPress={confirm}
           style={[styles.saveButton, (saving || !canConfirm) && styles.disabled]}>
           {busyAction === 'save'
-            ? <ActivityIndicator color={palette.ink} />
-            : <Check color={palette.ink} size={19} />}
+            ? <ActivityIndicator color={palette.accentInk} />
+            : <Check color={palette.accentInk} size={19} />}
           <Text style={styles.saveButtonText}>
             {multiple
-              ? `Apply ${draftIds.length} ${draftIds.length === 1 ? selectionNoun : `${selectionNoun}s`}`
-              : 'Apply selection'}
+              ? t('choice.applySelected', { count: formatNumber(draftIds.length) })
+              : t('choice.applySelection')}
           </Text>
         </Pressable>
       </View>
@@ -330,13 +387,14 @@ export function ChoiceSheet({
 
 const styles = StyleSheet.create({
   search: {
-    height: 52,
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     marginTop: 14,
     paddingLeft: 14,
     paddingRight: 7,
+    paddingVertical: 5,
     borderWidth: 1,
     borderColor: palette.line,
     borderRadius: radii.md,
@@ -344,7 +402,7 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    height: '100%',
+    minHeight: 40,
     color: palette.ink,
     fontFamily: fonts.sans,
     fontSize: 16,
@@ -372,7 +430,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11,
     paddingVertical: 8,
     borderRadius: radii.md,
-    backgroundColor: '#EDF6CD',
+    backgroundColor: palette.mint,
   },
   createdIcon: {
     width: 26,
@@ -408,17 +466,18 @@ const styles = StyleSheet.create({
   },
   selectedChip: {
     maxWidth: 190,
-    height: 36,
+    minHeight: 36,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
     paddingHorizontal: 11,
+    paddingVertical: 7,
     borderRadius: radii.pill,
     backgroundColor: palette.lime,
   },
   selectedChipText: {
     flexShrink: 1,
-    color: palette.ink,
+    color: palette.accentInk,
     fontFamily: fonts.sans,
     fontSize: 12,
     fontWeight: '800',
@@ -444,8 +503,8 @@ const styles = StyleSheet.create({
     backgroundColor: palette.paper,
   },
   optionSelected: {
-    borderColor: '#CFE26E',
-    backgroundColor: '#EDF6CD',
+    borderColor: palette.limeDark,
+    backgroundColor: palette.mint,
   },
   optionCopy: {
     flex: 1,
@@ -464,6 +523,13 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sans,
     fontSize: 11,
     lineHeight: 15,
+  },
+  disclosure: {
+    width: 28,
+    height: 36,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   colorDot: {
     width: 10,
@@ -488,9 +554,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 9,
     borderWidth: 1,
-    borderColor: '#CFE26E',
+    borderColor: palette.limeDark,
     borderRadius: radii.md,
-    backgroundColor: '#F3F8DD',
+    backgroundColor: palette.mint,
   },
   createIcon: {
     width: 38,
@@ -529,7 +595,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: radii.sm,
-    backgroundColor: '#F7E8E5',
+    backgroundColor: palette.dangerSurface,
   },
   errorText: {
     color: palette.danger,
@@ -548,10 +614,11 @@ const styles = StyleSheet.create({
     borderColor: palette.line,
   },
   cancelButton: {
-    height: 52,
+    minHeight: 52,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 17,
+    paddingVertical: 12,
     borderRadius: radii.md,
     backgroundColor: palette.paper,
   },
@@ -563,16 +630,17 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     flex: 1,
-    height: 52,
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+    paddingVertical: 12,
     borderRadius: radii.md,
     backgroundColor: palette.lime,
   },
   saveButtonText: {
-    color: palette.ink,
+    color: palette.accentInk,
     fontFamily: fonts.sans,
     fontSize: 13,
     fontWeight: '900',

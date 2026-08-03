@@ -15,11 +15,14 @@ import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/c
 import { PaperThumbnail } from '@/components/paper-thumbnail';
 import { fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
+import { useI18n } from '@/context/ui-preferences-context';
+import { presentRuntimeError } from '@/i18n/error-presentation';
 import { isPendingDocument } from '@/lib/document-routing';
 import { useRouter } from '@/lib/router';
 
 export default function InboxScreen() {
   const router = useRouter();
+  const { t, formatNumber } = useI18n();
   const { inboxDocuments, approveDocument, deferDocument, isSyncing, refresh } = useApp();
   const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null);
   const [filing, setFiling] = useState(false);
@@ -32,11 +35,11 @@ export default function InboxScreen() {
     try {
       animateLayout();
       await approveDocument(activeDocument.id);
-      setToast({ message: `Filed “${activeDocument.title}”` });
+      setToast({ message: t('inbox.filed', { title: activeDocument.title }) });
       await hapticFeedback('confirm');
     } catch (error) {
       setToast({
-        message: error instanceof Error ? error.message : 'Could not file this document.',
+        message: presentRuntimeError(error, t('inbox.fileError')),
         error: true,
       });
       await hapticFeedback('error');
@@ -50,7 +53,7 @@ export default function InboxScreen() {
     if (!activeDocument) return;
     animateLayout();
     deferDocument(activeDocument.id);
-    setToast({ message: `Moved “${activeDocument.title}” to the end` });
+    setToast({ message: t('inbox.deferred', { title: activeDocument.title }) });
     await hapticFeedback('selection');
     setTimeout(() => setToast(null), 2500);
   }
@@ -59,11 +62,11 @@ export default function InboxScreen() {
     <AppShell onRefresh={() => void refresh().catch(() => {})} refreshing={isSyncing}>
       <View style={styles.header}>
         <View>
-          <Text style={styles.eyebrow}>QUICK TRIAGE</Text>
-          <Text style={styles.title}>Inbox</Text>
+          <Text style={styles.eyebrow}>{t('inbox.quickTriage')}</Text>
+          <Text style={styles.title}>{t('inbox.title')}</Text>
         </View>
         <View style={styles.countBadge}>
-          <Text style={styles.count}>{inboxDocuments.length}</Text>
+          <Text style={styles.count}>{formatNumber(inboxDocuments.length)}</Text>
         </View>
       </View>
 
@@ -72,12 +75,14 @@ export default function InboxScreen() {
           <View style={styles.progressRow}>
             <Text style={styles.progressLabel}>
               {activeDocument.processingError
-                ? 'Processing needs attention'
+                ? t('inbox.processingAttention')
                 : activeDocumentPending
-                  ? 'Processing upload'
-                  : 'Ready to review'}
+                  ? t('inbox.processingUpload')
+                  : t('inbox.readyReview')}
             </Text>
-            <Text style={styles.progressCount}>{inboxDocuments.length} remaining</Text>
+            <Text style={styles.progressCount}>
+              {t('inbox.remaining', { count: formatNumber(inboxDocuments.length) })}
+            </Text>
           </View>
           <View style={styles.progressTrack}>
             <View
@@ -91,15 +96,15 @@ export default function InboxScreen() {
           <Pressable
             accessibilityHint={
               activeDocument.processingError
-                ? 'Shows the processing problem and how to check again'
+                ? t('inbox.problemHint')
                 : activeDocumentPending
-                  ? 'Shows processing status; document actions become available when ready'
-                  : 'Opens the document details and review actions'
+                  ? t('inbox.processingHint')
+                  : t('inbox.openHint')
             }
             accessibilityLabel={
               activeDocumentPending
-                ? `View processing status for ${activeDocument.title}`
-                : `Open ${activeDocument.title}`
+                ? t('inbox.viewProcessing', { title: activeDocument.title })
+                : t('document.open', { title: activeDocument.title })
             }
             onPressIn={() =>
               router.preload({
@@ -119,7 +124,8 @@ export default function InboxScreen() {
               <PaperThumbnail document={activeDocument} width={166} />
               <View style={styles.pageCount}>
                 <Text style={styles.pageCountText}>
-                  {activeDocument.pageCount} {activeDocument.pageCount === 1 ? 'PAGE' : 'PAGES'}
+                  {formatNumber(activeDocument.pageCount)}{' '}
+                  {activeDocument.pageCount === 1 ? t('inbox.page') : t('inbox.pages')}
                 </Text>
               </View>
             </View>
@@ -136,19 +142,24 @@ export default function InboxScreen() {
                     styles.suggestionLabelText,
                     activeDocument.processingError && styles.suggestionLabelError,
                   ]}>
-                  {activeDocumentPending ? 'PAPERLESS STATUS' : 'FOLIO SUGGESTS'}
+                  {activeDocumentPending ? t('inbox.paperlessStatus') : t('inbox.folioSuggests')}
                 </Text>
               </View>
               <Text style={styles.documentTitle}>{activeDocument.title}</Text>
+              {!!activeDocument.duplicateDocumentIds?.length && (
+                <View accessibilityLabel={t('document.duplicateCount', { count: formatNumber(activeDocument.duplicateDocumentIds.length) })} style={styles.duplicateBadge}>
+                  <Text style={styles.duplicateBadgeText}>{t('document.duplicatesBadge', { count: formatNumber(activeDocument.duplicateDocumentIds.length) })}</Text>
+                </View>
+              )}
               <Text style={styles.excerpt} numberOfLines={3}>
                 {activeDocument.excerpt}
               </Text>
 
               <View style={styles.metadata}>
-                <MetadataRow label="From" value={activeDocument.correspondent} />
-                <MetadataRow label="Type" value={activeDocument.documentType} />
+                <MetadataRow label={t('inbox.from')} value={activeDocument.correspondent} />
+                <MetadataRow label={t('inbox.type')} value={activeDocument.documentType} />
                 <View style={styles.metadataRow}>
-                  <Text style={styles.metadataLabel}>Tags</Text>
+                  <Text style={styles.metadataLabel}>{t('inbox.tags')}</Text>
                   <View style={styles.tagRow}>
                     {activeDocument.tags.map((tag) => (
                       <View key={tag} style={styles.tag}>
@@ -156,7 +167,7 @@ export default function InboxScreen() {
                       </View>
                     ))}
                     {!activeDocument.tags.length && (
-                      <Text style={styles.metadataValue}>No tags yet</Text>
+                      <Text style={styles.metadataValue}>{t('inbox.noTags')}</Text>
                     )}
                   </View>
                 </View>
@@ -173,14 +184,14 @@ export default function InboxScreen() {
 
           <View style={styles.actions}>
             <Pressable
-              accessibilityLabel={`Review ${activeDocument.title} later`}
+              accessibilityLabel={t('inbox.reviewLater', { title: activeDocument.title })}
               onPress={defer}
               style={styles.later}>
               <Clock3 color={palette.ink} size={18} />
-              <Text style={styles.laterText}>Later</Text>
+              <Text style={styles.laterText}>{t('inbox.later')}</Text>
             </Pressable>
             <Pressable
-              accessibilityLabel={`File ${activeDocument.title}`}
+              accessibilityLabel={t('inbox.fileLabel', { title: activeDocument.title })}
               disabled={filing || activeDocumentPending}
               onPress={approve}
               style={[
@@ -188,30 +199,30 @@ export default function InboxScreen() {
                 activeDocumentPending && styles.fileButtonDisabled,
               ]}>
               {filing || (activeDocumentPending && !activeDocument.processingError) ? (
-                <ActivityIndicator color={palette.ink} size="small" />
+                <ActivityIndicator color={palette.accentInk} size="small" />
               ) : activeDocument.processingError ? (
                 <CircleAlert color={palette.danger} size={20} />
               ) : (
-                <Check color={palette.ink} size={20} strokeWidth={2.6} />
+                <Check color={palette.accentInk} size={20} strokeWidth={2.6} />
               )}
               <Text style={styles.fileButtonText}>
                 {activeDocument.processingError
-                  ? 'Processing issue'
+                  ? t('inbox.processingIssue')
                   : activeDocumentPending
-                    ? 'Processing…'
-                    : 'Looks good · File it'}
+                    ? t('inbox.processing')
+                    : t('inbox.fileIt')}
               </Text>
             </Pressable>
           </View>
 
           {inboxDocuments.length > 1 && (
             <View style={styles.upNext}>
-              <Text style={styles.upNextLabel}>UP NEXT</Text>
+              <Text style={styles.upNextLabel}>{t('inbox.upNext')}</Text>
               <Pressable
                 accessibilityLabel={
                   isPendingDocument(inboxDocuments[1])
-                    ? `View processing status for ${inboxDocuments[1].title}`
-                    : `Open ${inboxDocuments[1].title}`
+                    ? t('inbox.viewProcessing', { title: inboxDocuments[1].title })
+                    : t('document.open', { title: inboxDocuments[1].title })
                 }
                 onPressIn={() =>
                   router.preload({
@@ -232,6 +243,9 @@ export default function InboxScreen() {
                     {inboxDocuments[1].title}
                   </Text>
                   <Text style={styles.nextMeta}>{inboxDocuments[1].correspondent}</Text>
+                  {!!inboxDocuments[1].duplicateDocumentIds?.length && (
+                    <Text style={styles.nextDuplicate}>{t('document.duplicatesBadge', { count: formatNumber(inboxDocuments[1].duplicateDocumentIds.length) })}</Text>
+                  )}
                 </View>
                 <ChevronRight color={palette.faint} size={18} />
               </Pressable>
@@ -243,14 +257,14 @@ export default function InboxScreen() {
           <View style={styles.emptyIcon}>
             <CheckCircle2 color={palette.ink} size={37} />
           </View>
-          <Text style={styles.emptyTitle}>All clear</Text>
+          <Text style={styles.emptyTitle}>{t('inbox.allClear')}</Text>
           <Text style={styles.emptyCopy}>
-            Every document has a home. New scans and imports will wait for you here.
+            {t('inbox.emptyCopy')}
           </Text>
           <Pressable
             onPress={() => router.push('/scan')}
             style={styles.scanButton}>
-            <Text style={styles.scanButtonText}>Scan something new</Text>
+            <Text style={styles.scanButtonText}>{t('inbox.scanNew')}</Text>
           </Pressable>
         </View>
       )}
@@ -352,7 +366,7 @@ const styles = StyleSheet.create({
     height: 190,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#E8E4DB',
+    backgroundColor: palette.line,
     overflow: 'hidden',
   },
   previewGlow: {
@@ -360,7 +374,7 @@ const styles = StyleSheet.create({
     width: 250,
     height: 250,
     borderRadius: 125,
-    backgroundColor: '#F7F2E8',
+    backgroundColor: palette.paper,
   },
   pageCount: {
     position: 'absolute',
@@ -369,10 +383,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 6,
     borderRadius: radii.pill,
-    backgroundColor: 'rgba(23,35,27,0.75)',
+    backgroundColor: palette.accentInk,
   },
   pageCountText: {
-    color: palette.paper,
+    color: palette.onDark,
     fontFamily: fonts.sans,
     fontSize: 8,
     fontWeight: '900',
@@ -403,6 +417,20 @@ const styles = StyleSheet.create({
     lineHeight: 29,
     fontWeight: '600',
     marginTop: 8,
+  },
+  duplicateBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: radii.pill,
+    backgroundColor: palette.dangerSurface,
+    marginTop: 8,
+  },
+  duplicateBadgeText: {
+    color: palette.danger,
+    fontFamily: fonts.sans,
+    fontSize: 10,
+    fontWeight: '900',
   },
   excerpt: {
     color: palette.muted,
@@ -462,7 +490,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 11,
     borderRadius: radii.sm,
-    backgroundColor: '#F0EEE6',
+    backgroundColor: palette.canvas,
     marginTop: 15,
   },
   reasonText: {
@@ -510,7 +538,7 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   fileButtonText: {
-    color: palette.ink,
+    color: palette.accentInk,
     fontFamily: fonts.sans,
     fontSize: 13,
     fontWeight: '900',
@@ -532,7 +560,7 @@ const styles = StyleSheet.create({
     gap: 11,
     padding: 10,
     borderRadius: radii.md,
-    backgroundColor: '#E8E3D8',
+    backgroundColor: palette.paper,
   },
   nextBody: {
     flex: 1,
@@ -547,6 +575,13 @@ const styles = StyleSheet.create({
     color: palette.muted,
     fontFamily: fonts.sans,
     fontSize: 10,
+    marginTop: 3,
+  },
+  nextDuplicate: {
+    color: palette.danger,
+    fontFamily: fonts.sans,
+    fontSize: 9,
+    fontWeight: '800',
     marginTop: 3,
   },
   empty: {

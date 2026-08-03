@@ -1,4 +1,4 @@
-import { palette } from '@/constants/theme';
+import { themeHex } from '@/constants/theme-colors';
 import { DocumentItem } from '@/types/document';
 
 export const demoDocuments: DocumentItem[] = [
@@ -14,7 +14,7 @@ export const demoDocuments: DocumentItem[] = [
     tags: ['Home', 'Utilities'],
     tagIds: ['demo-tag-home', 'demo-tag-utilities'],
     status: 'inbox',
-    color: palette.sky,
+    color: themeHex.light.sky,
     accent: '#2D718F',
     excerpt: 'Electricity account 4582 · Billing period 01.07–31.07 · Total CHF 86.40',
     suggestion: 'Matched from the sender and account number',
@@ -32,7 +32,7 @@ export const demoDocuments: DocumentItem[] = [
     tags: ['Travel', 'Expenses'],
     tagIds: ['demo-tag-travel', 'demo-tag-expenses'],
     status: 'inbox',
-    color: palette.rose,
+    color: themeHex.light.rose,
     accent: '#9B4138',
     excerpt: 'Zürich HB → Genève · SuperSaver ticket · Total CHF 48.00',
     suggestion: 'Looks like a travel expense',
@@ -50,7 +50,7 @@ export const demoDocuments: DocumentItem[] = [
     tags: ['Insurance', 'Home'],
     tagIds: ['demo-tag-insurance', 'demo-tag-home'],
     status: 'inbox',
-    color: palette.lavender,
+    color: themeHex.light.lavender,
     accent: '#675A9A',
     excerpt: 'Policy 21.883.420 · Renewal notice · Coverage period 2026–2027',
     suggestion: 'Renewal date detected: 31 August 2026',
@@ -68,7 +68,7 @@ export const demoDocuments: DocumentItem[] = [
     tags: ['Home', 'Rent'],
     tagIds: ['demo-tag-home', 'demo-tag-rent'],
     status: 'archived',
-    color: palette.mint,
+    color: themeHex.light.mint,
     accent: '#477A56',
     excerpt: 'Monthly rent statement · Apartment 4B · Paid on 30 June 2026',
     source: 'demo',
@@ -85,7 +85,7 @@ export const demoDocuments: DocumentItem[] = [
     tags: ['Health', 'Tax 2026'],
     tagIds: ['demo-tag-health', 'demo-tag-tax-2026'],
     status: 'archived',
-    color: palette.apricot,
+    color: themeHex.light.apricot,
     accent: '#A8612D',
     excerpt: 'Treatment date 24 June 2026 · Invoice 2026-1843 · Total CHF 312.50',
     source: 'demo',
@@ -102,7 +102,7 @@ export const demoDocuments: DocumentItem[] = [
     tags: ['Banking', '2026'],
     tagIds: ['demo-tag-banking', 'demo-tag-2026'],
     status: 'archived',
-    color: palette.lime,
+    color: themeHex.light.lime,
     accent: '#58731B',
     excerpt: 'Account statement · Q2 2026 · Closing balance CHF 12,482.10',
     source: 'demo',

@@ -59,6 +59,15 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Test
+        run: npm test
+      - name: Validate distribution boundaries
+        run: |
+          FOLIO_DISTRIBUTION=github npx expo config --type prebuild --json > "$RUNNER_TEMP/github-config.json"
+          FOLIO_DISTRIBUTION=store npx expo config --type prebuild --json > "$RUNNER_TEMP/store-config.json"
+          node scripts/assert-distribution-config.mjs "$RUNNER_TEMP/github-config.json" "$RUNNER_TEMP/store-config.json"
+      - name: Validate store metadata
+        run: npm run assert:store-metadata
       - name: Typecheck
         run: npx tsc --noEmit
       - name: Lint
@@ -67,7 +76,7 @@ jobs:
         run: npx expo-doctor
       - name: Export web bundle
         env:
-          CI: '1'
+          CI: "1"
         run: npx expo export --platform web
 
   android-debug:
@@ -86,25 +95,70 @@ jobs:
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
       - name: Install dependencies
         run: npm ci
       - name: Generate Android project
         env:
-          CI: '1'
+          CI: "1"
+          FOLIO_DISTRIBUTION: github
         run: npx expo prebuild --platform android --clean --no-install
       - name: Assemble debug APK
         env:
           NODE_ENV: development
         working-directory: android
-        run: ./gradlew :app:assembleDebug --no-daemon
+        run: ./gradlew :app:assembleDebug --build-cache --no-daemon
       - name: Upload debug APK
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: folio-pr-${{ github.event.pull_request.number || github.run_number }}-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  ios-unsigned:
+    name: iOS unsigned release build
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build and verify unsigned IPA
+        id: ios_build
+        env:
+          IOS_ASSET: Folio-pr-${{ github.event.pull_request.number || github.run_number }}-ios-unsigned.ipa
+        run: ./scripts/build-unsigned-ios.sh "$GITHUB_WORKSPACE/$IOS_ASSET"
+      - name: Validate AltStore and SideStore source generation
+        env:
+          IOS_ASSET: Folio-pr-${{ github.event.pull_request.number || github.run_number }}-ios-unsigned.ipa
+          IOS_METADATA: ${{ steps.ios_build.outputs.metadata_path }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          release_ipa="$RUNNER_TEMP/Folio-v${version}-ios-unsigned.ipa"
+          cp "$GITHUB_WORKSPACE/$IOS_ASSET" "$release_ipa"
+          node scripts/generate-altstore-source.mjs \
+            --metadata "$IOS_METADATA" \
+            --ipa "$release_ipa" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "v$version" \
+            --date "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --output "$RUNNER_TEMP/altstore-source.json"
+      - name: Upload unsigned IPA for testing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: folio-pr-${{ github.event.pull_request.number || github.run_number }}-ios-unsigned
+          path: |
+            Folio-pr-${{ github.event.pull_request.number || github.run_number }}-ios-unsigned.ipa
+            Folio-pr-${{ github.event.pull_request.number || github.run_number }}-ios-unsigned.ipa.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -115,12 +169,14 @@ jobs:
       - pr-title
       - quality
       - android-debug
+      - ios-unsigned
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Consolidate required results
         env:
           ANDROID_RESULT: ${{ needs.android-debug.result }}
+          IOS_RESULT: ${{ needs.ios-unsigned.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           TITLE_RESULT: ${{ needs.pr-title.result }}
         run: |
@@ -129,6 +185,7 @@ jobs:
             'PR title': process.env.TITLE_RESULT,
             Quality: process.env.QUALITY_RESULT,
             'Android debug build': process.env.ANDROID_RESULT,
+            'iOS unsigned release build': process.env.IOS_RESULT,
           };
           const failed = Object.entries(results).filter(([, result]) => result !== 'success');
           for (const [name, result] of Object.entries(results)) {

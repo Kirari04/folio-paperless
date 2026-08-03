@@ -4,15 +4,17 @@ import { StyleSheet, Text, View } from 'react-native';
 import { PaperThumbnail } from '@/components/paper-thumbnail';
 import { MotionPressable as Pressable } from '@/components/motion';
 import { fonts, palette, radii } from '@/constants/theme';
+import { useI18n } from '@/context/ui-preferences-context';
 import { useRouter } from '@/lib/router';
 import { DocumentItem } from '@/types/document';
 
 export function DocumentCard({ document }: { document: DocumentItem }) {
   const router = useRouter();
+  const { formatDocumentDate, formatNumber, t } = useI18n();
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Open ${document.title}`}
+      accessibilityLabel={t('document.open', { title: document.title })}
       onPressIn={() => router.preload({ pathname: '/document/[id]', params: { id: document.id } })}
       onPress={() => router.push({ pathname: '/document/[id]', params: { id: document.id } })}
       style={styles.card}>
@@ -25,7 +27,12 @@ export function DocumentCard({ document }: { document: DocumentItem }) {
           {document.correspondent}
         </Text>
         <View style={styles.footer}>
-          <Text style={styles.date}>{document.added}</Text>
+          <Text style={styles.date}>{formatDocumentDate(document.addedAt ?? document.created)}</Text>
+          {!!document.duplicateDocumentIds?.length && (
+            <View accessibilityLabel={t('document.duplicateCount', { count: formatNumber(document.duplicateDocumentIds.length) })} style={styles.duplicateTag}>
+              <Text style={styles.duplicateTagText}>{t('document.duplicatesBadge', { count: formatNumber(document.duplicateDocumentIds.length) })}</Text>
+            </View>
+          )}
           {document.tags.slice(0, 1).map((tag) => (
             <View key={tag} style={styles.tag}>
               <Text style={styles.tagText}>{tag}</Text>
@@ -47,7 +54,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     backgroundColor: palette.paper,
     borderWidth: 1,
-    borderColor: 'rgba(23,35,27,0.04)',
+    borderColor: palette.line,
   },
   pressed: {
     opacity: 0.74,
@@ -88,6 +95,18 @@ const styles = StyleSheet.create({
     borderRadius: radii.pill,
     paddingHorizontal: 8,
     paddingVertical: 3,
+  },
+  duplicateTag: {
+    backgroundColor: palette.dangerSurface,
+    borderRadius: radii.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  duplicateTagText: {
+    color: palette.danger,
+    fontFamily: fonts.sans,
+    fontSize: 10,
+    fontWeight: '800',
   },
   tagText: {
     color: palette.inkSoft,

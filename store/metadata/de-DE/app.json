@@ -1,0 +1,11 @@
+{
+  "name": "Folio für Paperless",
+  "subtitle": "Dein Paperless-ngx-Begleiter",
+  "shortDescription": "Dokumente auf deinem eigenen Paperless-ngx-Server scannen, finden und verwalten.",
+  "fullDescription": "Folio für Paperless ist ein mobiler Client für den Paperless-ngx-Server, den du selbst verwaltest. Erfasse Papierdokumente, bearbeite deinen Posteingang, durchsuche dein Archiv und verfolge Verarbeitungsaufträge in einer fokussierten mobilen Oberfläche. Profile halten Serververbindungen getrennt, und Plattformintegrationen sind so gestaltet, dass bei gesperrter App keine Dokument- oder Serverdetails offengelegt werden. Ein Paperless-ngx-Server ist erforderlich.",
+  "keywords": "paperless,dokumente,scanner,archiv,produktivität",
+  "promotionalText": "Ein privater, profilgetrennter mobiler Begleiter für deinen eigenen Paperless-ngx-Server.",
+  "category": "Productivity",
+  "privacyPolicyUrl": "https://github.com/Kirari04/folio-paperless/blob/main/docs/privacy-policy.md",
+  "supportUrl": "https://github.com/Kirari04/folio-paperless/issues"
+}

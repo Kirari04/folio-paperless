@@ -1,14 +1,21 @@
 import {
+  CommonActions,
+  DefaultTheme,
+  NavigationContainer,
+  StackActions,
+  useNavigationContainerRef,
+} from '@react-navigation/native';
+import {
   PropsWithChildren,
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
-import { BackHandler, Platform } from 'react-native';
+
+import { palette } from '@/constants/theme';
 
 export type RoutePath =
   | '/'
@@ -17,9 +24,13 @@ export type RoutePath =
   | '/settings'
   | '/trash'
   | '/scan'
+  | '/intake'
+  | '/tasks'
+  | '/saved-views'
+  | '/paperless-metadata'
   | '/document/[id]';
 
-type TabRoutePath = Extract<RoutePath, '/' | '/documents' | '/inbox' | '/settings'>;
+export type TabRoutePath = Extract<RoutePath, '/' | '/documents' | '/inbox' | '/settings'>;
 
 type RouteParams = Record<string, string>;
 
@@ -36,6 +47,17 @@ export type NavigationRoute = {
   params: RouteParams;
 };
 
+export type RootStackParamList = {
+  Tabs: undefined;
+  Document: { id: string; from?: string };
+  Scan: undefined;
+  Trash: undefined;
+  Intake: { batchId?: string } | undefined;
+  Tasks: undefined;
+  SavedViews: { id?: string } | undefined;
+  PaperlessMetadata: undefined;
+};
+
 type Router = {
   push: (target: RouteTarget) => void;
   preload: (target: RouteTarget) => void;
@@ -50,6 +72,19 @@ const NavigationMotionContext = createContext<{
   lastDocument: NavigationRoute | null;
   lastTab: TabRoutePath;
 }>({ lastDocument: null, lastTab: '/' });
+
+const navigationTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    primary: palette.ink,
+    background: palette.canvas,
+    card: palette.canvas,
+    text: palette.ink,
+    border: palette.line,
+    notification: palette.limeDark,
+  },
+};
 
 let nextRouteKey = 1;
 
@@ -69,97 +104,136 @@ function createRoute(target: RouteTarget): NavigationRoute {
   };
 }
 
+function isTabPath(pathname: RoutePath): pathname is TabRoutePath {
+  return ['/', '/documents', '/inbox', '/settings'].includes(pathname);
+}
+
+function nativeRouteFor(route: NavigationRoute) {
+  switch (route.pathname) {
+    case '/document/[id]':
+      return {
+        name: 'Document' as const,
+        params: { id: route.params.id, from: route.params.from },
+      };
+    case '/scan':
+      return { name: 'Scan' as const, params: undefined };
+    case '/trash':
+      return { name: 'Trash' as const, params: undefined };
+    case '/intake':
+      return { name: 'Intake' as const, params: { batchId: route.params.batchId } };
+    case '/tasks':
+      return { name: 'Tasks' as const, params: undefined };
+    case '/saved-views':
+      return { name: 'SavedViews' as const, params: { id: route.params.id } };
+    case '/paperless-metadata':
+      return { name: 'PaperlessMetadata' as const, params: undefined };
+    default:
+      return null;
+  }
+}
+
 export function NavigationProvider({ children }: PropsWithChildren) {
-  const [history, setHistory] = useState<NavigationRoute[]>([
-    { key: 0, pathname: '/', params: {} },
-  ]);
+  const navigationRef = useNavigationContainerRef<RootStackParamList>();
+  const initialRoute = useMemo<NavigationRoute>(() => ({ key: 0, pathname: '/', params: {} }), []);
+  const [route, setRoute] = useState(initialRoute);
+  const [tabRoute, setTabRoute] = useState(initialRoute);
   const [lastDocument, setLastDocument] = useState<NavigationRoute | null>(null);
-  const historyLength = useRef(1);
-  const currentPath = useRef<RoutePath>('/');
+  const tabRouteRef = useRef(tabRoute);
 
-  useEffect(() => {
-    historyLength.current = history.length;
-    currentPath.current = history[history.length - 1].pathname;
-  }, [history]);
+  const updateTab = useCallback((nextRoute: NavigationRoute) => {
+    tabRouteRef.current = nextRoute;
+    setTabRoute(nextRoute);
+    setRoute(nextRoute);
 
-  const push = useCallback((target: RouteTarget) => {
-    const route = createRoute(target);
-    if (route.pathname === '/document/[id]') {
-      setLastDocument((current) =>
-        current?.params.id === route.params.id ? { ...route, key: current.key } : route,
-      );
+    if (navigationRef.isReady() && navigationRef.getCurrentRoute()?.name !== 'Tabs') {
+      navigationRef.dispatch(StackActions.popToTop());
     }
-    setHistory((current) => [...current, route]);
-  }, []);
+  }, [navigationRef]);
+
+  const navigateNative = useCallback((target: RouteTarget, action: 'push' | 'navigate' | 'replace') => {
+    const nextRoute = createRoute(target);
+    if (isTabPath(nextRoute.pathname)) {
+      updateTab(nextRoute);
+      return;
+    }
+
+    const nativeRoute = nativeRouteFor(nextRoute);
+    if (!nativeRoute || !navigationRef.isReady()) return;
+    if (nextRoute.pathname === '/document/[id]') setLastDocument(nextRoute);
+
+    if (action === 'push') {
+      navigationRef.dispatch(StackActions.push(nativeRoute.name, nativeRoute.params));
+    } else if (action === 'replace') {
+      navigationRef.dispatch(StackActions.replace(nativeRoute.name, nativeRoute.params));
+    } else {
+      navigationRef.dispatch(CommonActions.navigate(nativeRoute));
+    }
+  }, [navigationRef, updateTab]);
 
   const preload = useCallback((target: RouteTarget) => {
-    if (currentPath.current === '/document/[id]') return;
-    const route = createRoute(target);
-    if (route.pathname !== '/document/[id]') return;
-    setLastDocument((current) =>
-      current?.params.id === route.params.id ? { ...route, key: current.key } : route,
-    );
-  }, []);
-
-  const navigate = useCallback((target: RouteTarget) => {
-    const route = createRoute(target);
-    if (route.pathname === '/document/[id]') {
-      setLastDocument((current) =>
-        current?.params.id === route.params.id ? { ...route, key: current.key } : route,
-      );
+    const nextRoute = createRoute(target);
+    const nativeRoute = nativeRouteFor(nextRoute);
+    if (!nativeRoute || !navigationRef.isReady()) return;
+    if (nextRoute.pathname === '/document/[id]') setLastDocument(nextRoute);
+    switch (nativeRoute.name) {
+      case 'Document':
+        navigationRef.preload('Document', nativeRoute.params);
+        break;
+      case 'Intake':
+        navigationRef.preload('Intake', nativeRoute.params);
+        break;
+      case 'SavedViews':
+        navigationRef.preload('SavedViews', nativeRoute.params);
+        break;
+      default:
+        navigationRef.preload(nativeRoute.name);
     }
-    setHistory((current) => {
-      const existingIndex = current.findLastIndex(
-        (entry) => entry.pathname === route.pathname && !Object.keys(route.params).length,
-      );
-      if (existingIndex >= 0) return [...current.slice(0, existingIndex), route];
-      return [...current, route];
-    });
-  }, []);
+  }, [navigationRef]);
 
-  const replace = useCallback((target: RouteTarget) => {
-    const route = createRoute(target);
-    if (route.pathname === '/document/[id]') {
-      setLastDocument((current) =>
-        current?.params.id === route.params.id ? { ...route, key: current.key } : route,
-      );
+  const syncCurrentRoute = useCallback(() => {
+    const nativeRoute = navigationRef.getCurrentRoute();
+    if (!nativeRoute || nativeRoute.name === 'Tabs') {
+      setRoute(tabRouteRef.current);
+      return;
     }
-    setHistory((current) => [...current.slice(0, -1), route]);
-  }, []);
 
-  const goBack = useCallback(() => {
-    if (historyLength.current <= 1) return false;
-    historyLength.current = Math.max(1, historyLength.current - 1);
-    setHistory((current) => (current.length <= 1 ? current : current.slice(0, -1)));
-    return true;
-  }, []);
+    const params = (nativeRoute.params ?? {}) as Record<string, string | number | undefined>;
+    const pathname: RoutePath = ({
+      Document: '/document/[id]',
+      Scan: '/scan',
+      Trash: '/trash',
+      Intake: '/intake',
+      Tasks: '/tasks',
+      SavedViews: '/saved-views',
+      PaperlessMetadata: '/paperless-metadata',
+    } as const)[nativeRoute.name];
+    setRoute(createRoute({ pathname, params }));
+  }, [navigationRef]);
 
-  useEffect(() => {
-    if (Platform.OS === 'web') return;
-    const subscription = BackHandler.addEventListener('hardwareBackPress', goBack);
-    return () => subscription.remove();
-  }, [goBack]);
+  const router = useMemo<Router>(() => ({
+    push: (target) => navigateNative(target, 'push'),
+    preload,
+    navigate: (target) => navigateNative(target, 'navigate'),
+    replace: (target) => navigateNative(target, 'replace'),
+    back: () => {
+      if (navigationRef.isReady() && navigationRef.canGoBack()) navigationRef.goBack();
+    },
+  }), [navigateNative, navigationRef, preload]);
 
-  const router = useMemo<Router>(
-    () => ({ push, preload, navigate, replace, back: () => void goBack() }),
-    [goBack, navigate, preload, push, replace],
-  );
-  const route = history[history.length - 1];
-  const lastTabEntry = history.findLast((entry) =>
-    ['/', '/documents', '/inbox', '/settings'].includes(entry.pathname),
-  );
-  const lastTab = lastTabEntry && ['/', '/documents', '/inbox', '/settings'].includes(
-    lastTabEntry.pathname,
-  )
-    ? (lastTabEntry.pathname as TabRoutePath)
-    : '/';
+  const lastTab = tabRoute.pathname as TabRoutePath;
 
   return (
-    <RouterContext.Provider value={router}>
-      <NavigationMotionContext.Provider value={{ lastDocument, lastTab }}>
-        <RouteContext.Provider value={route}>{children}</RouteContext.Provider>
-      </NavigationMotionContext.Provider>
-    </RouterContext.Provider>
+    <NavigationContainer
+      onReady={syncCurrentRoute}
+      onStateChange={syncCurrentRoute}
+      ref={navigationRef}
+      theme={navigationTheme}>
+      <RouterContext.Provider value={router}>
+        <NavigationMotionContext.Provider value={{ lastDocument, lastTab }}>
+          <RouteContext.Provider value={route}>{children}</RouteContext.Provider>
+        </NavigationMotionContext.Provider>
+      </RouterContext.Provider>
+    </NavigationContainer>
   );
 }
 

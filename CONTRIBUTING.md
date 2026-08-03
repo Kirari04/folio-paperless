@@ -47,8 +47,9 @@ Install with the lockfile and run the same quality checks as CI:
 
 ```bash
 npm ci
-npx tsc --noEmit
+npm run typecheck
 npm run lint
+npm test
 npx expo-doctor
 npx expo export --platform web
 ```
@@ -64,11 +65,22 @@ cd android
 The Android folder is generated and ignored. Do not commit native build output, credentials, or
 signing material. Add screenshots or a recording to the pull request for visible UI changes.
 
+CI performs the equivalent clean iOS prebuild and unsigned Release archive on a macOS 26 runner.
+Its seven-day Actions artifact can be locally signed and sideloaded for physical-iPhone testing.
+
 ## Releases
 
 Release Please maintains a release pull request on `main`. Merging it creates a draft release and
-starts the signed Android build. Automation checks the application ID, version, APK signature,
-and certificate fingerprint before it publishes the release.
+starts independent Android and iOS builds. Automation verifies the Android application ID,
+version, signature, and certificate fingerprint. It also verifies the iOS bundle ID, version,
+build number, iPhone-only device family, arm64 binary, production JavaScript bundle, privacy
+manifest, and absence of Apple signing material. The iOS job derives an AltStore/SideStore source
+from the archived app and verifies its download URL, size, checksum, minimum iOS version,
+permissions, and non-notarized entitlement policy.
+
+The release remains a draft until the signed APK, unsigned IPA, both SHA-256 files, and
+`altstore-source.json` have been uploaded successfully. The IPA must be signed with the tester's
+own Apple credentials before it can be installed on an iPhone.
 
 If the build fails, the release stays in draft. A maintainer can run the `Release` workflow with
 `rebuild_tag=vX.Y.Z` after fixing the cause. The workflow refuses to modify an already-published

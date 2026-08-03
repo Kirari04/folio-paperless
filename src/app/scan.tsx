@@ -1,3 +1,6 @@
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { FlashList } from '@shopify/flash-list';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as DocumentPicker from 'expo-document-picker';
 import { Image } from 'expo-image';
@@ -5,12 +8,14 @@ import {
   Camera,
   Check,
   ChevronLeft,
+  ChevronDown,
   CircleAlert,
   FileUp,
   Images,
   Layers3,
   RotateCcw,
   ScanLine,
+  Server,
   Sparkles,
   WandSparkles,
   X,
@@ -21,6 +26,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
+  Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -31,36 +38,148 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/components/motion';
 import { fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
+import { useI18n, type TranslationKey } from '@/i18n';
+import { presentRuntimeError } from '@/i18n/error-presentation';
 import {
+  discardSmartScan,
+  discardTemporaryFiles,
   launchSmartScanner,
   prepareSmartScan,
   SmartScannerUnavailableError,
   SmartScanSession,
 } from '@/lib/document-scanner';
 import { useRouter } from '@/lib/router';
+import type { RootStackParamList } from '@/lib/router';
+import type { ConnectionProfile } from '@/lib/auth/profile-store';
 
 type CaptureKind = 'smart' | 'manual';
 
-function pluralPages(count: number) {
-  return `${count} ${count === 1 ? 'page' : 'pages'}`;
+type Translator = (key: TranslationKey, values?: Record<string, string | number>) => string;
+
+function pluralPages(count: number, t: Translator, formatNumber: (value: number) => string) {
+  return count === 1 ? t('scan.pageOne') : t('scan.pageMany', { count: formatNumber(count) });
 }
 
-function smartScannerMessage(error: unknown) {
+function smartScannerMessage(error: unknown, t: Translator) {
   if (error instanceof SmartScannerUnavailableError) {
     if (/hybrid object|nitro|native module/i.test(error.message)) {
-      return 'Smart scanning needs the updated Folio development build. Manual capture still works.';
+      return t('scan.buildRequired');
     }
-    return 'Smart scanning is unavailable on this device. You can still use manual capture.';
+    return t('scan.unavailable');
   }
-  return error instanceof Error
-    ? error.message
-    : 'The smart scanner could not open. Try again or use manual capture.';
+  return presentRuntimeError(error, t('scan.openError'));
+}
+
+function DestinationControl({
+  disabled,
+  profile,
+  onPress,
+  t,
+}: {
+  disabled?: boolean;
+  profile: ConnectionProfile;
+  onPress: () => void;
+  t: Translator;
+}) {
+  return (
+    <Pressable
+      accessibilityHint={t('profiles.destinationHint')}
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={[styles.destinationControl, disabled && styles.disabledButton]}>
+      <View style={styles.destinationIcon}>
+        <Server color={palette.accentInk} size={17} />
+      </View>
+      <View style={styles.destinationCopy}>
+        <Text style={styles.destinationLabel}>{t('profiles.activeDestination')}</Text>
+        <Text numberOfLines={1} style={styles.destinationName}>{profile.displayName}</Text>
+      </View>
+      <ChevronDown color={palette.muted} size={18} />
+    </Pressable>
+  );
+}
+
+function DestinationPicker({
+  activeProfile,
+  disabled = false,
+  onDismiss,
+  onSelect,
+  profiles,
+  switchingProfileId,
+  t,
+  visible,
+}: {
+  activeProfile: ConnectionProfile | null;
+  disabled?: boolean;
+  onDismiss: () => void;
+  onSelect: (profileId: string) => void;
+  profiles: ConnectionProfile[];
+  switchingProfileId: string | null;
+  t: Translator;
+  visible: boolean;
+}) {
+  return (
+    <Modal
+      animationType="fade"
+      onRequestClose={() => {
+        if (!switchingProfileId && !disabled) onDismiss();
+      }}
+      statusBarTranslucent
+      transparent
+      visible={visible}>
+      <View style={styles.destinationBackdrop}>
+        <View accessibilityViewIsModal style={styles.destinationSheet}>
+          <Text style={styles.destinationTitle}>{t('share.destinationTitle')}</Text>
+          <Text style={styles.destinationDescription}>{t('profiles.destinationHint')}</Text>
+          <ScrollView contentContainerStyle={styles.destinationList} showsVerticalScrollIndicator={false}>
+            {profiles.map((profile) => {
+              const active = activeProfile?.id === profile.id;
+              const switching = switchingProfileId === profile.id;
+              return (
+                <Pressable
+                  accessibilityRole="radio"
+                  accessibilityState={{ disabled: disabled || !!switchingProfileId, selected: active }}
+                  disabled={disabled || !!switchingProfileId}
+                  key={profile.id}
+                  onPress={() => onSelect(profile.id)}
+                  style={[styles.destinationRow, active && styles.destinationRowActive]}>
+                  <View style={[styles.destinationRowIcon, active && styles.destinationRowIconActive]}>
+                    {switching
+                      ? <ActivityIndicator color={active ? palette.accentInk : palette.ink} size="small" />
+                      : active
+                        ? <Check color={palette.accentInk} size={17} />
+                        : <Server color={palette.ink} size={17} />}
+                  </View>
+                  <View style={styles.destinationRowCopy}>
+                    <Text numberOfLines={1} style={styles.destinationRowName}>{profile.displayName}</Text>
+                    <Text numberOfLines={1} style={styles.destinationRowUrl}>{profile.serverUrl}</Text>
+                  </View>
+                  {active && <Text style={styles.destinationActive}>{t('profiles.activeDestination')}</Text>}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+          <Pressable
+            disabled={disabled || !!switchingProfileId}
+            onPress={onDismiss}
+            style={styles.destinationCancel}>
+            <Text style={styles.destinationCancelText}>{t('common.cancel')}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
 }
 
 export default function ScanScreen() {
   const router = useRouter();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Scan'>>();
+  const { formatNumber, t } = useI18n();
   const cameraRef = useRef<CameraView>(null);
   const mountedRef = useRef(true);
+  const scanSessionRef = useRef<SmartScanSession | null>(null);
   const autoLaunchRef = useRef(false);
   const smartLaunchRef = useRef(false);
   const [permission, requestPermission] = useCameraPermissions();
@@ -73,16 +192,40 @@ export default function ScanScreen() {
   const [isLaunchingSmart, setIsLaunchingSmart] = useState(false);
   const [isTakingPhoto, setIsTakingPhoto] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [savingLabel, setSavingLabel] = useState('Uploading…');
+  const [savingLabel, setSavingLabel] = useState(() => t('scan.uploading'));
   const [scanError, setScanError] = useState<string | null>(null);
-  const { importDocument, connected } = useApp();
+  const [destinationVisible, setDestinationVisible] = useState(false);
+  const [switchingProfileId, setSwitchingProfileId] = useState<string | null>(null);
+  const [requestedProfileId, setRequestedProfileId] = useState<string | null>(null);
+  const [completedSwitchId, setCompletedSwitchId] = useState<string | null>(null);
+  const {
+    activeProfile,
+    profileConfigured,
+    importDocument,
+    isBootstrapping,
+    prepareDocuments,
+    profiles,
+    switchProfile,
+  } = useApp();
+
+  const rememberScanSession = useCallback((session: SmartScanSession | null) => {
+    scanSessionRef.current = session;
+    setScanSession(session);
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      const abandonedSession = scanSessionRef.current;
+      scanSessionRef.current = null;
+      if (abandonedSession) void discardSmartScan(abandonedSession);
     };
   }, []);
+
+  useEffect(() => {
+    navigation.setOptions({ gestureEnabled: !isSaving });
+  }, [isSaving, navigation]);
 
   const startSmartScan = useCallback(async () => {
     if (smartLaunchRef.current) return;
@@ -96,25 +239,67 @@ export default function ScanScreen() {
         animateLayout();
         setCaptureKind('smart');
         setSelectedPage(0);
-        setScanSession(result);
+        rememberScanSession(result);
         await hapticFeedback('confirm');
       }
     } catch (error) {
       if (!mountedRef.current) return;
-      setScanError(smartScannerMessage(error));
+      setScanError(smartScannerMessage(error, t));
       await hapticFeedback('error');
     } finally {
       smartLaunchRef.current = false;
       if (mountedRef.current) setIsLaunchingSmart(false);
     }
-  }, []);
+  }, [rememberScanSession, t]);
 
   useEffect(() => {
-    if (autoLaunchRef.current) return;
+    if (
+      Platform.OS === 'ios'
+      || autoLaunchRef.current
+      || isBootstrapping
+      || profiles.length > 1
+    ) return;
     autoLaunchRef.current = true;
     const timer = setTimeout(() => void startSmartScan(), 220);
     return () => clearTimeout(timer);
-  }, [startSmartScan]);
+  }, [isBootstrapping, profiles.length, startSmartScan]);
+
+  async function selectDestination(profileId: string) {
+    if (isSaving || switchingProfileId) return;
+    setScanError(null);
+    if (activeProfile?.id === profileId) {
+      setDestinationVisible(false);
+      return;
+    }
+    setRequestedProfileId(profileId);
+    setCompletedSwitchId(null);
+    setSwitchingProfileId(profileId);
+    try {
+      await switchProfile(profileId);
+      setCompletedSwitchId(profileId);
+      await hapticFeedback('selection');
+    } catch (error) {
+      setRequestedProfileId(null);
+      setScanError(presentRuntimeError(error, t('profiles.error')));
+      await hapticFeedback('error');
+    } finally {
+      setSwitchingProfileId(null);
+    }
+  }
+
+  useEffect(() => {
+    if (
+      !requestedProfileId
+      || completedSwitchId !== requestedProfileId
+      || activeProfile?.id !== requestedProfileId
+    ) return;
+    const frame = requestAnimationFrame(() => {
+      setRequestedProfileId(null);
+      setCompletedSwitchId(null);
+      setDestinationVisible(false);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeProfile?.id, completedSwitchId, requestedProfileId]);
 
   function openManualCamera() {
     animateLayout();
@@ -143,10 +328,10 @@ export default function ScanScreen() {
       animateLayout();
       setCaptureKind('manual');
       setSelectedPage(0);
-      setScanSession({ pages: [{ uri: photo.uri }] });
+      rememberScanSession({ pages: [{ uri: photo.uri }] });
       await hapticFeedback('medium');
     } catch (error) {
-      setScanError(error instanceof Error ? error.message : 'The camera could not take a picture.');
+      setScanError(presentRuntimeError(error, t('scan.cameraError')));
       await hapticFeedback('error');
     } finally {
       setIsTakingPhoto(false);
@@ -155,29 +340,31 @@ export default function ScanScreen() {
 
   async function uploadScan() {
     if (!scanSession || isSaving) return;
+    setDestinationVisible(false);
     setIsSaving(true);
     setScanError(null);
-    setSavingLabel(scanSession.pages.length > 1 && !scanSession.pdfUri ? 'Preparing PDF…' : 'Uploading…');
+    setSavingLabel(scanSession.pages.length > 1 && !scanSession.pdfUri
+      ? t('scan.preparingPdf')
+      : t('scan.uploading'));
     try {
       const file = await prepareSmartScan(scanSession);
-      setSavingLabel(connected ? 'Uploading…' : 'Adding…');
-      let reportedProgress = -1;
-      await importDocument(file, {
-        onProgress: (progress) => {
-          if (!connected) return;
-          const percent = Math.min(100, Math.max(0, Math.round(progress * 20) * 5));
-          if (percent === reportedProgress) return;
-          reportedProgress = percent;
-          setSavingLabel(
-            percent >= 100 ? 'Handing off…' : percent > 0 ? `Uploading ${percent}%` : 'Starting upload…',
-          );
-        },
-      });
-      setSavingLabel(connected ? 'Sent to Paperless' : 'Added');
+      const preparedSession = !scanSession.pdfUri && file.mimeType === 'application/pdf'
+        ? { ...scanSession, pdfUri: file.uri }
+        : scanSession;
+      if (preparedSession !== scanSession) rememberScanSession(preparedSession);
+      setSavingLabel(profileConfigured ? t('scan.securingCopy') : t('scan.adding'));
+      const intake = profileConfigured ? await prepareDocuments([file], 'camera') : null;
+      if (!profileConfigured) await importDocument(file);
       await hapticFeedback('confirm');
-      router.replace('/inbox');
+      scanSessionRef.current = null;
+      await discardSmartScan(preparedSession);
+      if (intake?.batchId) {
+        router.replace({ pathname: '/intake', params: { batchId: intake.batchId } });
+      } else {
+        router.replace('/inbox');
+      }
     } catch (error) {
-      setScanError(error instanceof Error ? error.message : 'Could not save this scan.');
+      setScanError(presentRuntimeError(error, t('scan.saveError')));
       await hapticFeedback('error');
     } finally {
       setIsSaving(false);
@@ -186,8 +373,11 @@ export default function ScanScreen() {
 
   function rescan() {
     if (isSaving) return;
+    const discardedSession = scanSessionRef.current;
+    scanSessionRef.current = null;
     animateLayout();
     setScanSession(null);
+    if (discardedSession) void discardSmartScan(discardedSession);
     setSelectedPage(0);
     setScanError(null);
     if (captureKind === 'manual') {
@@ -201,36 +391,34 @@ export default function ScanScreen() {
   async function pickFile() {
     const result = await DocumentPicker.getDocumentAsync({
       copyToCacheDirectory: true,
-      multiple: false,
+      multiple: true,
       type: ['application/pdf', 'image/*'],
     });
     if (result.canceled) return;
-    const file = result.assets[0];
+    setDestinationVisible(false);
     setIsSaving(true);
-    setSavingLabel(connected ? 'Uploading…' : 'Adding…');
+    setSavingLabel(profileConfigured ? t('scan.securingCopies') : t('scan.adding'));
     setScanError(null);
     try {
-      let reportedProgress = -1;
-      await importDocument(
-        { uri: file.uri, name: file.name, mimeType: file.mimeType },
-        {
-          onProgress: (progress) => {
-            if (!connected) return;
-            const percent = Math.min(100, Math.max(0, Math.round(progress * 20) * 5));
-            if (percent === reportedProgress) return;
-            reportedProgress = percent;
-            setSavingLabel(
-              percent >= 100 ? 'Handing off…' : percent > 0 ? `Uploading ${percent}%` : 'Starting upload…',
-            );
-          },
-        },
-      );
+      const files = result.assets.map((file) => ({
+        uri: file.uri,
+        name: file.name,
+        mimeType: file.mimeType,
+        size: file.size,
+      }));
+      const intake = profileConfigured ? await prepareDocuments(files, 'picker') : null;
+      if (!profileConfigured) await Promise.all(files.map((file) => importDocument(file)));
       await hapticFeedback('confirm');
-      router.replace('/inbox');
+      if (intake?.batchId) {
+        router.replace({ pathname: '/intake', params: { batchId: intake.batchId } });
+      } else {
+        router.replace('/inbox');
+      }
     } catch (error) {
-      setScanError(error instanceof Error ? error.message : 'Could not import this file.');
+      setScanError(presentRuntimeError(error, t('scan.importError')));
       await hapticFeedback('error');
     } finally {
+      await discardTemporaryFiles(result.assets.map((file) => file.uri));
       setIsSaving(false);
     }
   }
@@ -245,25 +433,36 @@ export default function ScanScreen() {
         <SafeAreaView edges={['top']} style={styles.reviewHeaderSafe}>
           <View style={styles.reviewHeader}>
             <Pressable
-              accessibilityLabel="Close scan review"
+              accessibilityLabel={t('scan.closeReview')}
               disabled={isSaving}
               onPress={() => router.back()}
               style={styles.lightIconButton}>
               <X color={palette.ink} size={21} />
             </Pressable>
             <View style={styles.reviewHeading}>
-              <Text style={styles.reviewTitle}>Review scan</Text>
+              <Text style={styles.reviewTitle}>{t('scan.review')}</Text>
               <Text style={styles.reviewSubtitle}>
-                {smart ? `${pluralPages(pageCount)} · cropped and enhanced` : 'Manual capture'}
+                {smart
+                  ? t('scan.enhancedPages', { pages: pluralPages(pageCount, t, formatNumber) })
+                  : t('scan.manualCapture')}
               </Text>
             </View>
             <View style={styles.headerBalance} />
           </View>
         </SafeAreaView>
 
+        {!!activeProfile && (
+          <DestinationControl
+            disabled={isSaving || !!switchingProfileId}
+            onPress={() => setDestinationVisible(true)}
+            profile={activeProfile}
+            t={t}
+          />
+        )}
+
         <View style={styles.previewStage}>
           <Image
-            accessibilityLabel={`Preview of page ${selectedPage + 1}`}
+            accessibilityLabel={t('scan.previewPage', { page: formatNumber(selectedPage + 1) })}
             contentFit="contain"
             recyclingKey={currentPage.uri}
             source={{ uri: currentPage.uri }}
@@ -271,54 +470,67 @@ export default function ScanScreen() {
             transition={140}
           />
           <View style={styles.pageBadge}>
-            <Text style={styles.pageBadgeText}>{selectedPage + 1} / {pageCount}</Text>
+            <Text style={styles.pageBadgeText}>
+              {formatNumber(selectedPage + 1)} / {formatNumber(pageCount)}
+            </Text>
           </View>
         </View>
 
         <View style={styles.reviewMeta}>
           <View style={styles.reviewMetaIcon}>
             {smart ? (
-              <WandSparkles color={palette.ink} size={17} />
+              <WandSparkles color={palette.accentInk} size={17} />
             ) : (
-              <Camera color={palette.ink} size={17} />
+              <Camera color={palette.accentInk} size={17} />
             )}
           </View>
           <View style={styles.reviewMetaCopy}>
-            <Text style={styles.reviewMetaTitle}>{smart ? 'Ready for Paperless' : 'Ready to upload'}</Text>
+            <Text style={styles.reviewMetaTitle}>
+              {smart ? t('scan.readyPaperless') : t('scan.readyUpload')}
+            </Text>
             <Text style={styles.reviewMetaText}>
               {smart
-                ? 'Crop, perspective and document contrast were handled on-device.'
-                : 'For automatic cleanup and multiple pages, use smart scan.'}
+                ? t('scan.smartHandled')
+                : t('scan.manualHint')}
             </Text>
           </View>
         </View>
 
         {pageCount > 1 && (
-          <ScrollView
+          <FlashList
             contentContainerStyle={styles.thumbnailContent}
+            data={scanSession.pages}
+            drawDistance={180}
+            extraData={selectedPage}
             horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.thumbnailRail}>
-            {scanSession.pages.map((page, index) => {
+            ItemSeparatorComponent={() => <View style={styles.thumbnailSeparator} />}
+            keyExtractor={(page, index) => `${page.uri}-${index}`}
+            renderItem={({ item: page, index }) => {
               const selected = index === selectedPage;
               return (
                 <Pressable
-                  accessibilityLabel={`Show page ${index + 1}`}
+                  accessibilityLabel={t('scan.showPage', { page: formatNumber(index + 1) })}
                   accessibilityState={{ selected }}
                   haptic="selection"
-                  key={`${page.uri}-${index}`}
                   onPress={() => setSelectedPage(index)}
                   style={[styles.thumbnailButton, selected && styles.thumbnailButtonSelected]}>
-                  <Image contentFit="cover" source={{ uri: page.uri }} style={styles.thumbnailImage} />
+                  <Image
+                    contentFit="cover"
+                    recyclingKey={page.uri}
+                    source={{ uri: page.uri }}
+                    style={styles.thumbnailImage}
+                  />
                   <View style={[styles.thumbnailNumber, selected && styles.thumbnailNumberSelected]}>
                     <Text style={[styles.thumbnailNumberText, selected && styles.thumbnailNumberTextSelected]}>
-                      {index + 1}
+                      {formatNumber(index + 1)}
                     </Text>
                   </View>
                 </Pressable>
               );
-            })}
-          </ScrollView>
+            }}
+            showsHorizontalScrollIndicator={false}
+            style={styles.thumbnailRail}
+          />
         )}
 
         <SafeAreaView edges={['bottom']} style={styles.reviewActionsSafe}>
@@ -331,44 +543,61 @@ export default function ScanScreen() {
                 <CircleAlert color={palette.danger} size={18} />
               </View>
               <View style={styles.inlineErrorCopy}>
-                <Text style={styles.inlineErrorTitle}>Upload didn’t finish</Text>
+                <Text style={styles.inlineErrorTitle}>{t('scan.uploadFailed')}</Text>
                 <Text style={styles.inlineErrorText}>{scanError}</Text>
               </View>
             </View>
           )}
           <View style={styles.reviewActions}>
             <Pressable
-              disabled={isSaving}
+              disabled={isSaving || !!switchingProfileId}
               haptic="light"
               onPress={rescan}
               style={[styles.rescanButton, isSaving && styles.disabledButton]}>
               <RotateCcw color={palette.ink} size={19} />
-              <Text style={styles.rescanText}>Rescan</Text>
+              <Text style={styles.rescanText}>{t('scan.rescan')}</Text>
             </Pressable>
             <Pressable
-              disabled={isSaving}
+              disabled={isSaving || !!switchingProfileId}
               haptic="none"
               onPress={uploadScan}
-              style={[styles.uploadButton, isSaving && styles.disabledButton]}>
+              style={[
+                styles.uploadButton,
+                (isSaving || !!switchingProfileId) && styles.disabledButton,
+              ]}>
               {isSaving ? (
-                <ActivityIndicator color={palette.ink} size="small" />
+                <ActivityIndicator color={palette.accentInk} size="small" />
               ) : (
-                <Check color={palette.ink} size={20} strokeWidth={2.7} />
+                <Check color={palette.accentInk} size={20} strokeWidth={2.7} />
               )}
               <Text style={styles.uploadButtonText}>
                 {isSaving
                   ? savingLabel
                   : scanError
-                    ? connected
-                      ? 'Try upload again'
-                      : 'Try adding again'
-                    : connected
-                    ? `Upload ${pageCount === 1 ? 'scan' : pluralPages(pageCount)}`
-                    : `Add ${pageCount === 1 ? 'scan' : pluralPages(pageCount)}`}
+                    ? profileConfigured
+                      ? t('scan.retryUpload')
+                      : t('scan.retryAdding')
+                    : profileConfigured
+                    ? pageCount === 1
+                      ? t('scan.uploadOne')
+                      : t('scan.uploadMany', { pages: pluralPages(pageCount, t, formatNumber) })
+                    : pageCount === 1
+                      ? t('scan.addOne')
+                      : t('scan.addMany', { pages: pluralPages(pageCount, t, formatNumber) })}
               </Text>
             </Pressable>
           </View>
         </SafeAreaView>
+        <DestinationPicker
+          activeProfile={activeProfile}
+          disabled={isSaving}
+          onDismiss={() => setDestinationVisible(false)}
+          onSelect={(profileId) => void selectDestination(profileId)}
+          profiles={profiles}
+          switchingProfileId={switchingProfileId}
+          t={t}
+          visible={destinationVisible}
+        />
       </View>
     );
   }
@@ -386,19 +615,16 @@ export default function ScanScreen() {
       return (
         <SafeAreaView style={styles.permission}>
           <Pressable
-            accessibilityLabel="Back to scan options"
+            accessibilityLabel={t('scan.backOptions')}
             onPress={closeManualCamera}
             style={styles.permissionBack}>
             <ChevronLeft color={palette.ink} size={23} />
           </Pressable>
           <View style={styles.permissionMark}>
-            <Camera color={palette.ink} size={34} />
+            <Camera color={palette.accentInk} size={34} />
           </View>
-          <Text style={styles.permissionTitle}>Allow manual capture</Text>
-          <Text style={styles.permissionCopy}>
-            Folio only uses camera access while this screen is open. Your photo stays on this device
-            until you confirm the upload.
-          </Text>
+          <Text style={styles.permissionTitle}>{t('scan.allowManual')}</Text>
+          <Text style={styles.permissionCopy}>{t('scan.permissionCopy')}</Text>
           {!!scanError && <Text style={styles.permissionError}>{scanError}</Text>}
           <Pressable
             onPress={() => {
@@ -407,12 +633,12 @@ export default function ScanScreen() {
             }}
             style={styles.permissionButton}>
             <Text style={styles.permissionButtonText}>
-              {permission.canAskAgain ? 'Allow camera access' : 'Open device settings'}
+              {permission.canAskAgain ? t('scan.allowCamera') : t('scan.openSettings')}
             </Text>
           </Pressable>
           <Pressable onPress={pickFile} style={styles.importInstead}>
             <FileUp color={palette.ink} size={17} />
-            <Text style={styles.importInsteadText}>Import a file instead</Text>
+            <Text style={styles.importInsteadText}>{t('scan.importInstead')}</Text>
           </Pressable>
         </SafeAreaView>
       );
@@ -429,7 +655,7 @@ export default function ScanScreen() {
           onCameraReady={() => setCameraReady(true)}
           onMountError={({ message }) => {
             setCameraReady(false);
-            setScanError(message || 'The camera preview could not start.');
+            setScanError(message || t('scan.previewError'));
           }}
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
@@ -440,23 +666,23 @@ export default function ScanScreen() {
         <SafeAreaView style={styles.cameraOverlay}>
           <View style={styles.cameraTopbar}>
             <Pressable
-              accessibilityLabel="Back to scan options"
+              accessibilityLabel={t('scan.backOptions')}
               onPress={closeManualCamera}
               style={styles.darkIconButton}>
-              <ChevronLeft color={palette.paper} size={23} />
+              <ChevronLeft color={palette.onDark} size={23} />
             </Pressable>
             <View style={styles.cameraTitleWrap}>
-              <Text style={styles.cameraTitle}>Manual capture</Text>
-              <Text style={styles.cameraSubtitle}>Single page fallback</Text>
+              <Text style={styles.cameraTitle}>{t('scan.manualCapture')}</Text>
+              <Text style={styles.cameraSubtitle}>{t('scan.singlePageFallback')}</Text>
             </View>
             <Pressable
-              accessibilityLabel={torch ? 'Turn torch off' : 'Turn torch on'}
+              accessibilityLabel={torch ? t('scan.torchOff') : t('scan.torchOn')}
               onPress={() => setTorch((value) => !value)}
               style={[styles.darkIconButton, torch && styles.torchActive]}>
               {torch ? (
-                <Zap color={palette.ink} fill={palette.ink} size={19} />
+                <Zap color={palette.accentInk} fill={palette.accentInk} size={19} />
               ) : (
-                <ZapOff color={palette.paper} size={19} />
+                <ZapOff color={palette.onDark} size={19} />
               )}
             </Pressable>
           </View>
@@ -469,9 +695,9 @@ export default function ScanScreen() {
               <View style={[styles.corner, styles.cornerBR]} />
             </View>
             <View style={styles.cameraHint}>
-              <ScanLine color={palette.ink} size={14} />
+              <ScanLine color={palette.accentInk} size={14} />
               <Text style={styles.cameraHintText}>
-                {cameraReady ? 'Keep all four corners visible' : 'Starting camera…'}
+                {cameraReady ? t('scan.cornersVisible') : t('scan.startingCamera')}
               </Text>
             </View>
           </View>
@@ -483,13 +709,13 @@ export default function ScanScreen() {
               </View>
             )}
             <Pressable
-              accessibilityLabel="Import a document"
+              accessibilityLabel={t('scan.importDocument')}
               onPress={pickFile}
               style={styles.cameraControlButton}>
-              <FileUp color={palette.paper} size={21} />
+              <FileUp color={palette.onDark} size={21} />
             </Pressable>
             <Pressable
-              accessibilityLabel="Take picture"
+              accessibilityLabel={t('scan.takePicture')}
               disabled={!cameraReady || isTakingPhoto}
               haptic="medium"
               onPress={takePhoto}
@@ -500,7 +726,7 @@ export default function ScanScreen() {
               ]}>
               <View style={styles.shutterInner}>
                 {(!cameraReady || isTakingPhoto) && (
-                  <ActivityIndicator color={palette.ink} size="small" />
+                  <ActivityIndicator color={palette.accentInk} size="small" />
                 )}
               </View>
             </Pressable>
@@ -515,42 +741,51 @@ export default function ScanScreen() {
     <SafeAreaView style={styles.launcher}>
       <View style={styles.launcherHeader}>
         <Pressable
-          accessibilityLabel="Close scanner"
+          accessibilityLabel={t('scan.close')}
           onPress={() => router.back()}
           style={styles.lightIconButton}>
           <X color={palette.ink} size={21} />
         </Pressable>
-        <Text style={styles.launcherHeaderTitle}>Scan</Text>
+        <Text style={styles.launcherHeaderTitle}>{t('scan.title')}</Text>
         <View style={styles.headerBalance} />
       </View>
+
+      {!!activeProfile && (
+        <DestinationControl
+          disabled={isSaving || !!switchingProfileId}
+          onPress={() => setDestinationVisible(true)}
+          profile={activeProfile}
+          t={t}
+        />
+      )}
 
       <View style={styles.launcherBody}>
         <View style={styles.smartMark}>
           <View style={styles.smartMarkBack} />
           <ScanLine color={palette.lime} size={48} strokeWidth={1.8} />
-          {isLaunchingSmart && <ActivityIndicator color={palette.paper} style={styles.smartSpinner} />}
+          {isLaunchingSmart && <ActivityIndicator color={palette.onDark} style={styles.smartSpinner} />}
         </View>
         <Text style={styles.launcherTitle}>
-          {isLaunchingSmart ? 'Preparing smart scan' : 'Paper in. Clean scan out.'}
+          {isLaunchingSmart ? t('scan.preparing') : t('scan.hero')}
         </Text>
         <Text style={styles.launcherCopy}>
           {isLaunchingSmart
-            ? 'The first scan can take a moment while Google prepares the on-device scanner.'
-            : 'Automatic edges, perspective correction and multi-page capture—before Paperless starts its OCR.'}
+            ? t('scan.firstRunCopy')
+            : t('scan.heroCopy')}
         </Text>
 
         <View style={styles.capabilityList}>
           <View style={styles.capabilityRow}>
             <ScanLine color={palette.limeDark} size={18} />
-            <Text style={styles.capabilityText}>Detects and straightens each page</Text>
+            <Text style={styles.capabilityText}>{t('scan.detect')}</Text>
           </View>
           <View style={styles.capabilityRow}>
             <Layers3 color={palette.limeDark} size={18} />
-            <Text style={styles.capabilityText}>Combines multiple pages into one document</Text>
+            <Text style={styles.capabilityText}>{t('scan.combine')}</Text>
           </View>
           <View style={styles.capabilityRow}>
             <Sparkles color={palette.limeDark} size={18} />
-            <Text style={styles.capabilityText}>Enhances contrast without cloud processing</Text>
+            <Text style={styles.capabilityText}>{t('scan.enhance')}</Text>
           </View>
         </View>
 
@@ -563,45 +798,55 @@ export default function ScanScreen() {
 
       <View style={styles.launcherActions}>
         <Pressable
-          disabled={isLaunchingSmart || isSaving}
+          disabled={isLaunchingSmart || isSaving || !!switchingProfileId}
           haptic="light"
           onPress={startSmartScan}
           style={[
             styles.smartScanButton,
-            (isLaunchingSmart || isSaving) && styles.disabledButton,
+            (isLaunchingSmart || isSaving || !!switchingProfileId) && styles.disabledButton,
           ]}>
           {isLaunchingSmart ? (
-            <ActivityIndicator color={palette.ink} size="small" />
+            <ActivityIndicator color={palette.accentInk} size="small" />
           ) : (
-            <ScanLine color={palette.ink} size={21} />
+            <ScanLine color={palette.accentInk} size={21} />
           )}
           <Text style={styles.smartScanButtonText}>
-            {isLaunchingSmart ? 'Opening scanner…' : 'Start smart scan'}
+            {isLaunchingSmart ? t('scan.opening') : t('scan.startSmart')}
           </Text>
         </Pressable>
         <View style={styles.secondaryActions}>
           <Pressable
-            disabled={isLaunchingSmart || isSaving}
+            disabled={isLaunchingSmart || isSaving || !!switchingProfileId}
             onPress={openManualCamera}
             style={styles.secondaryAction}>
             <Camera color={palette.ink} size={19} />
-            <Text style={styles.secondaryActionText}>Manual camera</Text>
+            <Text style={styles.secondaryActionText}>{t('scan.manualCamera')}</Text>
           </Pressable>
           <Pressable
-            disabled={isLaunchingSmart || isSaving}
+            disabled={isLaunchingSmart || isSaving || !!switchingProfileId}
             onPress={pickFile}
             style={styles.secondaryAction}>
             {isSaving ? (
-              <ActivityIndicator color={palette.ink} size="small" />
+                  <ActivityIndicator color={palette.accentInk} size="small" />
             ) : (
               <Images color={palette.ink} size={19} />
             )}
             <Text numberOfLines={1} style={styles.secondaryActionText}>
-              {isSaving ? savingLabel : 'Import file'}
+              {isSaving ? savingLabel : t('scan.importFile')}
             </Text>
           </Pressable>
         </View>
       </View>
+      <DestinationPicker
+        activeProfile={activeProfile}
+        disabled={isSaving}
+        onDismiss={() => setDestinationVisible(false)}
+        onSelect={(profileId) => void selectDestination(profileId)}
+        profiles={profiles}
+        switchingProfileId={switchingProfileId}
+        t={t}
+        visible={destinationVisible}
+      />
     </SafeAreaView>
   );
 }
@@ -622,6 +867,126 @@ const styles = StyleSheet.create({
     color: palette.ink,
     fontFamily: fonts.sans,
     fontSize: 15,
+    fontWeight: '900',
+  },
+  destinationControl: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 18,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: radii.md,
+    backgroundColor: palette.paper,
+  },
+  destinationIcon: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: palette.lime,
+  },
+  destinationCopy: { flex: 1, minWidth: 0 },
+  destinationLabel: {
+    color: palette.limeDark,
+    fontFamily: fonts.sans,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  destinationName: {
+    marginTop: 2,
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  destinationBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    padding: 14,
+    backgroundColor: palette.mediaScrim,
+  },
+  destinationSheet: {
+    width: '100%',
+    maxWidth: 620,
+    maxHeight: '82%',
+    alignSelf: 'center',
+    gap: 12,
+    padding: 18,
+    borderRadius: radii.lg,
+    backgroundColor: palette.paper,
+    ...shadows.lift,
+  },
+  destinationTitle: {
+    color: palette.ink,
+    fontFamily: fonts.serif,
+    fontSize: 22,
+    fontWeight: '700',
+  },
+  destinationDescription: {
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  destinationList: { gap: 8 },
+  destinationRow: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: radii.md,
+    backgroundColor: palette.paperStrong,
+  },
+  destinationRowActive: { borderColor: palette.limeDark, backgroundColor: palette.limeSurface },
+  destinationRowIcon: {
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 13,
+    backgroundColor: palette.paper,
+  },
+  destinationRowIconActive: { backgroundColor: palette.lime },
+  destinationRowCopy: { flex: 1, minWidth: 0 },
+  destinationRowName: {
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  destinationRowUrl: {
+    marginTop: 2,
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 10,
+  },
+  destinationActive: {
+    color: palette.limeDark,
+    fontFamily: fonts.sans,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  destinationCancel: {
+    minHeight: 46,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radii.md,
+    backgroundColor: palette.paperStrong,
+  },
+  destinationCancelText: {
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 12,
     fontWeight: '900',
   },
   headerBalance: {
@@ -648,7 +1013,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 40,
-    backgroundColor: palette.ink,
+    backgroundColor: palette.inverseSurface,
     transform: [{ rotate: '-3deg' }],
     ...shadows.lift,
   },
@@ -658,7 +1023,7 @@ const styles = StyleSheet.create({
     height: 106,
     borderRadius: 16,
     borderWidth: 2,
-    borderColor: 'rgba(216,246,120,0.24)',
+    borderColor: palette.accentBorder,
   },
   smartSpinner: {
     position: 'absolute',
@@ -712,7 +1077,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderRadius: radii.sm,
-    backgroundColor: palette.rose,
+    backgroundColor: palette.dangerSurface,
   },
   launcherErrorText: {
     color: palette.ink,
@@ -738,7 +1103,7 @@ const styles = StyleSheet.create({
     ...shadows.card,
   },
   smartScanButtonText: {
-    color: palette.ink,
+    color: palette.accentInk,
     fontFamily: fonts.sans,
     fontSize: 14,
     fontWeight: '900',
@@ -771,7 +1136,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: palette.black,
+    backgroundColor: palette.accentInk,
   },
   permission: {
     flex: 1,
@@ -858,7 +1223,7 @@ const styles = StyleSheet.create({
   },
   cameraRoot: {
     flex: 1,
-    backgroundColor: palette.black,
+    backgroundColor: palette.accentInk,
   },
   scrimTop: {
     position: 'absolute',
@@ -866,7 +1231,7 @@ const styles = StyleSheet.create({
     right: 0,
     top: 0,
     height: 150,
-    backgroundColor: 'rgba(5,10,7,0.48)',
+    backgroundColor: palette.cameraScrimTop,
   },
   scrimBottom: {
     position: 'absolute',
@@ -874,7 +1239,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     height: 200,
-    backgroundColor: 'rgba(5,10,7,0.58)',
+    backgroundColor: palette.cameraScrimBottom,
   },
   cameraOverlay: {
     flex: 1,
@@ -892,7 +1257,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(17,23,19,0.72)',
+    backgroundColor: palette.cameraChrome,
   },
   torchActive: {
     backgroundColor: palette.lime,
@@ -901,13 +1266,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cameraTitle: {
-    color: palette.paper,
+    color: palette.onDark,
     fontFamily: fonts.sans,
     fontSize: 14,
     fontWeight: '900',
   },
   cameraSubtitle: {
-    color: 'rgba(255,253,248,0.72)',
+    color: palette.cameraTextMuted,
     fontFamily: fonts.sans,
     fontSize: 10,
     marginTop: 2,
@@ -969,7 +1334,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.lime,
   },
   cameraHintText: {
-    color: palette.ink,
+    color: palette.accentInk,
     fontFamily: fonts.sans,
     fontSize: 10,
     fontWeight: '800',
@@ -1005,7 +1370,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: palette.cameraControl,
   },
   cameraControlSpacer: {
     width: 48,
@@ -1018,7 +1383,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 3,
-    borderColor: palette.paper,
+    borderColor: palette.onDark,
   },
   shutterInner: {
     width: 62,
@@ -1026,7 +1391,7 @@ const styles = StyleSheet.create({
     borderRadius: 31,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: palette.paper,
+    backgroundColor: palette.onDark,
   },
   shutterDisabled: {
     opacity: 0.6,
@@ -1069,7 +1434,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
     borderRadius: radii.lg,
-    backgroundColor: palette.black,
+    backgroundColor: palette.accentInk,
   },
   previewImage: {
     width: '100%',
@@ -1083,10 +1448,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 11,
     borderRadius: radii.pill,
-    backgroundColor: 'rgba(17,23,19,0.82)',
+    backgroundColor: palette.mediaScrim,
   },
   pageBadgeText: {
-    color: palette.paper,
+    color: palette.onDark,
     fontFamily: fonts.sans,
     fontSize: 10,
     fontWeight: '900',
@@ -1124,12 +1489,15 @@ const styles = StyleSheet.create({
   },
   thumbnailRail: {
     flexGrow: 0,
+    height: 82,
     marginTop: 12,
   },
   thumbnailContent: {
-    gap: 9,
     paddingHorizontal: 18,
     paddingVertical: 3,
+  },
+  thumbnailSeparator: {
+    width: 9,
   },
   thumbnailButton: {
     width: 58,
@@ -1156,19 +1524,19 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(17,23,19,0.82)',
+    backgroundColor: palette.mediaScrim,
   },
   thumbnailNumberSelected: {
     backgroundColor: palette.lime,
   },
   thumbnailNumberText: {
-    color: palette.paper,
+    color: palette.onDark,
     fontFamily: fonts.sans,
     fontSize: 9,
     fontWeight: '900',
   },
   thumbnailNumberTextSelected: {
-    color: palette.ink,
+    color: palette.accentInk,
   },
   reviewActionsSafe: {
     marginTop: 12,
@@ -1183,7 +1551,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 13,
     borderRadius: radii.sm,
-    backgroundColor: palette.rose,
+    backgroundColor: palette.dangerSurface,
   },
   inlineErrorIcon: {
     width: 34,
@@ -1246,7 +1614,7 @@ const styles = StyleSheet.create({
     ...shadows.card,
   },
   uploadButtonText: {
-    color: palette.ink,
+    color: palette.accentInk,
     fontFamily: fonts.sans,
     fontSize: 13,
     fontWeight: '900',

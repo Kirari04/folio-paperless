@@ -1,0 +1,493 @@
+diff --git a/node_modules/expo-sharing/android/src/main/java/expo/modules/sharing/SharingModule.kt b/node_modules/expo-sharing/android/src/main/java/expo/modules/sharing/SharingModule.kt
+index 69ccba6..477eb43 100644
+--- a/node_modules/expo-sharing/android/src/main/java/expo/modules/sharing/SharingModule.kt
++++ b/node_modules/expo-sharing/android/src/main/java/expo/modules/sharing/SharingModule.kt
+@@ -75,6 +75,7 @@ class SharingModule : Module() {
+
+     Function("clearSharedPayloads") {
+       SharingSingleton.intent = null
++      ResolvingShareIntentDataParser.clearResolvedFiles(context)
+     }
+
+     OnActivityResult { _, (requestCode) ->
+diff --git a/node_modules/expo-sharing/android/src/main/java/expo/modules/sharing/dataParsers/ResolvingShareIntentDataParser.kt b/node_modules/expo-sharing/android/src/main/java/expo/modules/sharing/dataParsers/ResolvingShareIntentDataParser.kt
+index 5f4d942..00e288e 100644
+--- a/node_modules/expo-sharing/android/src/main/java/expo/modules/sharing/dataParsers/ResolvingShareIntentDataParser.kt
++++ b/node_modules/expo-sharing/android/src/main/java/expo/modules/sharing/dataParsers/ResolvingShareIntentDataParser.kt
+@@ -7,6 +7,7 @@ import android.net.Uri
+ import android.provider.OpenableColumns
+ import java.io.File
+ import java.io.FileOutputStream
++import java.io.IOException
+ import java.net.HttpURLConnection
+ import java.net.URL
+ import kotlin.text.indexOf
+@@ -14,6 +15,21 @@ import kotlin.text.substring
+
+ class ResolvingShareIntentDataParser {
+   companion object {
++    private const val MAX_INCOMING_SHARE_BYTES = 250L * 1024L * 1024L
++    private const val COPY_BUFFER_BYTES = 64 * 1024
++
++    private fun incomingCacheDirectory(context: Context): File {
++      return File(context.cacheDir, "expo-sharing-incoming").also { directory ->
++        if (!directory.exists()) directory.mkdirs()
++      }
++    }
++
++    fun clearResolvedFiles(context: Context) {
++      incomingCacheDirectory(context).listFiles()?.forEach { file ->
++        if (file.isFile) file.delete()
++      }
++    }
++
+     fun parse(context: Context, intent: Intent): List<ResolvedSharePayload> {
+       val type = intent.type ?: return emptyList()
+
+@@ -62,15 +78,48 @@ class ResolvingShareIntentDataParser {
+       val type = ShareType.fromMimeType(specificMimeType)
+
+       // Copy to cache dir to ensure access
+-      val file = File(context.cacheDir, fileName)
++      // Provider display names are attacker-controlled and may contain path
++      // traversal or collide with another item in the same share batch. Keep
++      // the original name as metadata only and always allocate a unique file
++      // directly inside the app cache.
++      val file = File.createTempFile(
++        "expo-sharing-",
++        ".shared",
++        incomingCacheDirectory(context)
++      )
++      var copiedSize: Long? = null
+       try {
+-        contentResolver.openInputStream(uri)?.use { input ->
++        if (fileSize != null && fileSize > MAX_INCOMING_SHARE_BYTES) {
++          throw IncomingShareTooLargeException()
++        }
++        val inputStream = contentResolver.openInputStream(uri)
++          ?: throw IOException("Incoming share provider returned no readable stream.")
++        inputStream.use { input ->
+           FileOutputStream(file).use { output ->
+-            input.copyTo(output)
++            val buffer = ByteArray(COPY_BUFFER_BYTES)
++            var total = 0L
++            while (true) {
++              val count = input.read(buffer)
++              if (count < 0) break
++              if (count == 0) continue
++              // Check before writing so byte MAX + 1 never reaches app cache,
++              // even when provider metadata is absent or dishonest.
++              if (total > MAX_INCOMING_SHARE_BYTES - count) {
++                throw IncomingShareTooLargeException()
++              }
++              output.write(buffer, 0, count)
++              total += count
++            }
++            copiedSize = total
+           }
+         }
+-      } catch (e: Exception) {
+-        e.printStackTrace()
++      } catch (_: IncomingShareTooLargeException) {
++        file.delete()
++        copiedSize = MAX_INCOMING_SHARE_BYTES + 1
++        android.util.Log.w("ExpoSharing", "Incoming shared content exceeded the size limit.")
++      } catch (_: Exception) {
++        file.delete()
++        android.util.Log.w("ExpoSharing", "Unable to copy incoming shared content.")
+       }
+
+       return ResolvedSharePayload().apply {
+@@ -79,12 +128,18 @@ class ResolvingShareIntentDataParser {
+         this.mimeType = specificMimeType
+         contentUri = file.toURI().toString()
+         contentType = ContentType.fromMimeType(specificMimeType)
+-        contentSize = fileSize
++        // Preserve a result for every provider. Oversized items carry a
++        // sentinel size and unreadable items point at the now-absent private
++        // temp path, allowing JavaScript staging to reject just that item
++        // without losing valid siblings from a mixed batch.
++        contentSize = copiedSize ?: fileSize
+         contentMimeType = specificMimeType
+         originalName = fileName
+       }
+     }
+
++    private class IncomingShareTooLargeException : IOException()
++
+     private fun getFileName(resolver: ContentResolver, uri: Uri): String? {
+       val cursor = resolver.query(uri, null, null, null, null)
+       val name = cursor?.use { cursor ->
+diff --git a/node_modules/expo-sharing/ios/SharingModule.swift b/node_modules/expo-sharing/ios/SharingModule.swift
+index 3e1772c..2da8bb7 100644
+--- a/node_modules/expo-sharing/ios/SharingModule.swift
++++ b/node_modules/expo-sharing/ios/SharingModule.swift
+@@ -87,6 +87,21 @@ public final class SharingModule: Module {
+     }
+
+     Function("clearSharedPayloads") {
++      if let containerURL = FileManager.default.containerURL(
++        forSecurityApplicationGroupIdentifier: try appGroupId
++      ) {
++        let containerPath = containerURL.standardizedFileURL.path + "/"
++        for payload in getSharePayloads(appGroupId: try appGroupId) {
++          guard let fileURL = URL(string: payload.value), fileURL.isFileURL else {
++            continue
++          }
++          let candidate = fileURL.standardizedFileURL
++          guard candidate.path.hasPrefix(containerPath) else {
++            continue
++          }
++          try? FileManager.default.removeItem(at: candidate)
++        }
++      }
+       try UserDefaults(suiteName: appGroupId)?.removeObject(forKey: SHARE_INTO_DEFAULTS_KEY)
+     }
+   }
+diff --git a/node_modules/expo-sharing/plugin/template-files/ios/ShareIntoViewController.swift b/node_modules/expo-sharing/plugin/template-files/ios/ShareIntoViewController.swift
+index 7175339..ea9f3d0 100644
+--- a/node_modules/expo-sharing/plugin/template-files/ios/ShareIntoViewController.swift
++++ b/node_modules/expo-sharing/plugin/template-files/ios/ShareIntoViewController.swift
+@@ -5,6 +5,17 @@ import UniformTypeIdentifiers
+ import AVFoundation
+
+ class ShareIntoViewController: SLComposeServiceViewController {
++  private let maxIncomingShareBytes = 250 * 1024 * 1024
++  private let maxIncomingTextBytes = 1024 * 1024
++  private let copyBufferBytes = 64 * 1024
++
++  private enum IncomingShareFailure: String, Error {
++    case empty
++    case oversized
++    case unreadable
++    case unsupported
++  }
++
+   // Only the following two properties cause a hard-crash of the share extension, because the failure originates from
+   // plugin misconfiguration. Other errors should be handled in the view controller and preferrably print a message, because it
+   // is not possible for our users to handle them at runtime.
+@@ -66,9 +77,10 @@ class ShareIntoViewController: SLComposeServiceViewController {
+       guard let attachments = item.attachments else { continue }
+
+       for provider in attachments {
+-        if let payload = await parseProvider(provider) {
+-          results.append(payload)
+-        }
++        // Keep a one-to-one result for every provider. Failure payloads are
++        // deliberately retained so one bad attachment cannot hide itself or
++        // discard readable siblings in a mixed share operation.
++        results.append(await parseProvider(provider))
+       }
+     }
+
+@@ -91,7 +103,7 @@ class ShareIntoViewController: SLComposeServiceViewController {
+
+   // MARK: - Provider Parsing
+
+-  private func parseProvider(_ provider: NSItemProvider) async -> SharePayload? {
++  private func parseProvider(_ provider: NSItemProvider) async -> SharePayload {
+     if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) &&
+     !provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+       return await handleWebURL(provider)
+@@ -118,35 +130,30 @@ class ShareIntoViewController: SLComposeServiceViewController {
+       return await handleText(provider)
+     }
+
+-    return nil
++    return failurePayload(.unsupported, provider: provider)
+   }
+
+   // MARK: - Handlers
+
+-  private func handleText(_ provider: NSItemProvider) async -> SharePayload? {
+-    return await withCheckedContinuation { continuation in
+-      provider.loadItem(forTypeIdentifier: UTType.text.identifier, options: nil) { item, _ in
+-        guard let text = item as? String else {
+-          continuation.resume(returning: nil)
+-          return
+-        }
+-
+-        let payload = SharePayload(
+-          type: .text,
+-          value: text,
+-          mimeType: "text/plain",
+-          metadata: nil
+-        )
+-        continuation.resume(returning: payload)
+-      }
+-    }
++  private func handleText(_ provider: NSItemProvider) async -> SharePayload {
++    // A file representation lets us enforce the text limit while streaming;
++    // loadItem/loadDataRepresentation would first materialize attacker-sized
++    // String/Data values inside the memory-constrained extension process.
++    return await handleFile(
++      provider,
++      type: .file,
++      utType: .text,
++      maxBytes: maxIncomingTextBytes,
++      fallbackName: "shared-text.txt",
++      fixedMimeType: "text/plain"
++    )
+   }
+
+-  private func handleWebURL(_ provider: NSItemProvider) async -> SharePayload? {
++  private func handleWebURL(_ provider: NSItemProvider) async -> SharePayload {
+     return await withCheckedContinuation { continuation in
+       provider.loadItem(forTypeIdentifier: UTType.url.identifier, options: nil) { item, _ in
+         guard let url = item as? URL else {
+-          continuation.resume(returning: nil)
++          continuation.resume(returning: self.failurePayload(.unreadable, provider: provider))
+           return
+         }
+
+@@ -161,97 +168,175 @@ class ShareIntoViewController: SLComposeServiceViewController {
+     }
+   }
+
+-  private func handleFile(_ provider: NSItemProvider, type: ShareType, utType: UTType) async -> SharePayload? {
++  private func handleFile(
++    _ provider: NSItemProvider,
++    type: ShareType,
++    utType: UTType,
++    maxBytes: Int? = nil,
++    fallbackName: String? = nil,
++    fixedMimeType: String? = nil
++  ) async -> SharePayload {
+     return await withCheckedContinuation { continuation in
+       let identifier = provider.registeredTypeIdentifiers.first { providerIdentifier in
+         UTType(providerIdentifier)?.conforms(to: utType) ?? false
+       } ?? utType.identifier
+
+-      provider.loadItem(forTypeIdentifier: identifier, options: nil) { item, _ in
+-        if let url = item as? URL {
+-          let result = self.copyAndProcessFile(url: url, type: type)
+-          continuation.resume(returning: result)
+-          return
+-        }
+-
+-        if let data = item as? Data {
+-          let fileName = UUID().randomFilename(forTypeIdentifier: identifier)
+-          let result = self.saveDataToAppGroup(
+-            data: data,
+-            fileName: fileName,
++      // Prefer in-place access so providers do not have to materialize a full
++      // extension-owned object. Apple guarantees this URL only for the
++      // duration of the callback, so copy synchronously before resuming.
++      provider.loadInPlaceFileRepresentation(forTypeIdentifier: identifier) { url, _, _ in
++        guard let url else {
++          continuation.resume(returning: self.failurePayload(
++            .unreadable,
++            provider: provider,
+             type: type,
+-            mimeType: UTType(identifier)?.preferredMIMEType
+-          )
+-          continuation.resume(returning: result)
++            mimeType: fixedMimeType ?? UTType(identifier)?.preferredMIMEType
++          ))
+           return
+         }
+-
+-        if type == .image, let image = item as? UIImage, let data = image.pngData() {
+-          let fileName = UUID().uuidString + ".png"
+-          let result = self.saveDataToAppGroup(data: data, fileName: fileName, type: .image, mimeType: "image/png")
+-          continuation.resume(returning: result)
+-          return
+-        }
+-
+-        continuation.resume(returning: nil)
++        continuation.resume(returning: self.copyAndProcessFile(
++          url: url,
++          type: type,
++          provider: provider,
++          identifier: identifier,
++          maxBytes: maxBytes ?? self.maxIncomingShareBytes,
++          fallbackName: fallbackName,
++          fixedMimeType: fixedMimeType
++        ))
+       }
+     }
+   }
+
+   // MARK: - File Management
+
+-  private func copyAndProcessFile(url: URL, type: ShareType) -> SharePayload? {
++  private func copyAndProcessFile(
++    url: URL,
++    type: ShareType,
++    provider: NSItemProvider,
++    identifier: String,
++    maxBytes: Int,
++    fallbackName: String?,
++    fixedMimeType: String?
++  ) -> SharePayload {
++    let accessedSecurityScopedResource = url.startAccessingSecurityScopedResource()
++    defer {
++      if accessedSecurityScopedResource { url.stopAccessingSecurityScopedResource() }
++    }
++    let fileExt = url.pathExtension
++    let mimeType = fixedMimeType
++      ?? UTType(identifier)?.preferredMIMEType
++      ?? UTType(filenameExtension: fileExt)?.preferredMIMEType
++      ?? "application/octet-stream"
+     guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) else {
+-      return nil
++      return failurePayload(.unreadable, provider: provider, type: type, mimeType: mimeType)
+     }
+
+-    let fileName = url.lastPathComponent.isEmpty ? UUID().uuidString : url.lastPathComponent
+-    let destinationURL = containerURL.appendingPathComponent(fileName)
++    // The provider filename is untrusted metadata and duplicate names are
++    // valid in one share operation. Persist under a unique app-group name so
++    // a later item cannot overwrite an earlier payload.
++    let fileName = provider.suggestedName
++      ?? fallbackName
++      ?? (url.lastPathComponent.isEmpty ? "shared-document" : url.lastPathComponent)
++    let destinationURL = containerURL.appendingPathComponent(UUID().uuidString)
+
+     do {
+-      if FileManager.default.fileExists(atPath: destinationURL.path) {
+-        try FileManager.default.removeItem(at: destinationURL)
+-      }
+-      try FileManager.default.copyItem(at: url, to: destinationURL)
++      let size = try boundedCopyFile(from: url, to: destinationURL, maxBytes: maxBytes)
++      return SharePayload(
++        type: type,
++        value: destinationURL.absoluteString,
++        mimeType: mimeType,
++        metadata: ShareMetadata(originalName: fileName, size: size)
++      )
++    } catch IncomingShareFailure.oversized {
++      try? FileManager.default.removeItem(at: destinationURL)
++      return failurePayload(
++        .oversized,
++        provider: provider,
++        originalName: fileName,
++        type: type,
++        mimeType: mimeType
++      )
++    } catch IncomingShareFailure.empty {
++      try? FileManager.default.removeItem(at: destinationURL)
++      return failurePayload(
++        .empty,
++        provider: provider,
++        originalName: fileName,
++        type: type,
++        mimeType: mimeType
++      )
+     } catch {
+-      print("Error copying file: \(error)")
+-      return nil
++      try? FileManager.default.removeItem(at: destinationURL)
++      print("Error copying a shared file")
++      return failurePayload(
++        .unreadable,
++        provider: provider,
++        originalName: fileName,
++        type: type,
++        mimeType: mimeType
++      )
+     }
+-
+-    let size = try? FileManager.default.attributesOfItem(atPath: destinationURL.path)[.size] as? Int
+-    let fileExt = destinationURL.pathExtension
+-    let mimeType = UTType(filenameExtension: fileExt)?.preferredMIMEType ?? "application/octet-stream"
+-
+-    let metadata = ShareMetadata(
+-      originalName: fileName,
+-      size: size
+-    )
+-
+-    return SharePayload(
+-      type: type,
+-      value: destinationURL.absoluteString,
+-      mimeType: mimeType,
+-      metadata: metadata
+-    )
+   }
+
+-  private func saveDataToAppGroup(data: Data, fileName: String, type: ShareType, mimeType: String?) -> SharePayload? {
+-    guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) else {
+-      return nil
++  private func boundedCopyFile(from sourceURL: URL, to destinationURL: URL, maxBytes: Int) throws -> Int {
++    let attributes = try FileManager.default.attributesOfItem(atPath: sourceURL.path)
++    if attributes[.type] as? FileAttributeType == .typeDirectory {
++      throw IncomingShareFailure.unreadable
++    }
++    if let declaredSize = (attributes[.size] as? NSNumber)?.int64Value,
++       declaredSize > Int64(maxBytes) {
++      throw IncomingShareFailure.oversized
+     }
+-    let destinationURL = containerURL.appendingPathComponent(fileName)
+
+-    do {
+-      try data.write(to: destinationURL)
+-    } catch {
+-      return nil
++    guard FileManager.default.createFile(atPath: destinationURL.path, contents: nil) else {
++      throw IncomingShareFailure.unreadable
++    }
++    let source = try FileHandle(forReadingFrom: sourceURL)
++    let destination = try FileHandle(forWritingTo: destinationURL)
++    defer {
++      try? source.close()
++      try? destination.close()
+     }
+
++    var copied = 0
++    while true {
++      let chunk = try autoreleasepool {
++        try source.read(upToCount: copyBufferBytes) ?? Data()
++      }
++      if chunk.isEmpty { break }
++      // Enforce the limit before writing so the app-group file can never
++      // contain byte maxBytes + 1, even if the source changes while copying.
++      if copied > maxBytes - chunk.count {
++        throw IncomingShareFailure.oversized
++      }
++      try destination.write(contentsOf: chunk)
++      copied += chunk.count
++    }
++    if copied == 0 { throw IncomingShareFailure.empty }
++    return copied
++  }
++
++  private func failurePayload(
++    _ failure: IncomingShareFailure,
++    provider: NSItemProvider,
++    originalName: String? = nil,
++    type: ShareType = .file,
++    mimeType: String? = nil
++  ) -> SharePayload {
++    // A local, non-file sentinel survives Expo's existing Codable bridge but
++    // cannot grant access to provider data. JavaScript validation/staging then
++    // records a rejection for this exact item while retaining its siblings.
++    let size: Int? = failure == .oversized ? maxIncomingShareBytes + 1
++      : failure == .empty ? 0
++      : nil
+     return SharePayload(
+       type: type,
+-      value: destinationURL.absoluteString,
++      value: "folio-share-failure://\(failure.rawValue)/\(UUID().uuidString)",
+       mimeType: mimeType ?? "application/octet-stream",
+-      metadata: ShareMetadata(originalName: fileName, size: data.count)
++      metadata: ShareMetadata(
++        originalName: originalName ?? provider.suggestedName ?? "shared-document",
++        size: size
++      )
+     )
+   }
+
+@@ -284,13 +369,3 @@ class ShareIntoViewController: SLComposeServiceViewController {
+     self.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
+   }
+ }
+-
+-private extension UUID {
+-  func randomFilename(forTypeIdentifier identifier: String) -> String {
+-    var ext = ""
+-    if let preferredExtension = UTType(identifier)?.preferredFilenameExtension {
+-      ext = ".\(preferredExtension)"
+-    }
+-    return UUID().uuidString + ext
+-  }
+-}

@@ -8,11 +8,19 @@ import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/c
 import { PaperThumbnail } from '@/components/paper-thumbnail';
 import { fonts, maxContentWidth, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
+import { useI18n } from '@/context/ui-preferences-context';
+import { presentRuntimeError } from '@/i18n/error-presentation';
 import { useRouter } from '@/lib/router';
 import { DocumentItem } from '@/types/document';
 
 export default function TrashScreen() {
+  const { activeProfile, credentials } = useApp();
+  return <TrashContent key={activeProfile?.id ?? credentials?.profileId ?? 'no-profile'} />;
+}
+
+function TrashContent() {
   const router = useRouter();
+  const { t, formatDate, formatNumber } = useI18n();
   const { connected, loadTrash, restoreTrash, emptyTrash } = useApp();
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,12 +34,12 @@ export default function TrashScreen() {
       const result = await loadTrash();
       setDocuments(result.documents);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Could not load deleted documents.');
+      setError(presentRuntimeError(nextError, t('trash.loadError')));
       await hapticFeedback('error');
     } finally {
       setLoading(false);
     }
-  }, [loadTrash]);
+  }, [loadTrash, t]);
 
   useEffect(() => {
     const timer = setTimeout(() => void reload(), 0);
@@ -47,7 +55,7 @@ export default function TrashScreen() {
       setDocuments((current) => current.filter((item) => item.id !== document.id));
       await hapticFeedback('confirm');
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Could not restore this document.');
+      setError(presentRuntimeError(nextError, t('trash.restoreError')));
       await hapticFeedback('error');
     } finally {
       setBusyId(null);
@@ -57,12 +65,12 @@ export default function TrashScreen() {
   function confirmEmpty(ids?: string[]) {
     const count = ids?.length || documents.length;
     Alert.alert(
-      count === 1 ? 'Delete permanently?' : `Delete ${count} documents permanently?`,
-      'Paperless will erase the selected files and their metadata. This cannot be undone.',
+      count === 1 ? t('trash.deleteOneTitle') : t('trash.deleteManyTitle', { count: formatNumber(count) }),
+      t('trash.deleteBody'),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: 'Delete forever',
+          text: t('trash.deleteForever'),
           style: 'destructive',
           onPress: () => {
             setBusyId(ids?.[0] || 'all');
@@ -75,7 +83,7 @@ export default function TrashScreen() {
                 await hapticFeedback('warning');
               })
               .catch(async (nextError) => {
-                setError(nextError instanceof Error ? nextError.message : 'Could not empty the trash.');
+                setError(presentRuntimeError(nextError, t('trash.emptyError')));
                 await hapticFeedback('error');
               })
               .finally(() => setBusyId(null));
@@ -89,11 +97,11 @@ export default function TrashScreen() {
     <View style={styles.root}>
       <SafeAreaView edges={['top']} style={styles.safe}>
         <View style={styles.header}>
-          <Pressable accessibilityLabel="Go back" onPress={() => router.back()} style={styles.headerButton}>
+          <Pressable accessibilityLabel={t('trash.goBack')} onPress={() => router.back()} style={styles.headerButton}>
             <ArrowLeft color={palette.ink} size={21} />
           </Pressable>
-          <Text style={styles.headerTitle}>Recently deleted</Text>
-          <Pressable accessibilityLabel="Refresh trash" onPress={reload} style={styles.headerButton}>
+          <Text style={styles.headerTitle}>{t('trash.recentlyDeleted')}</Text>
+          <Pressable accessibilityLabel={t('trash.refresh')} onPress={reload} style={styles.headerButton}>
             <RefreshCw color={palette.ink} size={19} />
           </Pressable>
         </View>
@@ -101,29 +109,33 @@ export default function TrashScreen() {
 
       <AppShell contentStyle={styles.content} safeTop={false} showNav={false} showDemoBanner={false}>
         <View style={styles.intro}>
-          <Text style={styles.title}>Trash</Text>
+          <Text style={styles.title}>{t('trash.title')}</Text>
           <Text style={styles.copy}>
-            Restore something you still need, or permanently erase it from Paperless.
+            {t('trash.intro')}
           </Text>
         </View>
 
         {!connected ? (
           <View style={styles.empty}>
             <Trash2 color={palette.ink} size={28} />
-            <Text style={styles.emptyTitle}>Trash needs a server</Text>
-            <Text style={styles.emptyCopy}>Connect Paperless in Settings to see deleted documents.</Text>
+            <Text style={styles.emptyTitle}>{t('trash.needsServer')}</Text>
+            <Text style={styles.emptyCopy}>{t('trash.connectServer')}</Text>
           </View>
         ) : loading ? (
           <View style={styles.loading}>
             <ActivityIndicator color={palette.ink} />
-            <Text style={styles.loadingText}>Checking recently deleted documents…</Text>
+            <Text style={styles.loadingText}>{t('trash.checking')}</Text>
           </View>
         ) : documents.length ? (
           <>
             <View style={styles.summary}>
-              <Text style={styles.summaryText}>{documents.length} deleted {documents.length === 1 ? 'document' : 'documents'}</Text>
+              <Text style={styles.summaryText}>
+                {documents.length === 1
+                  ? t('trash.summaryOne')
+                  : t('trash.summaryMany', { count: formatNumber(documents.length) })}
+              </Text>
               <Pressable haptic="warning" onPress={() => confirmEmpty()}>
-                <Text style={styles.emptyAll}>Empty trash</Text>
+                <Text style={styles.emptyAll}>{t('trash.empty')}</Text>
               </Pressable>
             </View>
             <View style={styles.list}>
@@ -134,8 +146,8 @@ export default function TrashScreen() {
                     <Text numberOfLines={2} style={styles.documentTitle}>{document.title}</Text>
                     <Text numberOfLines={1} style={styles.documentMeta}>
                       {document.correspondent} · {document.deletedAt
-                        ? new Date(document.deletedAt).toLocaleDateString()
-                        : 'Recently deleted'}
+                        ? formatDate(document.deletedAt)
+                        : t('trash.recentlyDeleted')}
                     </Text>
                     <View style={styles.actions}>
                       <Pressable
@@ -144,16 +156,16 @@ export default function TrashScreen() {
                         onPress={() => restore(document)}
                         style={styles.restoreButton}>
                         {busyId === document.id
-                          ? <ActivityIndicator color={palette.ink} size="small" />
-                          : <RotateCcw color={palette.ink} size={15} />}
-                        <Text style={styles.restoreText}>Restore</Text>
+                          ? <ActivityIndicator color={palette.accentInk} size="small" />
+                          : <RotateCcw color={palette.accentInk} size={15} />}
+                        <Text style={styles.restoreText}>{t('trash.restore')}</Text>
                       </Pressable>
                       <Pressable
                         haptic="warning"
                         onPress={() => confirmEmpty([document.id])}
                         style={styles.eraseButton}>
                         <Trash2 color={palette.danger} size={15} />
-                        <Text style={styles.eraseText}>Erase</Text>
+                        <Text style={styles.eraseText}>{t('trash.erase')}</Text>
                       </Pressable>
                     </View>
                   </View>
@@ -164,8 +176,8 @@ export default function TrashScreen() {
         ) : (
           <View style={styles.empty}>
             <Trash2 color={palette.ink} size={28} />
-            <Text style={styles.emptyTitle}>Nothing to recover</Text>
-            <Text style={styles.emptyCopy}>Deleted documents will appear here before Paperless removes them.</Text>
+            <Text style={styles.emptyTitle}>{t('trash.nothing')}</Text>
+            <Text style={styles.emptyCopy}>{t('trash.nothingCopy')}</Text>
           </View>
         )}
 
@@ -195,8 +207,8 @@ const styles = StyleSheet.create({
   documentMeta: { color: palette.muted, fontFamily: fonts.sans, fontSize: 10, marginTop: 4 },
   actions: { flexDirection: 'row', gap: 7, marginTop: 11 },
   restoreButton: { height: 34, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, borderRadius: radii.sm, backgroundColor: palette.lime },
-  restoreText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 10, fontWeight: '900' },
-  eraseButton: { height: 34, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, borderRadius: radii.sm, backgroundColor: '#F7E8E5' },
+  restoreText: { color: palette.accentInk, fontFamily: fonts.sans, fontSize: 10, fontWeight: '900' },
+  eraseButton: { height: 34, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, borderRadius: radii.sm, backgroundColor: palette.rose },
   eraseText: { color: palette.danger, fontFamily: fonts.sans, fontSize: 10, fontWeight: '900' },
   empty: { alignItems: 'center', paddingHorizontal: 30, paddingVertical: 52, borderRadius: radii.lg, backgroundColor: palette.paper },
   emptyTitle: { color: palette.ink, fontFamily: fonts.serif, fontSize: 23, fontWeight: '600', marginTop: 13 },

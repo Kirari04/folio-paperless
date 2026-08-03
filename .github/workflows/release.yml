@@ -93,6 +93,7 @@ jobs:
     permissions:
       contents: write
     env:
+      FOLIO_DISTRIBUTION: github
       RELEASE_TAG: ${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}
     steps:
       - name: Check out exact release tag
@@ -108,7 +109,7 @@ jobs:
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
       - name: Confirm the release is an unpublished draft
@@ -192,13 +193,13 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Generate Android project
         env:
-          CI: '1'
+          CI: "1"
         run: npx expo prebuild --platform android --clean --no-install
       - name: Assemble signed release APK
         env:
           NODE_ENV: production
         working-directory: android
-        run: ./gradlew :app:assembleRelease --no-daemon
+        run: ./gradlew :app:assembleRelease --build-cache --no-daemon
       - name: Verify and name release assets
         env:
           ANDROID_CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
@@ -249,6 +250,167 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$RELEASE_TAG" "$ASSET_PATH" "$CHECKSUM_PATH" --clobber --repo "$GITHUB_REPOSITORY"
+
+  build-ios-release:
+    name: Build unsigned iOS release
+    if: ${{ needs.release-please.outputs.release_created == 'true' || inputs.rebuild_tag != '' }}
+    needs: release-please
+    runs-on: macos-26
+    timeout-minutes: 50
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}
+    steps:
+      - name: Check out exact release tag
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Confirm the release is an unpublished draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName > "$RUNNER_TEMP/release.json"
+          node <<'NODE'
+          const release = require(`${process.env.RUNNER_TEMP}/release.json`);
+          if (release.tagName !== process.env.RELEASE_TAG) {
+            throw new Error(`Expected ${process.env.RELEASE_TAG}, received ${release.tagName}.`);
+          }
+          if (!release.isDraft) {
+            throw new Error(`Release ${release.tagName} is already published; refusing to overwrite it.`);
+          }
+          NODE
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate iOS release version contract
+        run: |
+          npx expo config --type prebuild --json > "$RUNNER_TEMP/expo-config.json"
+          node <<'NODE'
+          const fs = require('fs');
+          const packageJson = require('./package.json');
+          const expoConfig = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/expo-config.json`, 'utf8'));
+          const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(packageJson.version);
+          if (!match) throw new Error(`Invalid package version: ${packageJson.version}`);
+          const expectedTag = `v${packageJson.version}`;
+          if (process.env.RELEASE_TAG !== expectedTag) {
+            throw new Error(`Tag ${process.env.RELEASE_TAG} does not match package version ${expectedTag}.`);
+          }
+          if (expoConfig.version !== packageJson.version) {
+            throw new Error(`Expo version ${expoConfig.version} does not match ${packageJson.version}.`);
+          }
+          const [major, minor, patch] = match.slice(1).map(Number);
+          if ([major, minor, patch].some((component) => component > 999)) {
+            throw new Error('SemVer components must not exceed 999.');
+          }
+          const buildNumber = String(major * 1_000_000 + minor * 1_000 + patch);
+          if (expoConfig.ios?.buildNumber !== buildNumber) {
+            throw new Error(`iOS build number ${expoConfig.ios?.buildNumber} does not match ${buildNumber}.`);
+          }
+          fs.appendFileSync(
+            process.env.GITHUB_ENV,
+            `EXPECTED_VERSION=${packageJson.version}\nEXPECTED_BUILD_NUMBER=${buildNumber}\n`,
+          );
+          console.log(`Release contract valid: ${expectedTag} (iOS build ${buildNumber}).`);
+          NODE
+      - name: Build and verify unsigned IPA
+        id: ios_build
+        env:
+          IOS_ASSET: Folio-${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}-ios-unsigned.ipa
+        run: ./scripts/build-unsigned-ios.sh "$GITHUB_WORKSPACE/$IOS_ASSET"
+      - name: Generate verified AltStore and SideStore source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IOS_ASSET: Folio-${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}-ios-unsigned.ipa
+          IOS_METADATA: ${{ steps.ios_build.outputs.metadata_path }}
+        run: |
+          release_metadata="$RUNNER_TEMP/release-metadata.json"
+          release_notes="$RUNNER_TEMP/release-notes.md"
+          previous_directory="$RUNNER_TEMP/previous-altstore-source"
+          previous_source="$previous_directory/altstore-source.json"
+
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json body,createdAt > "$release_metadata"
+          jq -r '.body // ""' "$release_metadata" > "$release_notes"
+
+          latest_published_tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)"
+          if [ -n "$latest_published_tag" ] && gh release view "$latest_published_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq '.assets[].name' | grep -Fxq 'altstore-source.json'; then
+            mkdir -p "$previous_directory"
+            gh release download "$latest_published_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern 'altstore-source.json' \
+              --dir "$previous_directory"
+          fi
+
+          generator_args=(
+            --metadata "$IOS_METADATA"
+            --ipa "$GITHUB_WORKSPACE/$IOS_ASSET"
+            --repository "$GITHUB_REPOSITORY"
+            --tag "$RELEASE_TAG"
+            --date "$(jq -r .createdAt "$release_metadata")"
+            --release-notes "$release_notes"
+            --output "$GITHUB_WORKSPACE/altstore-source.json"
+          )
+          if [ -f "$previous_source" ]; then
+            generator_args+=(--previous "$previous_source")
+          fi
+          node scripts/generate-altstore-source.mjs "${generator_args[@]}"
+      - name: Upload verified assets to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IOS_ASSET: Folio-${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}-ios-unsigned.ipa
+        run: gh release upload "$RELEASE_TAG" "$IOS_ASSET" "$IOS_ASSET.sha256" altstore-source.json --clobber --repo "$GITHUB_REPOSITORY"
+
+  publish-release:
+    name: Publish verified Android and iOS release
+    if: ${{ needs.release-please.outputs.release_created == 'true' || inputs.rebuild_tag != '' }}
+    needs:
+      - release-please
+      - build-release
+      - build-ios-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.rebuild_tag || needs.release-please.outputs.tag_name }}
+    steps:
+      - name: Verify the complete draft asset set
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft,tagName > "$RUNNER_TEMP/release.json"
+          node <<'NODE'
+          const release = require(`${process.env.RUNNER_TEMP}/release.json`);
+          if (!release.isDraft || release.tagName !== process.env.RELEASE_TAG) {
+            throw new Error(`Expected unpublished draft ${process.env.RELEASE_TAG}.`);
+          }
+          const required = [
+            `Folio-${process.env.RELEASE_TAG}-android-universal.apk`,
+            `Folio-${process.env.RELEASE_TAG}-android-universal.apk.sha256`,
+            `Folio-${process.env.RELEASE_TAG}-ios-unsigned.ipa`,
+            `Folio-${process.env.RELEASE_TAG}-ios-unsigned.ipa.sha256`,
+            'altstore-source.json',
+          ];
+          const assets = new Map(release.assets.map((asset) => [asset.name, asset]));
+          const missing = required.filter((name) => !assets.has(name));
+          const empty = required.filter((name) => (assets.get(name)?.size ?? 0) <= 0);
+          if (missing.length > 0) throw new Error(`Missing release assets: ${missing.join(', ')}`);
+          if (empty.length > 0) throw new Error(`Empty release assets: ${empty.join(', ')}`);
+          console.log(`Verified ${required.length} release assets for ${release.tagName}.`);
+          NODE
       - name: Publish verified release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
