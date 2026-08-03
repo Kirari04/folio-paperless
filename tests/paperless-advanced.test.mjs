@@ -644,21 +644,88 @@ test('bulk add tags uses one server request and returns an exact eligibility sum
   });
 });
 
-test('bulk owner update preserves permissions through merge semantics', async () => {
-  const { client, requests } = mockClient(async () => ({ status: 200, data: { result: 'OK' } }));
-  const api = new PaperlessAdvancedApi(client, fullCapabilities());
-  await api.bulkDocuments(
-    [{ localId: 'one', remoteId: 1, ready: true, canEdit: true }],
-    { kind: 'setOwner', value: 12 },
-  );
-  assert.deepEqual(requests[0].json.parameters, {
-    owner: 12,
-    set_permissions: {
-      view: { users: [], groups: [] },
-      change: { users: [], groups: [] },
-    },
-    merge: true,
+test('bulk owner set uses bounded sparse PATCH plus readback and retains per-target failures', async () => {
+  let active = 0;
+  let maxActive = 0;
+  const retainedPermissions = {
+    view: { users: [7], groups: [2] },
+    change: { users: [7], groups: [] },
+  };
+  const { client, requests } = mockClient(async (request) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active -= 1;
+    const id = Number(request.path.match(/^\/api\/documents\/(\d+)\/$/)?.[1]);
+    if (request.method === 'PATCH' && id === 2) {
+      return { status: 503, data: { detail: 'Busy' } };
+    }
+    if (request.method === 'GET' && id === 3) {
+      // Transferring ownership commonly removes the caller's object access.
+      return { status: 404, data: { detail: 'Not found' } };
+    }
+    return { status: 200, data: { id, owner: 12, permissions: retainedPermissions } };
   });
+  const api = new PaperlessAdvancedApi(client, fullCapabilities());
+  const result = await api.bulkDocuments(
+    [1, 2, 3].map((id) => ({ localId: String(id), remoteId: id, ready: true, canEdit: true })),
+    { kind: 'setOwner', value: 12 },
+    { concurrency: 2 },
+  );
+  assert.equal(result.supported, true);
+  assert.equal(maxActive, 2);
+  assert.deepEqual(result.value.succeeded.sort(), [1, 3]);
+  assert.equal(result.value.failed.length, 1);
+  assert.equal(result.value.failed[0].remoteId, 2);
+  assert.equal(result.value.failed[0].status, 503);
+  assert.equal(result.value.failed[0].retryable, true);
+  assert.equal(result.value.requestCount, 3);
+  const patches = requests.filter((request) => request.method === 'PATCH');
+  assert.equal(patches.length, 3);
+  assert.equal(patches.every((request) => request.path.startsWith('/api/documents/')), true);
+  assert.equal(patches.every((request) => JSON.stringify(request.json) === '{"owner":12}'), true);
+  assert.equal(requests.some((request) => request.path === '/api/documents/bulk_edit/'), false);
+  assert.equal(requests.some((request) => request.json && 'set_permissions' in request.json), false);
+});
+
+test('bulk owner clear requires independent canonical readback', async () => {
+  const { client, requests } = mockClient(async (request) => {
+    if (request.method === 'PATCH') return { status: 200, data: { id: 1, owner: null } };
+    return {
+      status: 200,
+      data: {
+        id: 1,
+        owner: null,
+        permissions: { view: { users: [7], groups: [] }, change: { users: [7], groups: [] } },
+      },
+    };
+  });
+  const api = new PaperlessAdvancedApi(client, fullCapabilities());
+  const result = await api.bulkDocuments(
+    [{ localId: 'one', remoteId: 1, ready: true, canEdit: true }],
+    { kind: 'setOwner', value: null },
+  );
+  assert.equal(result.supported, true);
+  assert.deepEqual(result.value.succeeded, [1]);
+  assert.deepEqual(requests.map((request) => [request.method, request.path, request.json]), [
+    ['PATCH', '/api/documents/1/', { owner: null }],
+    ['GET', '/api/documents/1/', undefined],
+  ]);
+});
+
+test('bulk reprocess result OK remains accepted but uncorrelated and never succeeds', async () => {
+  const { client } = mockClient(async () => ({ status: 200, data: { result: 'OK' } }));
+  const api = new PaperlessAdvancedApi(client, fullCapabilities());
+  const result = await api.bulkDocuments(
+    [1, 2].map((id) => ({ localId: String(id), remoteId: id, ready: true, canEdit: true })),
+    { kind: 'reprocess' },
+  );
+  assert.equal(result.supported, true);
+  assert.equal(result.value.accepted, true);
+  assert.deepEqual(result.value.pending, [1, 2]);
+  assert.deepEqual(result.value.succeeded, []);
+  assert.deepEqual(result.value.failed, []);
+  assert.deepEqual(result.value.taskIds, []);
 });
 
 test('bulk exact tag replacement uses bounded per-document PATCH and reports partial errors', async () => {
@@ -989,6 +1056,14 @@ test('permission merge is explicit and replacement guards object-level self-lock
     change: { users: [7], groups: [2] },
   });
 
+  assert.deepEqual(mergePermissionSets(
+    { view: { users: [], groups: [] }, change: { users: [], groups: [] } },
+    { view: { users: [], groups: [] }, change: { users: [8], groups: [4] } },
+  ), {
+    view: { users: [8], groups: [4] },
+    change: { users: [8], groups: [4] },
+  });
+
   const current = {
     ownerId: 7,
     permissions: { view: { users: [], groups: [] }, change: { users: [], groups: [] } },
@@ -1020,6 +1095,10 @@ test('permission merge is explicit and replacement guards object-level self-lock
     { currentUserId: 7, isSuperuser: false },
   );
   assert.equal(directChangeGrant.supported, true);
+  assert.deepEqual(directChangeGrant.value.set_permissions, {
+    view: { users: [7, 8], groups: [] },
+    change: { users: [7], groups: [] },
+  });
 
   const inheritedGroupGrant = planPermissionMutation(
     current,
@@ -1079,6 +1158,41 @@ test('permission updates read full permissions back after the write', async () =
   assert.equal(requests[1].path, '/api/documents/4/?full_perms=true');
 });
 
+test('permission replacement canonicalizes change principals before submit and readback', async () => {
+  const canonical = {
+    view: { users: [8], groups: [4] },
+    change: { users: [8], groups: [4] },
+  };
+  const { client, requests } = mockClient(async (request) => request.method === 'PATCH'
+    ? { status: 200, data: {} }
+    : {
+        status: 200,
+        data: { id: 4, owner: 7, permissions: canonical, user_can_change: true },
+      });
+  const api = new PaperlessAdvancedApi(client, fullCapabilities());
+  const result = await api.updateObjectPermissions(
+    'document',
+    4,
+    {
+      ownerId: 7,
+      permissions: { view: { users: [], groups: [] }, change: { users: [], groups: [] } },
+      userCanChange: true,
+    },
+    {
+      ownerId: 7,
+      mode: 'replace',
+      permissions: {
+        view: { users: [], groups: [] },
+        change: { users: [8], groups: [4] },
+      },
+    },
+  );
+  assert.equal(result.supported, true);
+  assert.equal(result.value.verified, true);
+  assert.deepEqual(result.value.permissions, canonical);
+  assert.deepEqual(requests[0].json.set_permissions, canonical);
+});
+
 test('permission updates use current group membership when it is the retained access path', async () => {
   const capabilities = fullCapabilities();
   const { client, requests } = mockClient(async (request) => {
@@ -1125,7 +1239,7 @@ test('permission updates use current group membership when it is the retained ac
   ]);
 });
 
-test('global view_document still requires explicit self-lockout confirmation', async () => {
+test('confirmed self-lockout reports an applied no-longer-readable mutation without blind retry', async () => {
   const capabilities = fullCapabilities();
   assert.equal(capabilities.permissions.document.view, true);
   const replacement = {
@@ -1141,6 +1255,9 @@ test('global view_document still requires explicit self-lockout confirmation', a
       return { status: 200, data: { user: { id: 7, is_superuser: false, groups: [] } } };
     }
     if (request.method === 'PATCH') return { status: 200, data: {} };
+    if (request.path === '/api/documents/4/?full_perms=true') {
+      return { status: 404, data: { detail: 'Not found' } };
+    }
     return {
       status: 200,
       data: {
@@ -1173,7 +1290,42 @@ test('global view_document still requires explicit self-lockout confirmation', a
     { ...replacement, confirmSelfLockout: true },
   );
   assert.equal(confirmed.supported, true);
-  assert.equal(confirmed.value.verified, true);
+  assert.equal(confirmed.value.verified, false);
+  assert.equal(confirmed.value.ownerId, 8);
+  assert.deepEqual(confirmed.value.permissions, replacement.permissions);
+  assert.equal(requests.filter((request) => request.method === 'PATCH').length, 1);
+  assert.equal(requests.filter((request) => request.path === '/api/documents/4/?full_perms=true').length, 1);
+});
+
+test('confirmed self-lockout still surfaces retryable readback failures', async () => {
+  const replacement = {
+    ownerId: 8,
+    mode: 'replace',
+    confirmSelfLockout: true,
+    permissions: {
+      view: { users: [8], groups: [] },
+      change: { users: [8], groups: [] },
+    },
+  };
+  const { client, requests } = mockClient(async (request) => {
+    if (request.method === 'PATCH') return { status: 200, data: {} };
+    return { status: 503, data: { detail: 'Temporarily unavailable' } };
+  });
+  const api = new PaperlessAdvancedApi(client, fullCapabilities());
+
+  await assert.rejects(
+    api.updateObjectPermissions(
+      'document',
+      4,
+      {
+        ownerId: 7,
+        permissions: { view: { users: [], groups: [] }, change: { users: [], groups: [] } },
+        userCanChange: true,
+      },
+      replacement,
+    ),
+    (error) => error instanceof PaperlessClientError && error.status === 503,
+  );
   assert.equal(requests.filter((request) => request.method === 'PATCH').length, 1);
 });
 

@@ -3,14 +3,16 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { fonts, palette, radii } from '@/constants/theme';
 import { MotionPressable as Pressable } from '@/components/motion';
+import { useI18n } from '@/context/ui-preferences-context';
 import { useRouter } from '@/lib/router';
 
 export function DemoModeBanner() {
   const router = useRouter();
+  const { t } = useI18n();
 
   return (
     <Pressable
-      accessibilityLabel="Demo mode. Sample documents are shown. Connect a Paperless server."
+      accessibilityLabel={t('demo.accessibility')}
       accessibilityRole="button"
       onPress={() => router.push('/settings')}
       style={styles.banner}>
@@ -18,13 +20,13 @@ export function DemoModeBanner() {
         <FlaskConical color={palette.lime} size={17} strokeWidth={2.4} />
       </View>
       <View style={styles.copy}>
-        <Text style={styles.title}>DEMO MODE</Text>
+        <Text style={styles.title}>{t('demo.title')}</Text>
         <Text numberOfLines={1} style={styles.subtitle}>
-          You’re viewing sample documents
+          {t('demo.subtitle')}
         </Text>
       </View>
       <View style={styles.action}>
-        <Text style={styles.actionText}>Connect</Text>
+        <Text style={styles.actionText}>{t('demo.connect')}</Text>
         <ArrowRight color={palette.ink} size={14} strokeWidth={2.5} />
       </View>
     </Pressable>
@@ -41,9 +43,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     marginBottom: 18,
     borderRadius: radii.md,
-    backgroundColor: '#E7E2F6',
+    backgroundColor: palette.lavender,
     borderWidth: 1,
-    borderColor: '#D6CDEE',
+    borderColor: palette.lineStrong,
   },
   icon: {
     width: 34,
@@ -51,7 +53,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: palette.ink,
+    backgroundColor: palette.accentInk,
   },
   copy: {
     flex: 1,

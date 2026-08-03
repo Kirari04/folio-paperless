@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   CalendarDays,
   Check,
+  ChevronDown,
   ChevronRight,
   FileText,
   Folder,
@@ -22,18 +23,20 @@ import {
   Text,
   TextInput,
   View,
+  type ColorValue,
 } from 'react-native';
 
 import { KeyboardSheet, KeyboardSheetHandle } from '@/components/keyboard-sheet';
 import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/components/motion';
 import { fonts, palette, radii } from '@/constants/theme';
+import { useI18n, type TranslationKey } from '@/i18n';
 import {
   cloneLibraryFilters,
   emptyLibraryFilters,
   isValidLibraryDate,
   libraryFilterCount,
-  mimeTypeLabel,
 } from '@/lib/library-filters';
+import { selectedTagAncestorIds, selectTagFilterOptions } from '@/lib/tag-hierarchy';
 import {
   LibraryFilters,
   LibrarySelectionMode,
@@ -64,20 +67,20 @@ type LibraryFilterSheetProps = {
   visible: boolean;
 };
 
-type IconType = ComponentType<{ color?: string; size?: number }>;
+type IconType = ComponentType<{ color?: ColorValue; size?: number }>;
 
-const facetDetails: Record<Facet, { title: string; subtitle: string; icon: IconType }> = {
-  correspondents: { title: 'Correspondent', subtitle: 'Who the document came from', icon: UserRound },
-  documentTypes: { title: 'Document type', subtitle: 'Invoices, contracts, receipts…', icon: Layers3 },
-  tags: { title: 'Tags', subtitle: 'Match any, all, or none', icon: Tag },
-  storagePaths: { title: 'Storage path', subtitle: 'Where Paperless stores it', icon: Folder },
-  owners: { title: 'Owner', subtitle: 'Assigned Paperless user', icon: UserRound },
-  customFields: { title: 'Custom fields', subtitle: 'Documents using selected fields', icon: Layers3 },
-  mimeTypes: { title: 'File type', subtitle: 'PDF, image, or other format', icon: FileText },
-  created: { title: 'Document date', subtitle: 'Date shown on the document', icon: CalendarDays },
-  added: { title: 'Date added', subtitle: 'When Paperless received it', icon: CalendarDays },
-  modified: { title: 'Date modified', subtitle: 'Last metadata or content update', icon: CalendarDays },
-  archive: { title: 'Archive serial', subtitle: 'Filter by the physical archive number', icon: Hash },
+const facetDetails: Record<Facet, { title: TranslationKey; subtitle: TranslationKey; icon: IconType }> = {
+  correspondents: { title: 'filter.facet.correspondent', subtitle: 'filter.facet.correspondentCopy', icon: UserRound },
+  documentTypes: { title: 'filter.facet.documentType', subtitle: 'filter.facet.documentTypeCopy', icon: Layers3 },
+  tags: { title: 'filter.facet.tags', subtitle: 'filter.facet.tagsCopy', icon: Tag },
+  storagePaths: { title: 'filter.facet.storagePath', subtitle: 'filter.facet.storagePathCopy', icon: Folder },
+  owners: { title: 'filter.facet.owner', subtitle: 'filter.facet.ownerCopy', icon: UserRound },
+  customFields: { title: 'filter.facet.customFields', subtitle: 'filter.facet.customFieldsCopy', icon: Layers3 },
+  mimeTypes: { title: 'filter.facet.fileType', subtitle: 'filter.facet.fileTypeCopy', icon: FileText },
+  created: { title: 'filter.facet.documentDate', subtitle: 'filter.facet.documentDateCopy', icon: CalendarDays },
+  added: { title: 'filter.facet.dateAdded', subtitle: 'filter.facet.dateAddedCopy', icon: CalendarDays },
+  modified: { title: 'filter.facet.dateModified', subtitle: 'filter.facet.dateModifiedCopy', icon: CalendarDays },
+  archive: { title: 'filter.facet.archiveSerial', subtitle: 'filter.facet.archiveSerialCopy', icon: Hash },
 };
 
 export function LibraryFilterSheet({
@@ -90,6 +93,7 @@ export function LibraryFilterSheet({
   onClose,
   visible,
 }: LibraryFilterSheetProps) {
+  const { formatNumber, t } = useI18n();
   const sheetRef = useRef<KeyboardSheetHandle>(null);
   const wasVisible = useRef(false);
   const [draft, setDraft] = useState(() => cloneLibraryFilters(filters));
@@ -97,6 +101,7 @@ export function LibraryFilterSheet({
   const [query, setQuery] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expandedTagIds, setExpandedTagIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     if (visible && !wasVisible.current) {
@@ -105,6 +110,7 @@ export function LibraryFilterSheet({
       setQuery('');
       setAdvancedOpen(libraryFilterCount(filters) > 4 || extraRuleCount > 0);
       setError(null);
+      setExpandedTagIds(new Set());
     }
     wasVisible.current = visible;
   }, [extraRuleCount, filters, visible]);
@@ -114,6 +120,9 @@ export function LibraryFilterSheet({
 
   function openFacet(next: Facet) {
     setQuery('');
+    if (next === 'tags') {
+      setExpandedTagIds(selectedTagAncestorIds(catalog.tags, draft.tagIds));
+    }
     setFacet(next);
     animateLayout();
   }
@@ -128,7 +137,7 @@ export function LibraryFilterSheet({
       draft.modifiedBefore,
     ];
     if (dateFields.some((value) => !isValidLibraryDate(value))) {
-      setError('Use dates in YYYY-MM-DD format, for example 2026-07-31.');
+      setError(t('filter.invalidDate'));
       void hapticFeedback('error');
       return;
     }
@@ -137,16 +146,19 @@ export function LibraryFilterSheet({
     sheetRef.current?.close();
   }
 
-  const title = facet ? facetDetails[facet].title : 'Filters';
+  const title = facet ? t(facetDetails[facet].title) : t('filter.title');
   const subtitle = facet
-    ? facetDetails[facet].subtitle
+    ? t(facetDetails[facet].subtitle)
     : activeCount
-      ? `${activeCount} active ${activeCount === 1 ? 'filter' : 'filters'} · ${previewCount} local ${previewCount === 1 ? 'match' : 'matches'}`
-      : 'Narrow your library without losing your place.';
+      ? t('filter.summary', {
+          filters: formatNumber(activeCount),
+          matches: formatNumber(previewCount),
+        })
+      : t('filter.intro');
 
   return (
     <KeyboardSheet
-      accessibilityLabel="Library filters"
+      accessibilityLabel={t('filter.accessibility')}
       maxHeight="94%"
       onDismiss={onClose}
       ref={sheetRef}
@@ -157,6 +169,7 @@ export function LibraryFilterSheet({
         <FacetEditor
           catalog={catalog}
           draft={draft}
+          expandedTagIds={expandedTagIds}
           facet={facet}
           mimeTypes={mimeTypes}
           onBack={() => {
@@ -166,6 +179,7 @@ export function LibraryFilterSheet({
           }}
           onChange={setDraft}
           query={query}
+          setExpandedTagIds={setExpandedTagIds}
           setQuery={setQuery}
         />
       ) : (
@@ -174,13 +188,13 @@ export function LibraryFilterSheet({
             contentContainerStyle={styles.mainContent}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}>
-            <Text style={styles.sectionLabel}>STATUS</Text>
+            <Text style={styles.sectionLabel}>{t('filter.status')}</Text>
             <View accessibilityRole="radiogroup" style={styles.segmentedWrap}>
               {([
-                ['any', 'Any'],
-                ['inbox', 'Inbox'],
-                ['untagged', 'Untagged'],
-                ['tagged', 'Tagged'],
+                ['any', 'filter.any'],
+                ['inbox', 'filter.inbox'],
+                ['untagged', 'filter.untagged'],
+                ['tagged', 'filter.tagged'],
               ] as const).map(([value, label]) => (
                 <Pressable
                   accessibilityRole="radio"
@@ -189,49 +203,49 @@ export function LibraryFilterSheet({
                   onPress={() => setDraft((current) => ({ ...current, status: value }))}
                   style={[styles.segment, draft.status === value && styles.segmentActive]}>
                   <Text style={[styles.segmentText, draft.status === value && styles.segmentTextActive]}>
-                    {label}
+                    {t(label)}
                   </Text>
                 </Pressable>
               ))}
             </View>
 
-            <Text style={styles.sectionLabel}>DOCUMENT DETAILS</Text>
+            <Text style={styles.sectionLabel}>{t('filter.documentDetails')}</Text>
             <View style={styles.rowGroup}>
               <FacetRow
                 detail={facetDetails.correspondents}
                 onPress={() => openFacet('correspondents')}
-                value={selectionSummary(draft.correspondentIds.length, draft.correspondentMissing, draft.correspondentMode)}
+                value={selectionSummary(draft.correspondentIds.length, draft.correspondentMissing, draft.correspondentMode, t, formatNumber)}
               />
               <FacetRow
                 detail={facetDetails.documentTypes}
                 onPress={() => openFacet('documentTypes')}
-                value={selectionSummary(draft.documentTypeIds.length, draft.documentTypeMissing, draft.documentTypeMode)}
+                value={selectionSummary(draft.documentTypeIds.length, draft.documentTypeMissing, draft.documentTypeMode, t, formatNumber)}
               />
               <FacetRow
                 detail={facetDetails.tags}
                 onPress={() => openFacet('tags')}
-                value={tagSummary(draft.tagIds.length, draft.tagMode)}
+                value={tagSummary(draft.tagIds.length, draft.tagMode, t, formatNumber)}
               />
               <FacetRow
                 detail={facetDetails.storagePaths}
                 last
                 onPress={() => openFacet('storagePaths')}
-                value={selectionSummary(draft.storagePathIds.length, draft.storagePathMissing, draft.storagePathMode)}
+                value={selectionSummary(draft.storagePathIds.length, draft.storagePathMissing, draft.storagePathMode, t, formatNumber)}
               />
             </View>
 
-            <Text style={styles.sectionLabel}>DATES</Text>
+            <Text style={styles.sectionLabel}>{t('filter.dates')}</Text>
             <View style={styles.rowGroup}>
               <FacetRow
                 detail={facetDetails.created}
                 onPress={() => openFacet('created')}
-                value={rangeSummary(draft.createdAfter, draft.createdBefore)}
+                value={rangeSummary(draft.createdAfter, draft.createdBefore, t)}
               />
               <FacetRow
                 detail={facetDetails.added}
                 last
                 onPress={() => openFacet('added')}
-                value={rangeSummary(draft.addedAfter, draft.addedBefore)}
+                value={rangeSummary(draft.addedAfter, draft.addedBefore, t)}
               />
             </View>
 
@@ -243,8 +257,8 @@ export function LibraryFilterSheet({
               }}
               style={styles.advancedHeader}>
               <View>
-                <Text style={styles.advancedTitle}>Advanced</Text>
-                <Text style={styles.advancedCopy}>Ownership, file data and archive metadata</Text>
+                <Text style={styles.advancedTitle}>{t('filter.advanced')}</Text>
+                <Text style={styles.advancedCopy}>{t('filter.advancedCopy')}</Text>
               </View>
               <ChevronRight
                 color={palette.muted}
@@ -258,37 +272,39 @@ export function LibraryFilterSheet({
                 <FacetRow
                   detail={facetDetails.modified}
                   onPress={() => openFacet('modified')}
-                  value={rangeSummary(draft.modifiedAfter, draft.modifiedBefore)}
+                  value={rangeSummary(draft.modifiedAfter, draft.modifiedBefore, t)}
                 />
                 <FacetRow
                   detail={facetDetails.archive}
                   onPress={() => openFacet('archive')}
-                  value={archiveSummary(draft)}
+                  value={archiveSummary(draft, t)}
                 />
                 <FacetRow
                   detail={facetDetails.mimeTypes}
                   onPress={() => openFacet('mimeTypes')}
-                  value={countSummary(draft.mimeTypes.length)}
+                  value={countSummary(draft.mimeTypes.length, t, formatNumber)}
                 />
                 <FacetRow
                   detail={facetDetails.owners}
                   onPress={() => openFacet('owners')}
-                  value={selectionSummary(draft.ownerIds.length, draft.ownerMissing, draft.ownerMode)}
+                  value={selectionSummary(draft.ownerIds.length, draft.ownerMissing, draft.ownerMode, t, formatNumber)}
                 />
                 <FacetRow
                   detail={facetDetails.customFields}
                   last
                   onPress={() => openFacet('customFields')}
-                  value={tagSummary(draft.customFieldIds.length, draft.customFieldMode)}
+                  value={tagSummary(draft.customFieldIds.length, draft.customFieldMode, t, formatNumber)}
                 />
               </View>
             )}
 
             {!!extraRuleCount && (
               <View style={styles.presetNote}>
-                <Text style={styles.presetNoteTitle}>Paperless preset rules preserved</Text>
+                <Text style={styles.presetNoteTitle}>{t('filter.presetTitle')}</Text>
                 <Text style={styles.presetNoteCopy}>
-                  {extraRuleCount} advanced {extraRuleCount === 1 ? 'rule is' : 'rules are'} not editable here, but will remain active.
+                  {extraRuleCount === 1
+                    ? t('filter.presetOne')
+                    : t('filter.presetMany', { count: formatNumber(extraRuleCount) })}
                 </Text>
               </View>
             )}
@@ -309,12 +325,18 @@ export function LibraryFilterSheet({
                 setError(null);
               }}
               style={[styles.resetButton, !activeCount && styles.disabled]}>
-              <Text style={styles.resetText}>{extraRuleCount ? 'Reset fields' : 'Reset'}</Text>
+              <Text style={styles.resetText}>
+                {extraRuleCount ? t('filter.resetFields') : t('filter.reset')}
+              </Text>
             </Pressable>
             <Pressable haptic="none" onPress={apply} style={styles.applyButton}>
-              <Check color={palette.ink} size={19} />
+              <Check color={palette.accentInk} size={19} />
               <Text style={styles.applyText}>
-                {previewCount === 0 ? 'Apply filters' : `Show ${previewCount} ${previewCount === 1 ? 'document' : 'documents'}`}
+                {previewCount === 0
+                  ? t('filter.apply')
+                  : previewCount === 1
+                    ? t('filter.showOne')
+                    : t('filter.showMany', { count: formatNumber(previewCount) })}
               </Text>
             </Pressable>
           </View>
@@ -327,22 +349,27 @@ export function LibraryFilterSheet({
 function FacetEditor({
   catalog,
   draft,
+  expandedTagIds,
   facet,
   mimeTypes,
   onBack,
   onChange,
   query,
+  setExpandedTagIds,
   setQuery,
 }: {
   catalog: PaperlessCatalog;
   draft: LibraryFilters;
+  expandedTagIds: Set<number>;
   facet: Facet;
   mimeTypes: string[];
   onBack: () => void;
   onChange: (filters: LibraryFilters) => void;
   query: string;
+  setExpandedTagIds: (ids: Set<number> | ((current: Set<number>) => Set<number>)) => void;
   setQuery: (query: string) => void;
 }) {
+  const { formatNumber, t } = useI18n();
   if (facet === 'created' || facet === 'added' || facet === 'modified') {
     return <DateEditor draft={draft} facet={facet} onBack={onBack} onChange={onChange} />;
   }
@@ -351,11 +378,14 @@ function FacetEditor({
   }
 
   const listFacet = facet as ListFacet;
-  const options = optionsForFacet(listFacet, catalog, mimeTypes);
+  const options = optionsForFacet(listFacet, catalog, mimeTypes, t, formatNumber);
   const normalized = query.trim().toLocaleLowerCase();
-  const filtered = normalized
-    ? options.filter((option) => option.name.toLocaleLowerCase().includes(normalized))
-    : options;
+  const filtered = listFacet === 'tags'
+    ? selectTagFilterOptions(options, query, expandedTagIds)
+    : normalized
+      ? options.filter((option) => option.name.toLocaleLowerCase().includes(normalized)
+        || option.pathLabel?.toLocaleLowerCase().includes(normalized))
+      : options;
   const selectedIds = idsForFacet(listFacet, draft);
   const supportsMissing = ['correspondents', 'documentTypes', 'storagePaths', 'owners'].includes(listFacet);
   const missing = missingForFacet(listFacet, draft);
@@ -371,22 +401,23 @@ function FacetEditor({
   return (
     <>
       <View style={styles.editorToolbar}>
-        <Pressable accessibilityLabel="Back to filters" onPress={onBack} style={styles.backButton}>
+        <Pressable accessibilityLabel={t('filter.back')} onPress={onBack} style={styles.backButton}>
           <ArrowLeft color={palette.ink} size={20} />
         </Pressable>
         <View style={styles.facetSearch}>
           <Search color={palette.muted} size={17} />
           <TextInput
+            accessibilityLabel={t('filter.searchFacet', { title: t(facetDetails[facet].title).toLocaleLowerCase() })}
             autoCapitalize="none"
             autoCorrect={false}
             onChangeText={setQuery}
-            placeholder={`Search ${facetDetails[facet].title.toLocaleLowerCase()}`}
+            placeholder={t('filter.searchFacet', { title: t(facetDetails[facet].title).toLocaleLowerCase() })}
             placeholderTextColor={palette.faint}
             style={styles.facetSearchInput}
             value={query}
           />
           {!!query && (
-            <Pressable accessibilityLabel="Clear search" onPress={() => setQuery('')} style={styles.clearSearch}>
+            <Pressable accessibilityLabel={t('filter.clearSearch')} onPress={() => setQuery('')} style={styles.clearSearch}>
               <X color={palette.muted} size={16} />
             </Pressable>
           )}
@@ -395,6 +426,10 @@ function FacetEditor({
 
       {facet !== 'mimeTypes' && (
         <MatchModeControl draft={draft} facet={listFacet} onChange={onChange} />
+      )}
+
+      {listFacet === 'tags' && (
+        <Text style={styles.tagSelectionScope}>{t('filter.tagSelectionScope')}</Text>
       )}
 
       <FlatList
@@ -406,8 +441,8 @@ function FacetEditor({
         keyExtractor={(item) => item.id}
         ListEmptyComponent={
           <View style={styles.optionEmpty}>
-            <Text style={styles.optionEmptyTitle}>No matches</Text>
-            <Text style={styles.optionEmptyCopy}>Try another name or clear the search.</Text>
+            <Text style={styles.optionEmptyTitle}>{t('filter.noMatches')}</Text>
+            <Text style={styles.optionEmptyCopy}>{t('filter.noMatchesCopy')}</Text>
           </View>
         }
         ListHeaderComponent={supportsMissing ? (
@@ -417,26 +452,60 @@ function FacetEditor({
             onPress={() => onChange(setIdsForFacet(listFacet, draft, [], !missing))}
             style={[styles.option, missing && styles.optionActive]}>
             <View style={styles.optionCopy}>
-              <Text style={styles.optionName}>Unassigned</Text>
-              <Text style={styles.optionMeta}>No {facetDetails[facet].title.toLocaleLowerCase()} set</Text>
+              <Text style={styles.optionName}>{t('filter.unassigned')}</Text>
+              <Text style={styles.optionMeta}>
+                {t('filter.notSet', { title: t(facetDetails[facet].title).toLocaleLowerCase() })}
+              </Text>
             </View>
-            {missing && <View style={styles.check}><Check color={palette.ink} size={16} /></View>}
+            {missing && <View style={styles.check}><Check color={palette.accentInk} size={16} /></View>}
           </Pressable>
         ) : null}
         renderItem={({ item }) => {
           const selected = selectedIds.includes(item.id);
+          const hasChildren = listFacet === 'tags'
+            && Number.isSafeInteger(item.remoteId)
+            && (item.remoteId ?? 0) > 0
+            && !!item.childRemoteIds?.length;
+          const expanded = hasChildren && expandedTagIds.has(item.remoteId!);
           return (
             <Pressable
+              accessibilityHint={hasChildren ? t('filter.parentOnlyHint') : undefined}
+              accessibilityLabel={item.pathLabel || item.name}
               accessibilityRole="checkbox"
               accessibilityState={{ checked: selected }}
               onPress={() => toggle(item.id)}
-              style={[styles.option, selected && styles.optionActive]}>
+              style={[styles.option, item.pathLabel && { paddingLeft: 14 + Math.min(item.depth ?? 0, 12) * 14 }, selected && styles.optionActive]}>
+              {listFacet === 'tags' ? (
+                hasChildren && !normalized ? (
+                  <Pressable
+                    accessibilityLabel={t(expanded ? 'choice.collapse' : 'choice.expand', {
+                      name: item.pathLabel || item.name,
+                    })}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded }}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      animateLayout();
+                      setExpandedTagIds((current) => {
+                        const next = new Set(current);
+                        if (next.has(item.remoteId!)) next.delete(item.remoteId!);
+                        else next.add(item.remoteId!);
+                        return next;
+                      });
+                    }}
+                    style={styles.tagDisclosure}>
+                    {expanded
+                      ? <ChevronDown color={palette.muted} size={16} />
+                      : <ChevronRight color={palette.muted} size={16} />}
+                  </Pressable>
+                ) : <View style={styles.tagDisclosure} />
+              ) : null}
               {!!item.color && <View style={[styles.colorDot, { backgroundColor: item.color }]} />}
               <View style={styles.optionCopy}>
                 <Text numberOfLines={2} style={styles.optionName}>{item.name}</Text>
                 {!!item.meta && <Text style={styles.optionMeta}>{item.meta}</Text>}
               </View>
-              {selected && <View style={styles.check}><Check color={palette.ink} size={16} /></View>}
+              {selected && <View style={styles.check}><Check color={palette.accentInk} size={16} /></View>}
             </Pressable>
           );
         }}
@@ -447,8 +516,10 @@ function FacetEditor({
 
       <View style={styles.editorFooter}>
         <Pressable onPress={onBack} style={styles.doneButton}>
-          <Check color={palette.ink} size={18} />
-          <Text style={styles.doneText}>{selectedIds.length || missing ? 'Keep selection' : 'Done'}</Text>
+          <Check color={palette.accentInk} size={18} />
+          <Text style={styles.doneText}>
+            {selectedIds.length || missing ? t('filter.keepSelection') : t('filter.done')}
+          </Text>
         </Pressable>
       </View>
     </>
@@ -464,10 +535,11 @@ function MatchModeControl({
   facet: ListFacet;
   onChange: (filters: LibraryFilters) => void;
 }) {
+  const { t } = useI18n();
   const tagLike = facet === 'tags' || facet === 'customFields';
   const values = tagLike
-    ? ([['any', 'Any'], ['all', 'All'], ['none', 'None']] as const)
-    : ([['include', 'Include'], ['exclude', 'Exclude']] as const);
+    ? ([['any', 'filter.matchAny'], ['all', 'filter.matchAll'], ['none', 'filter.matchNone']] as const)
+    : ([['include', 'filter.include'], ['exclude', 'filter.exclude']] as const);
   const current = modeForFacet(facet, draft);
   return (
     <View accessibilityRole="radiogroup" style={styles.modeControl}>
@@ -478,7 +550,7 @@ function MatchModeControl({
           key={value}
           onPress={() => onChange(setModeForFacet(facet, draft, value))}
           style={[styles.modeButton, current === value && styles.modeButtonActive]}>
-          <Text style={[styles.modeText, current === value && styles.modeTextActive]}>{label}</Text>
+          <Text style={[styles.modeText, current === value && styles.modeTextActive]}>{t(label)}</Text>
         </Pressable>
       ))}
     </View>
@@ -496,24 +568,25 @@ function DateEditor({
   onBack: () => void;
   onChange: (filters: LibraryFilters) => void;
 }) {
+  const { t } = useI18n();
   const { after, before } = dateValues(draft, facet);
   const today = new Date();
   const year = today.getFullYear();
   const presets = [
-    { label: 'Any time', after: '', before: '' },
-    { label: 'Last 7 days', after: daysAgo(6), before: localDate(today) },
-    { label: 'Last 30 days', after: daysAgo(29), before: localDate(today) },
-    { label: 'This year', after: `${year}-01-01`, before: `${year}-12-31` },
+    { label: t('filter.anyTime'), after: '', before: '' },
+    { label: t('filter.last7Days'), after: daysAgo(6), before: localDate(today) },
+    { label: t('filter.last30Days'), after: daysAgo(29), before: localDate(today) },
+    { label: t('filter.thisYear'), after: `${year}-01-01`, before: `${year}-12-31` },
   ];
 
   return (
     <>
-      <Pressable accessibilityLabel="Back to filters" onPress={onBack} style={styles.rangeBack}>
+      <Pressable accessibilityLabel={t('filter.back')} onPress={onBack} style={styles.rangeBack}>
         <ArrowLeft color={palette.ink} size={20} />
-        <Text style={styles.rangeBackText}>All filters</Text>
+        <Text style={styles.rangeBackText}>{t('filter.allFilters')}</Text>
       </Pressable>
       <ScrollView contentContainerStyle={styles.rangeContent} keyboardShouldPersistTaps="handled">
-        <Text style={styles.sectionLabel}>QUICK RANGE</Text>
+        <Text style={styles.sectionLabel}>{t('filter.quickRange')}</Text>
         <View style={styles.presetGrid}>
           {presets.map((preset) => {
             const selected = preset.after === after && preset.before === before;
@@ -529,29 +602,29 @@ function DateEditor({
             );
           })}
         </View>
-        <Text style={styles.sectionLabel}>CUSTOM RANGE</Text>
+        <Text style={styles.sectionLabel}>{t('filter.customRange')}</Text>
         <View style={styles.rangeInputs}>
           <LabeledInput
             keyboardType="number-pad"
-            label="From"
+            label={t('filter.from')}
             onChange={(value) => onChange(setDateValues(draft, facet, formatDateInput(value), before))}
-            placeholder="YYYY-MM-DD"
+            placeholder={t('filter.datePlaceholder')}
             value={after}
           />
           <LabeledInput
             keyboardType="number-pad"
-            label="Until"
+            label={t('filter.until')}
             onChange={(value) => onChange(setDateValues(draft, facet, after, formatDateInput(value)))}
-            placeholder="YYYY-MM-DD"
+            placeholder={t('filter.datePlaceholder')}
             value={before}
           />
         </View>
-        <Text style={styles.rangeHint}>Both boundary dates are included.</Text>
+        <Text style={styles.rangeHint}>{t('filter.boundaries')}</Text>
       </ScrollView>
       <View style={styles.editorFooter}>
         <Pressable onPress={onBack} style={styles.doneButton}>
-          <Check color={palette.ink} size={18} />
-          <Text style={styles.doneText}>Keep range</Text>
+          <Check color={palette.accentInk} size={18} />
+          <Text style={styles.doneText}>{t('filter.keepRange')}</Text>
         </Pressable>
       </View>
     </>
@@ -567,11 +640,12 @@ function ArchiveEditor({
   onBack: () => void;
   onChange: (filters: LibraryFilters) => void;
 }) {
+  const { t } = useI18n();
   return (
     <>
-      <Pressable accessibilityLabel="Back to filters" onPress={onBack} style={styles.rangeBack}>
+      <Pressable accessibilityLabel={t('filter.back')} onPress={onBack} style={styles.rangeBack}>
         <ArrowLeft color={palette.ink} size={20} />
-        <Text style={styles.rangeBackText}>All filters</Text>
+        <Text style={styles.rangeBackText}>{t('filter.allFilters')}</Text>
       </Pressable>
       <ScrollView contentContainerStyle={styles.rangeContent} keyboardShouldPersistTaps="handled">
         <Pressable
@@ -585,35 +659,35 @@ function ArchiveEditor({
           })}
           style={[styles.option, draft.archiveSerialMissing && styles.optionActive]}>
           <View style={styles.optionCopy}>
-            <Text style={styles.optionName}>Without archive serial</Text>
-            <Text style={styles.optionMeta}>Only documents not assigned to the physical archive</Text>
+            <Text style={styles.optionName}>{t('filter.withoutArchive')}</Text>
+            <Text style={styles.optionMeta}>{t('filter.withoutArchiveCopy')}</Text>
           </View>
-          {draft.archiveSerialMissing && <View style={styles.check}><Check color={palette.ink} size={16} /></View>}
+          {draft.archiveSerialMissing && <View style={styles.check}><Check color={palette.accentInk} size={16} /></View>}
         </Pressable>
-        <Text style={styles.sectionLabel}>NUMBER RANGE</Text>
+        <Text style={styles.sectionLabel}>{t('filter.numberRange')}</Text>
         <View style={styles.rangeInputs}>
           <LabeledInput
             disabled={draft.archiveSerialMissing}
             keyboardType="number-pad"
-            label="Greater than"
+            label={t('filter.greaterThan')}
             onChange={(value) => onChange({ ...draft, archiveSerialMin: digitsOnly(value), archiveSerialMissing: false })}
-            placeholder="e.g. 100"
+            placeholder={t('filter.example100')}
             value={draft.archiveSerialMin}
           />
           <LabeledInput
             disabled={draft.archiveSerialMissing}
             keyboardType="number-pad"
-            label="Less than"
+            label={t('filter.lessThan')}
             onChange={(value) => onChange({ ...draft, archiveSerialMax: digitsOnly(value), archiveSerialMissing: false })}
-            placeholder="e.g. 500"
+            placeholder={t('filter.example500')}
             value={draft.archiveSerialMax}
           />
         </View>
       </ScrollView>
       <View style={styles.editorFooter}>
         <Pressable onPress={onBack} style={styles.doneButton}>
-          <Check color={palette.ink} size={18} />
-          <Text style={styles.doneText}>Keep range</Text>
+          <Check color={palette.accentInk} size={18} />
+          <Text style={styles.doneText}>{t('filter.keepRange')}</Text>
         </Pressable>
       </View>
     </>
@@ -658,21 +732,22 @@ function FacetRow({
   onPress,
   value,
 }: {
-  detail: { title: string; subtitle: string; icon: IconType };
+  detail: { title: TranslationKey; subtitle: TranslationKey; icon: IconType };
   last?: boolean;
   onPress: () => void;
   value: string;
 }) {
+  const { t } = useI18n();
   const Icon = detail.icon;
-  const active = value !== 'Any';
+  const active = value !== t('filter.any');
   return (
     <Pressable onPress={onPress} style={[styles.facetRow, !last && styles.facetRowBorder]}>
       <View style={[styles.facetIcon, active && styles.facetIconActive]}>
-        <Icon color={palette.ink} size={18} />
+        <Icon color={active ? palette.accentInk : palette.ink} size={18} />
       </View>
       <View style={styles.facetCopy}>
-        <Text style={styles.facetTitle}>{detail.title}</Text>
-        <Text numberOfLines={1} style={styles.facetSubtitle}>{detail.subtitle}</Text>
+        <Text style={styles.facetTitle}>{t(detail.title)}</Text>
+        <Text numberOfLines={1} style={styles.facetSubtitle}>{t(detail.subtitle)}</Text>
       </View>
       <Text numberOfLines={1} style={[styles.facetValue, active && styles.facetValueActive]}>{value}</Text>
       <ChevronRight color={palette.faint} size={18} />
@@ -682,11 +757,22 @@ function FacetRow({
 
 type FacetOption = PaperlessOption & { meta?: string };
 
-function optionsForFacet(facet: ListFacet, catalog: PaperlessCatalog, mimeTypes: string[]): FacetOption[] {
+function optionsForFacet(
+  facet: ListFacet,
+  catalog: PaperlessCatalog,
+  mimeTypes: string[],
+  t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+  formatNumber: (value: number) => string,
+): FacetOption[] {
   switch (facet) {
     case 'correspondents': return catalog.correspondents;
     case 'documentTypes': return catalog.documentTypes;
-    case 'tags': return catalog.tags;
+    case 'tags': return catalog.tags.map((tag) => ({
+      ...tag,
+      ...((tag.pathLabel && tag.pathLabel !== tag.name) || tag.isInboxTag ? {
+        meta: `${tag.pathLabel && tag.pathLabel !== tag.name ? tag.pathLabel : ''}${tag.pathLabel && tag.pathLabel !== tag.name && tag.isInboxTag ? ' · ' : ''}${tag.isInboxTag ? t('filter.inboxTag') : ''}`,
+      } : {}),
+    }));
     case 'storagePaths': return catalog.storagePaths;
     case 'owners': return catalog.owners;
     case 'customFields':
@@ -696,10 +782,31 @@ function optionsForFacet(facet: ListFacet, catalog: PaperlessCatalog, mimeTypes:
         name: field.name,
         meta: field.documentCount === undefined
           ? field.dataType
-          : `${field.dataType} · ${field.documentCount} ${field.documentCount === 1 ? 'document' : 'documents'}`,
+          : t(field.documentCount === 1 ? 'filter.documentOne' : 'filter.documentMany', {
+              type: field.dataType,
+              count: formatNumber(field.documentCount),
+            }),
       }));
-    case 'mimeTypes': return mimeTypes.map((mimeType) => ({ id: mimeType, name: mimeTypeLabel(mimeType), meta: mimeType }));
+    case 'mimeTypes': return mimeTypes.map((mimeType) => ({
+      id: mimeType,
+      name: localizedMimeTypeLabel(mimeType, t),
+      meta: mimeType,
+    }));
   }
+}
+
+function localizedMimeTypeLabel(
+  value: string,
+  t: (key: TranslationKey) => string,
+) {
+  const known: Record<string, TranslationKey> = {
+    'application/pdf': 'library.pdfs',
+    'image/jpeg': 'filter.mimeJpeg',
+    'image/png': 'filter.mimePng',
+    'image/tiff': 'filter.mimeTiff',
+    'text/plain': 'filter.mimeText',
+  };
+  return known[value] ? t(known[value]) : value;
 }
 
 function idsForFacet(facet: ListFacet, filters: LibraryFilters) {
@@ -805,30 +912,47 @@ function formatDateInput(value: string) {
   return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
 }
 
-function countSummary(count: number) {
-  return count ? `${count} selected` : 'Any';
+type Translator = (key: TranslationKey, values?: Record<string, string | number>) => string;
+
+function countSummary(count: number, t: Translator, formatNumber: (value: number) => string) {
+  return count ? t('filter.selected', { count: formatNumber(count) }) : t('filter.any');
 }
 
-function selectionSummary(count: number, missing: boolean, mode: LibrarySelectionMode) {
-  if (missing) return mode === 'include' ? 'Unassigned' : 'Assigned only';
-  if (!count) return 'Any';
-  return `${mode === 'exclude' ? 'Exclude' : 'Include'} ${count}`;
+function selectionSummary(
+  count: number,
+  missing: boolean,
+  mode: LibrarySelectionMode,
+  t: Translator,
+  formatNumber: (value: number) => string,
+) {
+  if (missing) return mode === 'include' ? t('filter.unassigned') : t('filter.assignedOnly');
+  if (!count) return t('filter.any');
+  return t(mode === 'exclude' ? 'filter.excludeCount' : 'filter.includeCount', {
+    count: formatNumber(count),
+  });
 }
 
-function tagSummary(count: number, mode: LibraryTagMode) {
-  if (!count) return 'Any';
-  return `${mode === 'any' ? 'Any of' : mode === 'all' ? 'All of' : 'None of'} ${count}`;
+function tagSummary(
+  count: number,
+  mode: LibraryTagMode,
+  t: Translator,
+  formatNumber: (value: number) => string,
+) {
+  if (!count) return t('filter.any');
+  return t(mode === 'any' ? 'filter.anyOf' : mode === 'all' ? 'filter.allOf' : 'filter.noneOf', {
+    count: formatNumber(count),
+  });
 }
 
-function rangeSummary(after: string, before: string) {
-  if (!after && !before) return 'Any';
+function rangeSummary(after: string, before: string, t: Translator) {
+  if (!after && !before) return t('filter.any');
   if (after && before) return `${after} – ${before}`;
-  return after ? `After ${after}` : `Before ${before}`;
+  return after ? t('filter.after', { date: after }) : t('filter.before', { date: before });
 }
 
-function archiveSummary(filters: LibraryFilters) {
-  if (filters.archiveSerialMissing) return 'Unassigned';
-  if (!filters.archiveSerialMin && !filters.archiveSerialMax) return 'Any';
+function archiveSummary(filters: LibraryFilters, t: Translator) {
+  if (filters.archiveSerialMissing) return t('filter.unassigned');
+  if (!filters.archiveSerialMin && !filters.archiveSerialMax) return t('filter.any');
   if (filters.archiveSerialMin && filters.archiveSerialMax) {
     return `${filters.archiveSerialMin} – ${filters.archiveSerialMax}`;
   }
@@ -871,38 +995,40 @@ const styles = StyleSheet.create({
   facetTitle: { color: palette.ink, fontFamily: fonts.sans, fontSize: 13, fontWeight: '800' },
   facetSubtitle: { marginTop: 3, color: palette.muted, fontFamily: fonts.sans, fontSize: 10 },
   facetValue: { maxWidth: 128, color: palette.faint, fontFamily: fonts.sans, fontSize: 10, fontWeight: '700' },
-  facetValueActive: { color: palette.limeDark },
+  facetValueActive: { color: palette.inkSoft },
   advancedHeader: { minHeight: 68, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, paddingHorizontal: 4 },
   advancedTitle: { color: palette.ink, fontFamily: fonts.sans, fontSize: 15, fontWeight: '900' },
   advancedCopy: { marginTop: 3, color: palette.muted, fontFamily: fonts.sans, fontSize: 10 },
-  presetNote: { marginTop: 14, padding: 14, borderRadius: radii.md, backgroundColor: palette.lavender },
+  presetNote: { marginTop: 14, padding: 14, borderRadius: radii.md, backgroundColor: palette.paperStrong },
   presetNoteTitle: { color: palette.ink, fontFamily: fonts.sans, fontSize: 12, fontWeight: '900' },
   presetNoteCopy: { marginTop: 4, color: palette.inkSoft, fontFamily: fonts.sans, fontSize: 10, lineHeight: 15 },
-  errorBox: { marginTop: 14, padding: 12, borderRadius: radii.sm, backgroundColor: palette.rose },
+  errorBox: { marginTop: 14, padding: 12, borderRadius: radii.sm, backgroundColor: palette.dangerSurface },
   errorText: { color: palette.danger, fontFamily: fonts.sans, fontSize: 11, lineHeight: 16, fontWeight: '700' },
   footer: { flexDirection: 'row', gap: 10, paddingTop: 12, paddingBottom: 4, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.line },
   resetButton: { minHeight: 52, minWidth: 92, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18, borderRadius: radii.md, backgroundColor: palette.paper },
   resetText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 13, fontWeight: '900' },
   applyButton: { minHeight: 52, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: radii.md, backgroundColor: palette.lime },
-  applyText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 13, fontWeight: '900' },
+  applyText: { color: palette.accentInk, fontFamily: fonts.sans, fontSize: 13, fontWeight: '900' },
   disabled: { opacity: 0.42 },
   editorToolbar: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 13, paddingBottom: 10 },
   backButton: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: palette.paper },
   facetSearch: { height: 48, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 13, borderRadius: radii.md, backgroundColor: palette.paper, borderWidth: 1, borderColor: palette.line },
   facetSearchInput: { flex: 1, color: palette.ink, fontFamily: fonts.sans, fontSize: 13 },
   clearSearch: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
-  modeControl: { flexDirection: 'row', gap: 6, padding: 4, marginBottom: 8, borderRadius: radii.md, backgroundColor: '#E7E2D7' },
+  modeControl: { flexDirection: 'row', gap: 6, padding: 4, marginBottom: 8, borderRadius: radii.md, backgroundColor: palette.paperStrong },
   modeButton: { minHeight: 42, flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 14 },
   modeButtonActive: { backgroundColor: palette.paper },
   modeText: { color: palette.muted, fontFamily: fonts.sans, fontSize: 11, fontWeight: '800' },
   modeTextActive: { color: palette.ink },
+  tagSelectionScope: { marginBottom: 10, color: palette.muted, fontFamily: fonts.sans, fontSize: 11, lineHeight: 16 },
   optionListView: { flexShrink: 1 },
   optionList: { paddingBottom: 12 },
   option: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 11, marginBottom: 7, paddingHorizontal: 13, paddingVertical: 8, borderRadius: radii.md, backgroundColor: palette.paper, borderWidth: 1, borderColor: 'transparent' },
-  optionActive: { borderColor: palette.limeDark, backgroundColor: '#F3FAD8' },
+  optionActive: { borderColor: palette.limeDark, backgroundColor: palette.paperStrong },
   optionCopy: { flex: 1, minWidth: 0 },
   optionName: { color: palette.ink, fontFamily: fonts.sans, fontSize: 13, fontWeight: '800' },
   optionMeta: { marginTop: 3, color: palette.muted, fontFamily: fonts.sans, fontSize: 10 },
+  tagDisclosure: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
   colorDot: { width: 10, height: 10, borderRadius: 5 },
   check: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: palette.lime },
   optionEmpty: { alignItems: 'center', paddingVertical: 42 },
@@ -910,7 +1036,7 @@ const styles = StyleSheet.create({
   optionEmptyCopy: { marginTop: 6, color: palette.muted, fontFamily: fonts.sans, fontSize: 11 },
   editorFooter: { paddingTop: 10, paddingBottom: 4, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.line },
   doneButton: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: radii.md, backgroundColor: palette.lime },
-  doneText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 13, fontWeight: '900' },
+  doneText: { color: palette.accentInk, fontFamily: fonts.sans, fontSize: 13, fontWeight: '900' },
   rangeBack: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 9, alignSelf: 'flex-start', marginTop: 8, paddingHorizontal: 10, borderRadius: radii.sm },
   rangeBackText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 12, fontWeight: '800' },
   rangeContent: { paddingBottom: 20 },

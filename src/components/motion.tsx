@@ -10,6 +10,7 @@ import {
   StyleSheet,
   View,
   ViewStyle,
+  type ColorValue,
 } from 'react-native';
 import {
   PropsWithChildren,
@@ -179,7 +180,7 @@ export function MotionScreen({
   backgroundColor = palette.canvas,
   children,
   visible = true,
-}: PropsWithChildren<{ backgroundColor?: string; visible?: boolean }>) {
+}: PropsWithChildren<{ backgroundColor?: ColorValue; visible?: boolean }>) {
   return (
     <View
       accessibilityViewIsModal={visible}

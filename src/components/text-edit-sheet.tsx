@@ -13,10 +13,13 @@ import {
 import { KeyboardSheet, KeyboardSheetHandle } from '@/components/keyboard-sheet';
 import { MotionPressable as Pressable, hapticFeedback } from '@/components/motion';
 import { fonts, palette, radii } from '@/constants/theme';
+import { useI18n } from '@/context/ui-preferences-context';
 
 type TextEditSheetProps = {
   autoCapitalize?: TextInputProps['autoCapitalize'];
   autoCorrect?: boolean;
+  /** Stable profile/object/action identity. A change discards every retained editor state. */
+  editorKey: string;
   helperText?: string;
   keyboardType?: KeyboardTypeOptions;
   label: string;
@@ -35,6 +38,13 @@ type TextEditSheetProps = {
 };
 
 export function TextEditSheet({
+  editorKey,
+  ...props
+}: TextEditSheetProps) {
+  return <TextEditSheetEditor key={editorKey} {...props} />;
+}
+
+function TextEditSheetEditor({
   autoCapitalize = 'sentences',
   autoCorrect = true,
   helperText,
@@ -46,13 +56,14 @@ export function TextEditSheet({
   onSave,
   placeholder,
   required = false,
-  saveLabel = 'Save changes',
+  saveLabel,
   subtitle,
   title,
   validate,
   value,
   visible,
-}: TextEditSheetProps) {
+}: Omit<TextEditSheetProps, 'editorKey'>) {
+  const { t } = useI18n();
   const sheetRef = useRef<KeyboardSheetHandle>(null);
   const inputRef = useRef<TextInput>(null);
   const [draft, setDraft] = useState(value);
@@ -65,7 +76,7 @@ export function TextEditSheet({
   async function save() {
     if (saving || draft === value) return;
     const validationError = required && !normalized
-      ? `${label} cannot be empty.`
+      ? t('editor.required', { label })
       : validate?.(draft) || null;
     if (validationError) {
       setError(validationError);
@@ -80,7 +91,9 @@ export function TextEditSheet({
       await hapticFeedback('confirm');
       sheetRef.current?.close();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : `Could not save ${label.toLocaleLowerCase()}.`);
+      setError(nextError instanceof Error
+        ? nextError.message
+        : t('editor.saveError', { label: label.toLocaleLowerCase() }));
       await hapticFeedback('error');
     } finally {
       setSaving(false);
@@ -89,7 +102,7 @@ export function TextEditSheet({
 
   return (
     <KeyboardSheet
-      accessibilityLabel={`${title} editor`}
+      accessibilityLabel={t('editor.accessibility', { title })}
       maxHeight={multiline ? '82%' : '72%'}
       onDismiss={onClose}
       onOpened={() => inputRef.current?.focus()}
@@ -134,15 +147,15 @@ export function TextEditSheet({
 
       <View style={styles.footer}>
         <Pressable haptic="light" onPress={() => sheetRef.current?.close()} style={styles.cancelButton}>
-          <Text style={styles.cancelText}>Cancel</Text>
+          <Text style={styles.cancelText}>{t('common.cancel')}</Text>
         </Pressable>
         <Pressable
           disabled={!canSave}
           haptic="none"
           onPress={save}
           style={[styles.saveButton, !canSave && styles.disabled]}>
-          {saving ? <ActivityIndicator color={palette.ink} /> : <Check color={palette.ink} size={18} />}
-          <Text style={styles.saveText}>{saveLabel}</Text>
+          {saving ? <ActivityIndicator color={palette.accentInk} /> : <Check color={palette.accentInk} size={18} />}
+          <Text style={styles.saveText}>{saveLabel || t('editor.saveChanges')}</Text>
         </Pressable>
       </View>
     </KeyboardSheet>
@@ -201,7 +214,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: radii.sm,
-    backgroundColor: '#F7E8E5',
+    backgroundColor: palette.dangerSurface,
   },
   errorText: {
     color: palette.danger,
