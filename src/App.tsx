@@ -1,6 +1,10 @@
-import { StatusBar } from 'expo-status-bar';
 import { useIsFocused } from '@react-navigation/native';
-import { createNativeStackNavigator, type NativeStackScreenProps } from '@react-navigation/native-stack';
+import {
+  createNativeStackNavigator,
+  type NativeStackScreenProps,
+} from '@react-navigation/native-stack';
+import * as SplashScreen from 'expo-splash-screen';
+import { StatusBar } from 'expo-status-bar';
 import { LockKeyhole } from 'lucide-react-native';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -17,22 +21,40 @@ import DocumentDetailScreen from '@/app/document/[id]';
 import DocumentsScreen from '@/app/documents';
 import HomeScreen from '@/app/index';
 import InboxScreen from '@/app/inbox';
+import IntakeScreen from '@/app/intake';
+import PaperlessMetadataScreen from '@/app/paperless-metadata';
+import SavedViewsScreen from '@/app/saved-views';
 import ScanScreen from '@/app/scan';
 import SettingsScreen from '@/app/settings';
+import TaskCenterScreen from '@/app/tasks';
 import TrashScreen from '@/app/trash';
 import { BottomNav } from '@/components/bottom-nav';
+import { ExternalRoutingGateway } from '@/components/external-routing-gateway';
 import { FolioLogo } from '@/components/folio-logo';
-import { UpdateOverlay } from '@/components/update-overlay';
+import { IncomingShareGateway } from '@/components/incoming-share-gateway';
 import {
   MotionPressable as Pressable,
   MotionProvider,
 } from '@/components/motion';
+import { OsSearchRuntimeGateway } from '@/components/os-search-runtime-gateway';
+import { UpdateOverlay } from '@/components/update-overlay';
 import { fonts, palette, radii } from '@/constants/theme';
 import { AppProvider, useApp } from '@/context/app-context';
 import { UpdateProvider } from '@/context/update-context';
-import { authenticateForFolio } from '@/lib/device-features';
+import { I18nProvider, useI18n } from '@/context/ui-preferences-context';
+import {
+  authenticateForFolio,
+  dismissProfileNotifications,
+  setRuntimeNotificationPrivacyLocked,
+} from '@/lib/device-features';
+import { IN_APP_APK_UPDATES_ENABLED } from '@/lib/distribution-runtime';
 import { NavigationProvider, useNavigationMotion } from '@/lib/router';
 import type { RootStackParamList } from '@/lib/router';
+import { createWidgetSnapshot } from '@/lib/widget-privacy';
+
+void SplashScreen.preventAutoHideAsync().catch(() => {
+  // The native splash may already be hidden in Expo Go or on web.
+});
 
 const tabScreens = [
   { pathname: '/', Screen: memo(HomeScreen) },
@@ -81,6 +103,8 @@ function DocumentRoute({ route }: NativeStackScreenProps<RootStackParamList, 'Do
 }
 
 function AppNavigator() {
+  const { colorScheme } = useI18n();
+
   return (
     <Stack.Navigator
       screenOptions={{
@@ -89,7 +113,7 @@ function AppNavigator() {
         contentStyle: { backgroundColor: palette.canvas },
         gestureEnabled: true,
         headerShown: false,
-        statusBarStyle: 'dark',
+        statusBarStyle: colorScheme === 'dark' ? 'light' : 'dark',
       }}>
       <Stack.Screen component={TabNavigator} name="Tabs" />
       <Stack.Screen component={DocumentRoute} name="Document" />
@@ -98,12 +122,16 @@ function AppNavigator() {
         name="Scan"
         options={{
           animation: 'slide_from_bottom',
-          contentStyle: { backgroundColor: palette.black },
+          contentStyle: { backgroundColor: palette.accentInk },
           presentation: 'fullScreenModal',
           statusBarStyle: 'light',
         }}
       />
       <Stack.Screen component={TrashScreen} name="Trash" />
+      <Stack.Screen component={IntakeScreen} name="Intake" />
+      <Stack.Screen component={TaskCenterScreen} name="Tasks" />
+      <Stack.Screen component={SavedViewsScreen} name="SavedViews" />
+      <Stack.Screen component={PaperlessMetadataScreen} name="PaperlessMetadata" />
     </Stack.Navigator>
   );
 }
@@ -118,24 +146,42 @@ function PrivacyCurtain() {
 }
 
 function ProtectedApp() {
-  const { isBootstrapping, preferences, preferencesReady } = useApp();
+  const {
+    connected,
+    inboxDocuments,
+    isBootstrapping,
+    preferences,
+    preferencesReady,
+    profiles,
+  } = useApp();
+  const { locale, t } = useI18n();
   const [locked, setLocked] = useState(true);
   const [unlocking, setUnlocking] = useState(false);
   const [appActive, setAppActive] = useState(AppState.currentState === 'active');
   const authenticating = useRef(false);
   const unlockAttempted = useRef(false);
+  const lockGeneration = useRef(0);
+  const widgetUpdateTail = useRef<Promise<void>>(Promise.resolve());
   const lockEnabled = preferencesReady && preferences.biometricLock;
   const showLock = lockEnabled && locked;
 
   const unlock = useCallback(async () => {
     if (!lockEnabled || !appActive) return;
+    const generation = lockGeneration.current;
     authenticating.current = true;
     setUnlocking(true);
     try {
-      if (await authenticateForFolio()) setLocked(false);
+      if (
+        (await authenticateForFolio()) &&
+        generation === lockGeneration.current &&
+        AppState.currentState === 'active'
+      ) {
+        setRuntimeNotificationPrivacyLocked(false);
+        setLocked(false);
+      }
     } finally {
       authenticating.current = false;
-      setUnlocking(false);
+      if (generation === lockGeneration.current) setUnlocking(false);
     }
   }, [appActive, lockEnabled]);
 
@@ -151,19 +197,54 @@ function ProtectedApp() {
       const active = state === 'active';
       setAppActive(active);
       if (lockEnabled && !active) {
-        setLocked(true);
+        lockGeneration.current += 1;
         if (!authenticating.current) unlockAttempted.current = false;
+        setRuntimeNotificationPrivacyLocked(true);
+        setUnlocking(false);
+        setLocked(true);
+        void Promise.all(profiles.map((profile) => dismissProfileNotifications(profile.id)));
       }
     });
     return () => subscription.remove();
-  }, [lockEnabled]);
+  }, [lockEnabled, profiles]);
+
+  useEffect(() => {
+    setRuntimeNotificationPrivacyLocked(showLock);
+    if (showLock) {
+      void Promise.all(profiles.map((profile) => dismissProfileNotifications(profile.id)));
+    }
+  }, [profiles, showLock]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' || isBootstrapping) return;
+    const snapshot = createWidgetSnapshot({
+      authenticated: connected,
+      unlocked: !showLock,
+      inboxCount: connected ? inboxDocuments.length : null,
+      syncedAt: connected ? new Date().toISOString() : null,
+    });
+    widgetUpdateTail.current = widgetUpdateTail.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (Platform.OS === 'ios') {
+          const { folioWidgetSnapshotAdapter } = await import('@/lib/folio-inbox-widget');
+          await folioWidgetSnapshotAdapter.updateSnapshot(snapshot);
+        } else {
+          const { folioAndroidWidgetSnapshotAdapter } = await import('@/lib/folio-android-widget');
+          await folioAndroidWidgetSnapshotAdapter.updateSnapshot(snapshot);
+        }
+      });
+    void widgetUpdateTail.current.catch(() => {
+      // Widget updates are best effort and remain serialized so redaction wins.
+    });
+  }, [connected, inboxDocuments.length, isBootstrapping, locale, showLock]);
 
   if (isBootstrapping) {
     return (
       <View style={styles.loadingRoot}>
         <FolioLogo inverse size={62} />
         <ActivityIndicator color={palette.ink} style={styles.loadingIndicator} />
-        <Text style={styles.loadingText}>Opening your folio…</Text>
+        <Text style={styles.loadingText}>{t('app.opening')}</Text>
       </View>
     );
   }
@@ -175,7 +256,14 @@ function ProtectedApp() {
         importantForAccessibility={!appActive || showLock ? 'no-hide-descendants' : 'auto'}
         style={styles.protectedRoot}>
         <AppNavigator />
-        {Platform.OS === 'android' && <UpdateOverlay />}
+        {appActive && !showLock && (
+          <>
+            <ExternalRoutingGateway />
+            <OsSearchRuntimeGateway />
+            <IncomingShareGateway />
+            {IN_APP_APK_UPDATES_ENABLED && <UpdateOverlay />}
+          </>
+        )}
       </View>
       {!appActive ? (
         <PrivacyCurtain />
@@ -184,15 +272,17 @@ function ProtectedApp() {
           <View style={styles.lockMark}>
             <LockKeyhole color={palette.lime} size={27} />
           </View>
-          <Text style={styles.lockTitle}>Folio is locked</Text>
-          <Text style={styles.lockCopy}>Use your device security to view document previews.</Text>
+          <Text style={styles.lockTitle}>{t('app.lockedTitle')}</Text>
+          <Text style={styles.lockCopy}>{t('app.lockedCopy')}</Text>
           <Pressable disabled={unlocking} onPress={unlock} style={styles.unlockButton}>
             {unlocking ? (
-              <ActivityIndicator color={palette.ink} />
+              <ActivityIndicator color={palette.accentInk} />
             ) : (
-              <LockKeyhole color={palette.ink} size={18} />
+              <LockKeyhole color={palette.accentInk} size={18} />
             )}
-            <Text style={styles.unlockText}>{unlocking ? 'Checking…' : 'Unlock Folio'}</Text>
+            <Text style={styles.unlockText}>
+              {unlocking ? t('app.checking') : t('app.unlock')}
+            </Text>
           </Pressable>
         </View>
       ) : null}
@@ -200,15 +290,28 @@ function ProtectedApp() {
   );
 }
 
-export default function App() {
+function LocalizedApp() {
+  const { colorScheme, nativePaletteKey, ready } = useI18n();
+
+  useEffect(() => {
+    if (ready) SplashScreen.hide();
+  }, [ready]);
+
+  if (!ready) return null;
+
   return (
     <SafeAreaProvider>
       <MotionProvider>
         <AppProvider>
           <UpdateProvider>
             <NavigationProvider>
-              <StatusBar style="dark" />
-              <View style={{ flex: 1, backgroundColor: palette.canvas }}>
+              <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
+              {/* Android resolves PlatformColor values when native views mount.
+                  Recreate only the presentation tree after AppCompat finishes
+                  its uiMode change; profile and durable app state stay above. */}
+              <View
+                key={nativePaletteKey}
+                style={{ flex: 1, backgroundColor: palette.canvas }}>
                 <ProtectedApp />
               </View>
             </NavigationProvider>
@@ -216,6 +319,14 @@ export default function App() {
         </AppProvider>
       </MotionProvider>
     </SafeAreaProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <I18nProvider>
+      <LocalizedApp />
+    </I18nProvider>
   );
 }
 
@@ -299,18 +410,19 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   unlockButton: {
-    height: 52,
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
     paddingHorizontal: 22,
+    paddingVertical: 12,
     borderRadius: radii.md,
     backgroundColor: palette.lime,
     marginTop: 24,
   },
   unlockText: {
-    color: palette.ink,
+    color: palette.accentInk,
     fontFamily: fonts.sans,
     fontSize: 14,
     fontWeight: '900',

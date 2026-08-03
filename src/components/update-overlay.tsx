@@ -29,68 +29,77 @@ import {
 } from '@/components/motion';
 import { bottomNavHeight, fonts, palette, radii, shadows } from '@/constants/theme';
 import { UpdateStatus, useUpdates } from '@/context/update-context';
-import { FOLIO_RELEASES_URL, formatUpdateSize } from '@/lib/app-updates';
+import { useI18n, type TranslationKey } from '@/i18n';
+import { trustedFolioReleaseUrl } from '@/lib/app-updates';
 
 type DismissAction = 'close' | 'remind';
 
-function formatCheckedAt(timestamp: number | null) {
-  if (!timestamp) return 'Not checked yet';
-  return `Checked ${new Date(timestamp).toLocaleString([], {
+type Translator = (key: TranslationKey, values?: Record<string, string | number>) => string;
+
+function formatCheckedAt(
+  timestamp: number | null,
+  t: Translator,
+  formatDate: (value: Date | string | number, options?: Intl.DateTimeFormatOptions) => string,
+) {
+  if (!timestamp) return t('updates.notChecked');
+  return t('updates.checked', { date: formatDate(timestamp, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  })}`;
+  }) });
 }
 
 function sheetCopy(
   status: UpdateStatus,
   version: string | null,
   support: ReturnType<typeof useUpdates>['support'],
+  t: Translator,
 ) {
   if (support === 'development-build') {
     return {
-      title: 'Updates for release builds',
-      subtitle: 'Your development build and GitHub releases use different signing identities.',
+      title: t('updates.releaseBuildTitle'),
+      subtitle: t('updates.releaseBuildCopy'),
     };
   }
   if (support === 'android-release-only') {
     return {
-      title: 'Android releases only',
-      subtitle: 'In-app GitHub updates are currently available for signed Android APKs.',
+      title: t('updates.androidOnlyTitle'),
+      subtitle: t('updates.androidOnlyCopy'),
     };
   }
   if (support === 'module-unavailable') {
     return {
-      title: 'One rebuild required',
-      subtitle: 'This installed build predates Folio’s native update verifier.',
+      title: t('updates.rebuildTitle'),
+      subtitle: t('updates.rebuildCopy'),
     };
   }
 
   switch (status) {
     case 'checking':
-      return { title: 'Checking GitHub', subtitle: 'Looking for the latest signed Folio release.' };
+      return { title: t('updates.checkingTitle'), subtitle: t('updates.checkingCopy') };
     case 'up-to-date':
-      return { title: 'Folio is up to date', subtitle: 'You already have the newest GitHub release.' };
+      return { title: t('updates.currentTitle'), subtitle: t('updates.currentCopy') };
     case 'available':
-      return { title: `Folio ${version} is available`, subtitle: 'Download when you’re ready.' };
+      return { title: t('updates.availableTitle', { version: version || '' }), subtitle: t('updates.availableCopy') };
     case 'downloading':
-      return { title: `Downloading Folio ${version}`, subtitle: 'You can cancel without affecting the app.' };
+      return { title: t('updates.downloadingTitle', { version: version || '' }), subtitle: t('updates.downloadingCopy') };
     case 'verifying':
-      return { title: 'Verifying the update', subtitle: 'Checking its file hash, package, version, and signer.' };
+      return { title: t('updates.verifyingTitle'), subtitle: t('updates.verifyingCopy') };
     case 'ready':
     case 'permission':
-      return { title: 'Ready to install', subtitle: `Folio ${version} passed every integrity check.` };
+      return { title: t('updates.readyTitle'), subtitle: t('updates.readyCopy', { version: version || '' }) };
     case 'installing':
-      return { title: 'Opening Android installer', subtitle: 'Android will ask you to confirm the update.' };
+      return { title: t('updates.installingTitle'), subtitle: t('updates.installingCopy') };
     case 'error':
-      return { title: 'Update interrupted', subtitle: 'Your current Folio installation is unchanged.' };
+      return { title: t('updates.errorTitle'), subtitle: t('updates.errorCopy') };
     default:
-      return { title: 'Software updates', subtitle: 'Stable Android releases come directly from GitHub.' };
+      return { title: t('updates.title'), subtitle: t('updates.subtitle') };
   }
 }
 
 export function UpdateOverlay() {
+  const { formatDate, formatFileSize, formatNumber, t } = useI18n();
   const updates = useUpdates();
   const reducedMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
@@ -98,7 +107,7 @@ export function UpdateOverlay() {
   const dismissActionRef = useRef<DismissAction>('close');
   const [bannerEntrance] = useState(() => new Animated.Value(reducedMotion ? 1 : 0));
   const releaseVersion = updates.release?.version ?? null;
-  const copy = sheetCopy(updates.status, releaseVersion, updates.support);
+  const copy = sheetCopy(updates.status, releaseVersion, updates.support, t);
   const showProgress = updates.status === 'downloading' || updates.status === 'verifying';
 
   useEffect(() => {
@@ -127,7 +136,7 @@ export function UpdateOverlay() {
 
   function openReleasePage() {
     void hapticFeedback('light');
-    void Linking.openURL(updates.release?.htmlUrl ?? FOLIO_RELEASES_URL);
+    void Linking.openURL(trustedFolioReleaseUrl(updates.release?.htmlUrl));
   }
 
   return (
@@ -149,27 +158,29 @@ export function UpdateOverlay() {
             },
           ]}>
           <Pressable
-            accessibilityHint="Opens release notes and download controls"
-            accessibilityLabel={`Folio ${updates.release.version} update available`}
+            accessibilityHint={t('updates.bannerHint')}
+            accessibilityLabel={t('updates.bannerLabel', { version: updates.release.version })}
             haptic="medium"
             onPress={updates.openUpdateSheet}
             style={styles.bannerMain}>
             <View style={styles.bannerIcon}>
-              <Download color={palette.ink} size={18} strokeWidth={2.5} />
+              <Download color={palette.accentInk} size={18} strokeWidth={2.5} />
             </View>
             <View style={styles.bannerCopy}>
               <Text numberOfLines={1} style={styles.bannerTitle}>
-                Folio {updates.release.version} is ready
+                {t('updates.bannerTitle', { version: updates.release.version })}
               </Text>
               <Text numberOfLines={1} style={styles.bannerSubtitle}>
-                View what’s new · {formatUpdateSize(updates.release.apk?.size ?? 0)}
+                {t('updates.bannerSubtitle', {
+                  size: formatFileSize(updates.release.apk?.size ?? 0),
+                })}
               </Text>
             </View>
-            <Text style={styles.bannerAction}>View</Text>
+            <Text style={styles.bannerAction}>{t('updates.view')}</Text>
           </Pressable>
           <Pressable
-            accessibilityHint="Reminds you again tomorrow"
-            accessibilityLabel="Remind me about this update later"
+            accessibilityHint={t('updates.remindHint')}
+            accessibilityLabel={t('updates.remindLabel')}
             haptic="light"
             onPress={updates.remindLater}
             style={styles.bannerClose}>
@@ -180,7 +191,7 @@ export function UpdateOverlay() {
 
       {updates.sheetVisible && (
         <KeyboardSheet
-          accessibilityLabel="Folio software update"
+          accessibilityLabel={t('updates.accessibility')}
           maxHeight="88%"
           onDismiss={handleSheetDismiss}
           ref={sheetRef}
@@ -203,26 +214,30 @@ export function UpdateOverlay() {
                     {updates.status === 'error' ? (
                       <CircleAlert color={palette.paper} size={25} />
                     ) : updates.status === 'up-to-date' ? (
-                      <Check color={palette.ink} size={26} strokeWidth={2.6} />
+                      <Check color={palette.paper} size={26} strokeWidth={2.6} />
                     ) : (
                       <Download color={palette.lime} size={24} strokeWidth={2.4} />
                     )}
                   </View>
                   <View style={styles.releaseCopy}>
                     <Text style={styles.releaseVersion}>
-                      {updates.release ? `Version ${updates.release.version}` : `Version ${updates.currentVersion}`}
+                      {t('updates.version', {
+                        version: updates.release?.version ?? updates.currentVersion,
+                      })}
                     </Text>
                     <Text style={styles.releaseMeta}>
                       {updates.release && updates.status !== 'up-to-date'
-                        ? `${formatUpdateSize(updates.release.apk?.size ?? 0)} · Universal Android APK`
-                        : formatCheckedAt(updates.lastCheckedAt)}
+                        ? t('updates.androidApk', {
+                            size: formatFileSize(updates.release.apk?.size ?? 0),
+                          })
+                        : formatCheckedAt(updates.lastCheckedAt, t, formatDate)}
                     </Text>
                   </View>
                 </View>
 
                 {showProgress && (
                   <View
-                    accessibilityLabel="Update download progress"
+                    accessibilityLabel={t('updates.progress')}
                     accessibilityRole="progressbar"
                     accessibilityValue={{
                       min: 0,
@@ -230,16 +245,24 @@ export function UpdateOverlay() {
                       now: Math.round(updates.progress * 100),
                       text:
                         updates.status === 'verifying'
-                          ? 'Verifying download'
-                          : `${Math.round(updates.progress * 100)} percent downloaded`,
+                          ? t('updates.verifyingDownload')
+                          : t('updates.percentDownloaded', {
+                              progress: formatNumber(Math.round(updates.progress * 100)),
+                            }),
                     }}
                     style={styles.progressBlock}>
                     <View style={styles.progressLabels}>
                       <Text style={styles.progressTitle}>
-                        {updates.status === 'verifying' ? 'Integrity check' : 'Downloading from GitHub'}
+                        {updates.status === 'verifying'
+                          ? t('updates.integrityCheck')
+                          : t('updates.downloadingGithub')}
                       </Text>
                       <Text style={styles.progressValue}>
-                        {updates.status === 'verifying' ? 'VERIFYING' : `${Math.round(updates.progress * 100)}%`}
+                        {updates.status === 'verifying'
+                          ? t('updates.verifyingCaps')
+                          : t('updates.percent', {
+                              progress: formatNumber(Math.round(updates.progress * 100)),
+                            })}
                       </Text>
                     </View>
                     <View style={styles.progressTrack}>
@@ -262,18 +285,15 @@ export function UpdateOverlay() {
 
                 {updates.status === 'permission' && (
                   <View style={styles.permissionBlock}>
-                    <Text style={styles.permissionTitle}>Allow this source in Android</Text>
-                    <Text style={styles.permissionText}>
-                      Turn on “Allow from this source,” then return to Folio. This permission only lets
-                      Folio hand a verified APK to Android’s installer; installation still needs your confirmation.
-                    </Text>
+                    <Text style={styles.permissionTitle}>{t('updates.permissionTitle')}</Text>
+                    <Text style={styles.permissionText}>{t('updates.permissionCopy')}</Text>
                   </View>
                 )}
 
                 {updates.release && updates.status !== 'up-to-date' && (
                   <View style={styles.notesBlock}>
                     <View style={styles.notesHeader}>
-                      <Text style={styles.notesTitle}>What’s new</Text>
+                      <Text style={styles.notesTitle}>{t('updates.whatsNew')}</Text>
                       <Pressable haptic="light" onPress={openReleasePage} style={styles.releaseLink}>
                         <Text style={styles.releaseLinkText}>GitHub</Text>
                         <ExternalLink color={palette.muted} size={13} />
@@ -287,7 +307,7 @@ export function UpdateOverlay() {
                   <View style={styles.trustRow}>
                     <ShieldCheck color={palette.limeDark} size={19} />
                     <Text style={styles.trustText}>
-                      Folio verifies the SHA-256 digest, package ID, exact version, and official signing certificate before installation.
+                      {t('updates.trustCopy')}
                     </Text>
                   </View>
                 )}
@@ -317,18 +337,19 @@ export function UpdateOverlay() {
 }
 
 function UnsupportedContent({ support }: { support: ReturnType<typeof useUpdates>['support'] }) {
+  const { t } = useI18n();
   const message = support === 'development-build'
-    ? 'Development builds are signed with a separate key. Folio keeps this updater disabled so installing a public release can’t strand your existing development data or credentials.'
+    ? t('updates.developmentUnsupported')
     : support === 'module-unavailable'
-      ? 'Install a freshly built development client once. The updater will then be available in future signed GitHub releases.'
-      : 'GitHub currently publishes Folio as a signed Android APK. Other platforms keep their existing installation unchanged.';
+      ? t('updates.moduleUnsupported')
+      : t('updates.platformUnsupported');
 
   return (
     <View style={styles.unsupportedContent}>
       <View style={styles.unsupportedMark}>
         <ShieldCheck color={palette.lime} size={29} />
       </View>
-      <Text style={styles.unsupportedTitle}>Your installation stays protected</Text>
+      <Text style={styles.unsupportedTitle}>{t('updates.protected')}</Text>
       <Text style={styles.unsupportedText}>{message}</Text>
     </View>
   );
@@ -359,67 +380,68 @@ function SheetActions({
   status: UpdateStatus;
   support: ReturnType<typeof useUpdates>['support'];
 }) {
+  const { t } = useI18n();
   if (support !== 'supported') {
     return (
       <>
-        <SecondaryButton label="Close" onPress={onClose} />
-        <PrimaryButton icon={<ExternalLink color={palette.ink} size={18} />} label="View GitHub releases" onPress={onOpenRelease} />
+        <SecondaryButton label={t('common.close')} onPress={onClose} />
+        <PrimaryButton icon={<ExternalLink color={palette.accentInk} size={18} />} label={t('updates.viewReleases')} onPress={onOpenRelease} />
       </>
     );
   }
   if (status === 'checking') {
     return (
       <>
-        <SecondaryButton label="Close" onPress={onClose} />
-        <PrimaryButton loading label="Checking GitHub…" onPress={() => undefined} />
+        <SecondaryButton label={t('common.close')} onPress={onClose} />
+        <PrimaryButton loading label={t('updates.checking')} onPress={() => undefined} />
       </>
     );
   }
   if (status === 'up-to-date' || status === 'idle') {
     return (
       <>
-        <SecondaryButton label="Done" onPress={onClose} />
-        <PrimaryButton icon={<RefreshCw color={palette.ink} size={18} />} label="Check again" onPress={onCheck} />
+        <SecondaryButton label={t('common.done')} onPress={onClose} />
+        <PrimaryButton icon={<RefreshCw color={palette.accentInk} size={18} />} label={t('updates.checkAgain')} onPress={onCheck} />
       </>
     );
   }
   if (status === 'available') {
     return (
       <>
-        <SecondaryButton label="Later" onPress={onRemind} />
-        <PrimaryButton icon={<Download color={palette.ink} size={18} />} label="Download update" onPress={onDownload} />
+        <SecondaryButton label={t('updates.later')} onPress={onRemind} />
+        <PrimaryButton icon={<Download color={palette.accentInk} size={18} />} label={t('updates.download')} onPress={onDownload} />
       </>
     );
   }
   if (status === 'downloading') {
-    return <SecondaryButton fullWidth label="Cancel download" onPress={onCancelDownload} />;
+    return <SecondaryButton fullWidth label={t('updates.cancelDownload')} onPress={onCancelDownload} />;
   }
   if (status === 'verifying') {
-    return <PrimaryButton loading label="Verifying signature…" onPress={() => undefined} />;
+    return <PrimaryButton loading label={t('updates.verifyingSignature')} onPress={() => undefined} />;
   }
   if (status === 'ready' || status === 'permission') {
     return (
       <>
-        <SecondaryButton label="Later" onPress={onRemind} />
+        <SecondaryButton label={t('updates.later')} onPress={onRemind} />
         <PrimaryButton
-          icon={<ShieldCheck color={palette.ink} size={19} />}
+          icon={<ShieldCheck color={palette.accentInk} size={19} />}
           label={status === 'permission'
-            ? 'Check permission'
+            ? t('updates.checkPermission')
             : canRequestPackageInstalls
-              ? 'Install update'
-              : 'Allow installation'}
+              ? t('updates.install')
+              : t('updates.allowInstallation')}
           onPress={onInstall}
         />
       </>
     );
   }
   if (status === 'installing') {
-    return <PrimaryButton loading label="Opening Android…" onPress={() => undefined} />;
+    return <PrimaryButton loading label={t('updates.openingAndroid')} onPress={() => undefined} />;
   }
   return (
     <>
-      <SecondaryButton label="Later" onPress={onRemind} />
-      <PrimaryButton icon={<RefreshCw color={palette.ink} size={18} />} label="Try again" onPress={onRetry} />
+      <SecondaryButton label={t('updates.later')} onPress={onRemind} />
+      <PrimaryButton icon={<RefreshCw color={palette.accentInk} size={18} />} label={t('common.retry')} onPress={onRetry} />
     </>
   );
 }
@@ -442,7 +464,7 @@ function PrimaryButton({
       haptic={loading ? 'none' : 'medium'}
       onPress={onPress}
       style={[styles.primaryButton, loading && styles.buttonDisabled]}>
-      {loading ? <ActivityIndicator color={palette.ink} size="small" /> : icon}
+      {loading ? <ActivityIndicator color={palette.accentInk} size="small" /> : icon}
       <Text numberOfLines={1} style={styles.primaryButtonText}>{label}</Text>
     </Pressable>
   );
@@ -504,13 +526,13 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   bannerSubtitle: {
-    color: '#BCC5BD',
+    color: palette.paper,
     fontFamily: fonts.sans,
     fontSize: 10,
     marginTop: 4,
   },
   bannerAction: {
-    color: palette.lime,
+    color: palette.paper,
     fontFamily: fonts.sans,
     fontSize: 11,
     fontWeight: '900',
@@ -596,7 +618,7 @@ const styles = StyleSheet.create({
     gap: 9,
     padding: 13,
     borderRadius: radii.sm,
-    backgroundColor: '#F3E3DF',
+    backgroundColor: palette.dangerSurface,
     marginTop: 16,
   },
   errorText: {
@@ -610,7 +632,7 @@ const styles = StyleSheet.create({
   permissionBlock: {
     padding: 15,
     borderRadius: radii.md,
-    backgroundColor: palette.lavender,
+    backgroundColor: palette.paperStrong,
     marginTop: 16,
   },
   permissionTitle: {
@@ -722,26 +744,28 @@ const styles = StyleSheet.create({
   primaryButton: {
     flex: 1,
     minWidth: 0,
-    height: 52,
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
     paddingHorizontal: 13,
+    paddingVertical: 12,
     borderRadius: radii.sm,
     backgroundColor: palette.lime,
   },
   primaryButtonText: {
-    color: palette.ink,
+    color: palette.accentInk,
     fontFamily: fonts.sans,
     fontSize: 12,
     fontWeight: '900',
   },
   secondaryButton: {
-    height: 52,
+    minHeight: 52,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 18,
+    paddingVertical: 12,
     borderRadius: radii.sm,
     backgroundColor: palette.paper,
   },

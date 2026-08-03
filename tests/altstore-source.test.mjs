@@ -14,7 +14,10 @@ const metadata = {
   version: "0.3.0",
   buildVersion: "3000",
   minOSVersion: "16.4",
-  entitlements: [],
+  entitlements: [
+    "com.apple.developer.default-data-protection",
+    "com.apple.security.application-groups",
+  ],
   privacy: {
     NSCameraUsageDescription: "Allow Folio to scan paper documents.",
     NSFaceIDUsageDescription:
@@ -52,7 +55,7 @@ test("generates a non-notarized AltSource from verified IPA metadata", () => {
   assert.equal(app.bundleIdentifier, metadata.bundleIdentifier);
   assert.equal(Object.hasOwn(app, "marketplaceID"), false);
   assert.deepEqual(app.appPermissions, {
-    entitlements: [],
+    entitlements: metadata.entitlements,
     privacy: metadata.privacy,
   });
   assert.equal(version.version, metadata.version);
@@ -84,13 +87,32 @@ test("keeps compatible previous versions behind the new release", () => {
   );
 });
 
-test("rejects metadata that would require special signing entitlements", () => {
+test("drops previous versions whose permissions no longer match", () => {
+  const previous = generate();
+  previous.apps[0].appPermissions.entitlements = [];
+  previous.apps[0].versions[0] = {
+    ...previous.apps[0].versions[0],
+    version: "0.2.0",
+    buildVersion: "2000",
+  };
+
+  const source = generate({ previousSource: previous });
+  assert.deepEqual(
+    source.apps[0].versions.map(({ version }) => version),
+    ["0.3.0"],
+  );
+});
+
+test("rejects metadata outside the reviewed entitlement policy", () => {
   assert.throws(
     () =>
       generate({
-        metadata: { ...metadata, entitlements: ["aps-environment"] },
+        metadata: {
+          ...metadata,
+          entitlements: [...metadata.entitlements, "aps-environment"].sort(),
+        },
       }),
-    /must not require special entitlements/,
+    /do not match the reviewed widget and share-extension policy/,
   );
 });
 

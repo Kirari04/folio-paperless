@@ -14,6 +14,7 @@ import {
   useState,
 } from 'react';
 
+import { prepareAndroidSemanticColors } from '@/constants/theme';
 import { themeHex } from '@/constants/theme-colors';
 import {
   resolveColorScheme,
@@ -28,6 +29,7 @@ import {
   type StoredUiPreferences,
 } from '@/i18n/preferences-policy';
 import { I18nRenderProvider } from '@/i18n/react-provider';
+import { commitNativeAppearanceTransition } from '@/i18n/appearance-transition';
 
 export type { AppearancePreference, LanguagePreference, SupportedLocale } from '@/i18n/core';
 export { useI18n } from '@/i18n/react-provider';
@@ -60,10 +62,39 @@ function loadInitialSettings(): UISettings | null {
 }
 
 async function applyNativeAppearance(settings: UISettings) {
+  const requestedScheme = settings.appearance === 'system'
+    ? 'unspecified'
+    : settings.appearance;
+  const currentScheme = Appearance.getColorScheme();
+
+  if (
+    Platform.OS === 'android'
+    && requestedScheme !== 'unspecified'
+    && currentScheme !== requestedScheme
+  ) {
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        subscription.remove();
+        resolve();
+      };
+      const subscription = Appearance.addChangeListener(({ colorScheme }) => {
+        if (colorScheme === requestedScheme) finish();
+      });
+      const timeout = setTimeout(finish, 1_000);
+
+      // AppCompat schedules this work on Android's UI thread. Publishing the
+      // React preference before its configuration-change event leaves newly
+      // mounted PlatformColor views holding the previous resource palette.
+      Appearance.setColorScheme(requestedScheme);
+    });
+  } else {
+    Appearance.setColorScheme(requestedScheme);
+  }
   const colorScheme = resolveColorScheme(settings.appearance, Appearance.getColorScheme());
-  Appearance.setColorScheme(
-    settings.appearance === 'system' ? 'unspecified' : settings.appearance,
-  );
   await SystemUI.setBackgroundColorAsync(themeHex[colorScheme].canvas);
 }
 
@@ -113,6 +144,7 @@ export function I18nProvider({ children }: PropsWithChildren) {
   }, [hydratedSettings]);
 
   const colorScheme = resolveColorScheme(settings.appearance, systemScheme);
+  prepareAndroidSemanticColors(colorScheme);
   const locale = resolveSupportedLocale(
     settings.language,
     systemLocales.map((entry) => entry.languageCode),
@@ -126,10 +158,8 @@ export function I18nProvider({ children }: PropsWithChildren) {
   }, [locale, ready, settings.appearance]);
 
   useEffect(() => {
-    if (!ready || Platform.OS === 'web') return;
-    Appearance.setColorScheme(
-      settings.appearance === 'system' ? 'unspecified' : settings.appearance,
-    );
+    if (!ready || Platform.OS === 'web' || settings.appearance !== 'system') return;
+    Appearance.setColorScheme('unspecified');
     void SystemUI.setBackgroundColorAsync(themeHex[colorScheme].canvas);
   }, [colorScheme, ready, settings.appearance]);
 
@@ -145,7 +175,17 @@ export function I18nProvider({ children }: PropsWithChildren) {
   }, [settings]);
 
   const setAppearance = useCallback(
-    (appearance: AppearancePreference) => updateSettings({ ...settings, appearance }),
+    (appearance: AppearancePreference) => {
+      const next = { ...settings, appearance };
+      if (Platform.OS === 'web') return updateSettings(next);
+      return commitNativeAppearanceTransition({
+        previous: settings,
+        next,
+        applyNative: applyNativeAppearance,
+        persist: saveSettings,
+        publish: setHydratedSettings,
+      });
+    },
     [settings, updateSettings],
   );
   const setLanguage = useCallback(
@@ -155,6 +195,7 @@ export function I18nProvider({ children }: PropsWithChildren) {
 
   return (
     <I18nRenderProvider
+      nativePaletteRemountEnabled={Platform.OS === 'android'}
       ready={ready}
       settings={settings}
       setAppearance={setAppearance}

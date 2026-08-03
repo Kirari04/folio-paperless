@@ -59,6 +59,15 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Test
+        run: npm test
+      - name: Validate distribution boundaries
+        run: |
+          FOLIO_DISTRIBUTION=github npx expo config --type prebuild --json > "$RUNNER_TEMP/github-config.json"
+          FOLIO_DISTRIBUTION=store npx expo config --type prebuild --json > "$RUNNER_TEMP/store-config.json"
+          node scripts/assert-distribution-config.mjs "$RUNNER_TEMP/github-config.json" "$RUNNER_TEMP/store-config.json"
+      - name: Validate store metadata
+        run: npm run assert:store-metadata
       - name: Typecheck
         run: npx tsc --noEmit
       - name: Lint
@@ -94,6 +103,7 @@ jobs:
       - name: Generate Android project
         env:
           CI: "1"
+          FOLIO_DISTRIBUTION: github
         run: npx expo prebuild --platform android --clean --no-install
       - name: Assemble debug APK
         env:

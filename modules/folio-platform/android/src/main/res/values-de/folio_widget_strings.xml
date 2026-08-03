@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="folio_widget_brand">Folio</string>
+  <string name="folio_widget_description">Eingangsanzahl und privater Schnellscan-Zugriff</string>
+  <string name="folio_widget_inbox">Eingang</string>
+  <string name="folio_widget_inbox_item">Eingangselement · Schnellscan</string>
+  <string name="folio_widget_inbox_items">Eingangselemente · Schnellscan</string>
+  <string name="folio_widget_locked">Gesperrt</string>
+  <string name="folio_widget_open_scan">Folio öffnen · Schnellscan</string>
+</resources>

@@ -187,6 +187,10 @@ const entitlements = [
     ),
   ),
 ].sort();
+const expectedEntitlements = [
+  'com.apple.developer.default-data-protection',
+  'com.apple.security.application-groups',
+];
 const metadata = {
   bundleIdentifier: info.CFBundleIdentifier,
   version: info.CFBundleShortVersionString,
@@ -199,9 +203,9 @@ const metadata = {
 if (!metadata.minOSVersion || Object.keys(privacy).length === 0) {
   throw new Error('The archived app is missing AltStore compatibility metadata.');
 }
-if (entitlements.length > 0) {
+if (JSON.stringify(entitlements) !== JSON.stringify(expectedEntitlements)) {
   throw new Error(
-    `The sideloading build must not require special entitlements; received ${entitlements.join(', ')}.`,
+    `The sideloading entitlements do not match Folio's reviewed widget and share-extension policy; received ${entitlements.join(', ') || 'none'}.`,
   );
 }
 fs.writeFileSync(process.env.METADATA_PATH, `${JSON.stringify(metadata, null, 2)}\n`);

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "lastReviewed": "2026-08-02",
+  "privacyPolicyUrl": "https://github.com/Kirari04/folio-paperless/blob/main/docs/privacy-policy.md",
+  "supportUrl": "https://github.com/Kirari04/folio-paperless/issues",
+  "developerTracking": false,
+  "advertisingSdk": false,
+  "remotePushEnabled": false,
+  "developerOperatedDocumentService": false,
+  "directUserServerConnection": true,
+  "dataHandled": [
+    {
+      "category": "authentication-and-server-configuration",
+      "purpose": "Connect directly to a server selected by the user",
+      "storage": "operating-system-protected, profile-scoped",
+      "developerCollection": false,
+      "sharedWithThirdParties": false
+    },
+    {
+      "category": "user-documents-and-metadata",
+      "purpose": "Display, cache, upload, and edit documents at the user's request",
+      "storage": "app-private, profile-scoped, user-controlled",
+      "developerCollection": false,
+      "sharedWithThirdParties": false
+    },
+    {
+      "category": "diagnostics",
+      "purpose": "Show local operational failures to the user",
+      "storage": "app-local only",
+      "developerCollection": false,
+      "sharedWithThirdParties": false
+    }
+  ],
+  "platformIntegrations": {
+    "notifications": "Local only; redacted by default; no credentials, server URL, OCR, or files",
+    "osSearch": "Opt-in; generic title by default; permission-filtered; no content or credentials",
+    "widgets": "Locked state or bounded inbox count plus Quick Scan only",
+    "shortcuts": "Fixed Quick Scan, Inbox, and Search routes only",
+    "sharing": "Files selected or received by the user are staged in app-private storage"
+  },
+  "storeConsoleReviewRequired": true
+}

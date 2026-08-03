@@ -13,6 +13,10 @@ const APP_DESCRIPTION =
 const TINT_COLOR = "17231B";
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const EXPECTED_ENTITLEMENTS = [
+  "com.apple.developer.default-data-protection",
+  "com.apple.security.application-groups",
+];
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -71,8 +75,8 @@ function validateMetadata(metadata) {
     "entitlements must be an array.",
   );
   assert(
-    metadata.entitlements.length === 0,
-    `Folio's sideloading build must not require special entitlements; received ${metadata.entitlements.join(", ")}.`,
+    JSON.stringify(metadata.entitlements) === JSON.stringify(EXPECTED_ENTITLEMENTS),
+    `Folio's sideloading entitlements do not match the reviewed widget and share-extension policy; received ${metadata.entitlements.join(", ") || "none"}.`,
   );
 
   assertObject(metadata.privacy, "privacy");
@@ -90,7 +94,7 @@ function validateMetadata(metadata) {
     version,
     buildVersion,
     minOSVersion,
-    entitlements: [],
+    entitlements: [...EXPECTED_ENTITLEMENTS],
     privacy,
   };
 }
@@ -128,22 +132,17 @@ function validatePreviousSource(source, metadata) {
     "Previous source must not contain marketplaceID.",
   );
   assertObject(app.appPermissions, "previous appPermissions");
-  assert(
+  const permissionsMatch =
     JSON.stringify(app.appPermissions.entitlements ?? []) ===
-      JSON.stringify(metadata.entitlements),
-    "Previous source entitlements do not match the current IPA.",
-  );
-  assert(
+      JSON.stringify(metadata.entitlements) &&
     JSON.stringify(sortedObject(app.appPermissions.privacy ?? {})) ===
-      JSON.stringify(metadata.privacy),
-    "Previous source privacy permissions do not match the current IPA.",
-  );
+      JSON.stringify(metadata.privacy);
   assert(
     Array.isArray(app.versions),
     "Previous source versions must be an array.",
   );
 
-  return app.versions;
+  return permissionsMatch ? app.versions : [];
 }
 
 function validateVersion(version, label) {

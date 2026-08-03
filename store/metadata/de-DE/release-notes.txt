@@ -1,0 +1,8 @@
+Erste Store-Kandidatenversion von Folio für Paperless.
+
+- Getrennte Verbindungsprofile mit Token-, OIDC-, 2FA-, benutzerdefinierter Header- und Mutual-TLS-Authentifizierung.
+- Dauerhafter Import geteilter Dateien und Scans, Metadatenvorlagen, Offlinezugriff, Hintergrundabgleich und persistente Auftragszentrale.
+- Mehrfachaktionen, gespeicherte Ansichten, Metadatenkataloge, Dokumentsuche, Drucken, Dateivarianten, öffentliche Links und Paperless-3-Dokumentwerkzeuge.
+- Deutsche und englische Oberfläche, systemabhängige Darstellung, geprüfte Deep Links, redigierte Benachrichtigungen sowie datensparsame Kurzbefehle, Betriebssystemsuche und Widgets.
+
+Ein kompatibler Paperless-ngx-Server ist erforderlich. Signierte Store-Kandidaten müssen vor der Einreichung weiterhin auf echten Geräten und in den Store-Portalen geprüft werden.
