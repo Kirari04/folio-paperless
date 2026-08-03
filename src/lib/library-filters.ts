@@ -1,4 +1,4 @@
-import {
+import type {
   DocumentItem,
   LibraryFilters,
   LibrarySortOrder,
@@ -6,7 +6,13 @@ import {
   PaperlessOption,
   PaperlessSavedView,
   PaperlessSavedViewRule,
-} from '@/types/document';
+} from '../types/document.ts';
+import {
+  PAPERLESS_SAVED_VIEW_RULE,
+  isFolioEditableSavedViewRule,
+  savedViewRuleStateSignature,
+  type PaperlessQueryRuleType,
+} from './saved-view-controller.ts';
 
 export const emptyLibraryFilters: LibraryFilters = {
   status: 'any',
@@ -195,13 +201,20 @@ function dateValue(value: string | undefined) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function remoteIds(value: string | null) {
-  return (value || '').split(',').map((entry) => Number(entry.trim())).filter(Number.isFinite);
-}
-
 function localIds(options: PaperlessOption[], value: string | null) {
-  const ids = new Set(remoteIds(value));
-  return options.filter((option) => option.remoteId !== undefined && ids.has(option.remoteId)).map((option) => option.id);
+  const values = (value ?? '').split(',').map((entry) => entry.trim()).filter(Boolean);
+  if (!values.length || values.some((entry) => !/^\d+$/.test(entry))) {
+    return { complete: false, ids: [] as string[] };
+  }
+  const remoteIds = values.map(Number);
+  if (remoteIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+    return { complete: false, ids: [] as string[] };
+  }
+  const byRemoteId = new Map(
+    options.flatMap((option) => option.remoteId === undefined ? [] : [[option.remoteId, option.id] as const]),
+  );
+  const ids = remoteIds.flatMap((id) => byRemoteId.has(id) ? [byRemoteId.get(id)!] : []);
+  return { complete: ids.length === remoteIds.length, ids: [...new Set(ids)] };
 }
 
 function booleanRule(value: string | null) {
@@ -209,7 +222,22 @@ function booleanRule(value: string | null) {
 }
 
 function ruleDate(value: string | null) {
-  return value?.slice(0, 10) || '';
+  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '';
+}
+
+function shiftRuleDate(value: string | null, days: number) {
+  const date = ruleDate(value);
+  if (!isValidLibraryDate(date)) return '';
+  const shifted = new Date(`${date}T00:00:00Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10);
+}
+
+function shiftIntegerRule(value: string | null, amount: number) {
+  if (!value || !/^-?\d+$/.test(value.trim())) return '';
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) return '';
+  return String(parsed + amount);
 }
 
 function sortFromSavedView(view: PaperlessSavedView): LibrarySortOrder {
@@ -226,125 +254,353 @@ function sortFromSavedView(view: PaperlessSavedView): LibrarySortOrder {
   }
 }
 
+function savedViewProjectionGroup(ruleType: number) {
+  if ([5, 7].includes(ruleType)) return 'status';
+  if ([6, 17, 22].includes(ruleType)) return 'tags';
+  if ([3, 26, 27].includes(ruleType)) return 'correspondent';
+  if ([4, 28, 29].includes(ruleType)) return 'documentType';
+  if ([25, 30, 31].includes(ruleType)) return 'storagePath';
+  if ([32, 33, 34, 35].includes(ruleType)) return 'owner';
+  if ([38, 39, 40].includes(ruleType)) return 'customFields';
+  if ([8, 43].includes(ruleType)) return 'createdBefore';
+  if ([9, 44].includes(ruleType)) return 'createdAfter';
+  if ([13, 45].includes(ruleType)) return 'addedBefore';
+  if ([14, 46].includes(ruleType)) return 'addedAfter';
+  if (ruleType === 15) return 'modifiedBefore';
+  if (ruleType === 16) return 'modifiedAfter';
+  if (ruleType === 47) return 'mimeType';
+  if ([19, 20, 48, 49].includes(ruleType)) return 'query';
+  return null;
+}
+
 export function savedViewToLibraryState(view: PaperlessSavedView, catalog: PaperlessCatalog) {
   const filters = cloneLibraryFilters(emptyLibraryFilters);
   const extraRules: PaperlessSavedViewRule[] = [];
   let query = '';
+  let queryRuleType: PaperlessQueryRuleType = PAPERLESS_SAVED_VIEW_RULE.simpleText;
+  const queryRuleCount = view.filterRules.filter((rule) => [
+    PAPERLESS_SAVED_VIEW_RULE.legacyText,
+    PAPERLESS_SAVED_VIEW_RULE.fullTextQuery,
+    PAPERLESS_SAVED_VIEW_RULE.simpleTitle,
+    PAPERLESS_SAVED_VIEW_RULE.simpleText,
+  ].includes(rule.ruleType as PaperlessQueryRuleType)).length;
+  const projectionGroupRuleTypes = new Map<string, Set<number>>();
+  const projectionGroupRules = new Map<string, PaperlessSavedViewRule[]>();
+  for (const savedRule of view.filterRules) {
+    const group = savedViewProjectionGroup(savedRule.ruleType);
+    if (group) {
+      const types = projectionGroupRuleTypes.get(group) ?? new Set<number>();
+      types.add(savedRule.ruleType);
+      projectionGroupRuleTypes.set(group, types);
+      projectionGroupRules.set(group, [...(projectionGroupRules.get(group) ?? []), savedRule]);
+    }
+  }
+  const archiveRules = view.filterRules.filter((rule) => [2, 18, 23, 24].includes(rule.ruleType));
+  const archiveRuleTypes = new Set(archiveRules.map((rule) => rule.ruleType));
+  const archiveProjectionUnsafe = archiveRules.length > 0 && (
+    archiveRuleTypes.size !== archiveRules.length
+    || (archiveRules.length > 1 && archiveRules.some((rule) => rule.ruleType === 2 || rule.ruleType === 18))
+  );
+
+  const retainOpaque = (rule: PaperlessSavedViewRule) => {
+    extraRules.push({
+      ...rule,
+      extra: { ...(rule.extra ?? {}) },
+    });
+  };
+  const projectedIds = (rule: PaperlessSavedViewRule, options: PaperlessOption[]) => {
+    const resolved = localIds(options, rule.value);
+    if (!resolved.complete) {
+      retainOpaque(rule);
+      return null;
+    }
+    return resolved.ids;
+  };
+  const mergedIds = (current: string[], next: string[]) => [...new Set([...current, ...next])];
+  const multiRuleOptions = (ruleType: number) => {
+    if ([6, 17, 22].includes(ruleType)) return catalog.tags;
+    if ([26, 27].includes(ruleType)) return catalog.correspondents;
+    if ([28, 29].includes(ruleType)) return catalog.documentTypes;
+    if ([30, 31].includes(ruleType)) return catalog.storagePaths;
+    if ([33, 35].includes(ruleType)) return catalog.owners;
+    if ([38, 39, 40].includes(ruleType)) {
+      return catalog.customFields.map((field) => ({ id: field.id, remoteId: field.remoteId, name: field.name }));
+    }
+    return null;
+  };
+  const unsafeProjectionGroups = new Set(
+    [...projectionGroupRules].flatMap(([group, rules]) => {
+      if (rules.length < 2) return [];
+      const types = projectionGroupRuleTypes.get(group)!;
+      const options = types.size === 1 ? multiRuleOptions(rules[0].ruleType) : null;
+      const safelyMergeable = options !== null && rules.every((savedRule) => (
+        isFolioEditableSavedViewRule(savedRule.ruleType, savedRule.value)
+        && Object.keys(savedRule.extra ?? {}).length === 0
+        && localIds(options, savedRule.value).complete
+      ));
+      return safelyMergeable ? [] : [group];
+    }),
+  );
 
   for (const rule of view.filterRules) {
+    const projectionGroup = savedViewProjectionGroup(rule.ruleType);
+    if (
+      (projectionGroup && unsafeProjectionGroups.has(projectionGroup))
+      || (archiveProjectionUnsafe && [2, 18, 23, 24].includes(rule.ruleType))
+    ) {
+      retainOpaque(rule);
+      continue;
+    }
+    // Supplemental fields may affect a newer server's interpretation. Keep
+    // the entire rule opaque instead of applying only the familiar subset.
+    if (
+      !isFolioEditableSavedViewRule(rule.ruleType, rule.value)
+      || Object.keys(rule.extra ?? {}).length > 0
+    ) {
+      retainOpaque(rule);
+      continue;
+    }
     switch (rule.ruleType) {
       case 5:
-        filters.status = booleanRule(rule.value) ? 'inbox' : 'any';
+        filters.status = 'inbox';
         break;
       case 7:
         filters.status = booleanRule(rule.value) ? 'tagged' : 'untagged';
         break;
-      case 6:
-        filters.tagIds = localIds(catalog.tags, rule.value);
+      case 6: {
+        const ids = projectedIds(rule, catalog.tags);
+        if (!ids) break;
+        filters.tagIds = mergedIds(filters.tagIds, ids);
         filters.tagMode = 'all';
         break;
-      case 17:
-        filters.tagIds = localIds(catalog.tags, rule.value);
+      }
+      case 17: {
+        const ids = projectedIds(rule, catalog.tags);
+        if (!ids) break;
+        filters.tagIds = mergedIds(filters.tagIds, ids);
         filters.tagMode = 'none';
         break;
-      case 22:
-        filters.tagIds = localIds(catalog.tags, rule.value);
+      }
+      case 22: {
+        const ids = projectedIds(rule, catalog.tags);
+        if (!ids) break;
+        filters.tagIds = mergedIds(filters.tagIds, ids);
         filters.tagMode = 'any';
         break;
+      }
       case 3:
         if (rule.value === null) filters.correspondentMissing = true;
         else if (rule.value === '-1') {
           filters.correspondentMissing = true;
           filters.correspondentMode = 'exclude';
         }
-        else filters.correspondentIds = localIds(catalog.correspondents, rule.value);
+        else {
+          const ids = projectedIds(rule, catalog.correspondents);
+          if (ids) filters.correspondentIds = ids;
+        }
         break;
       case 26:
-      case 27:
-        filters.correspondentIds = localIds(catalog.correspondents, rule.value);
+      case 27: {
+        const ids = projectedIds(rule, catalog.correspondents);
+        if (!ids) break;
+        filters.correspondentIds = mergedIds(filters.correspondentIds, ids);
         filters.correspondentMode = rule.ruleType === 27 ? 'exclude' : 'include';
         break;
+      }
       case 4:
         if (rule.value === null) filters.documentTypeMissing = true;
         else if (rule.value === '-1') {
           filters.documentTypeMissing = true;
           filters.documentTypeMode = 'exclude';
         }
-        else filters.documentTypeIds = localIds(catalog.documentTypes, rule.value);
+        else {
+          const ids = projectedIds(rule, catalog.documentTypes);
+          if (ids) filters.documentTypeIds = ids;
+        }
         break;
       case 28:
-      case 29:
-        filters.documentTypeIds = localIds(catalog.documentTypes, rule.value);
+      case 29: {
+        const ids = projectedIds(rule, catalog.documentTypes);
+        if (!ids) break;
+        filters.documentTypeIds = mergedIds(filters.documentTypeIds, ids);
         filters.documentTypeMode = rule.ruleType === 29 ? 'exclude' : 'include';
         break;
+      }
       case 25:
         if (rule.value === null) filters.storagePathMissing = true;
         else if (rule.value === '-1') {
           filters.storagePathMissing = true;
           filters.storagePathMode = 'exclude';
         }
-        else filters.storagePathIds = localIds(catalog.storagePaths, rule.value);
+        else {
+          const ids = projectedIds(rule, catalog.storagePaths);
+          if (ids) filters.storagePathIds = ids;
+        }
         break;
       case 30:
-      case 31:
-        filters.storagePathIds = localIds(catalog.storagePaths, rule.value);
+      case 31: {
+        const ids = projectedIds(rule, catalog.storagePaths);
+        if (!ids) break;
+        filters.storagePathIds = mergedIds(filters.storagePathIds, ids);
         filters.storagePathMode = rule.ruleType === 31 ? 'exclude' : 'include';
         break;
+      }
       case 32:
         if (rule.value === null) filters.ownerMissing = true;
-        else filters.ownerIds = localIds(catalog.owners, rule.value);
+        else {
+          const ids = projectedIds(rule, catalog.owners);
+          if (ids) filters.ownerIds = ids;
+        }
         break;
       case 33:
-      case 35:
-        filters.ownerIds = localIds(catalog.owners, rule.value);
+      case 35: {
+        const ids = projectedIds(rule, catalog.owners);
+        if (!ids) break;
+        filters.ownerIds = mergedIds(filters.ownerIds, ids);
         filters.ownerMode = rule.ruleType === 35 ? 'exclude' : 'include';
         break;
+      }
       case 34:
         filters.ownerMissing = true;
         filters.ownerMode = booleanRule(rule.value) ? 'include' : 'exclude';
         break;
       case 38:
       case 39:
-      case 40:
-        filters.customFieldIds = localIds(
+      case 40: {
+        const ids = projectedIds(
+          rule,
           catalog.customFields.map((field) => ({ id: field.id, remoteId: field.remoteId, name: field.name })),
-          rule.value,
         );
+        if (!ids) break;
+        filters.customFieldIds = mergedIds(filters.customFieldIds, ids);
         filters.customFieldMode = rule.ruleType === 38 ? 'all' : rule.ruleType === 40 ? 'none' : 'any';
         break;
-      case 8: filters.createdBefore = ruleDate(rule.value); break;
-      case 9: filters.createdAfter = ruleDate(rule.value); break;
-      case 13: filters.addedBefore = ruleDate(rule.value); break;
-      case 14: filters.addedAfter = ruleDate(rule.value); break;
-      case 15: filters.modifiedBefore = ruleDate(rule.value); break;
-      case 16: filters.modifiedAfter = ruleDate(rule.value); break;
-      case 43: filters.createdBefore = ruleDate(rule.value); break;
-      case 44: filters.createdAfter = ruleDate(rule.value); break;
-      case 45: filters.addedBefore = ruleDate(rule.value); break;
-      case 46: filters.addedAfter = ruleDate(rule.value); break;
+      }
+      // Legacy rules 8/9/13/14 are strict (< and >), while Folio's range
+      // editor and the current Paperless 43–46 rules are inclusive. Moving a
+      // date-only boundary by one day preserves the predicate when a legacy
+      // saved view is edited and written back.
+      case 8: {
+        const date = shiftRuleDate(rule.value, -1);
+        if (date) filters.createdBefore = date;
+        else retainOpaque(rule);
+        break;
+      }
+      case 9: {
+        const date = shiftRuleDate(rule.value, 1);
+        if (date) filters.createdAfter = date;
+        else retainOpaque(rule);
+        break;
+      }
+      case 13: {
+        const date = shiftRuleDate(rule.value, -1);
+        if (date) filters.addedBefore = date;
+        else retainOpaque(rule);
+        break;
+      }
+      case 14: {
+        const date = shiftRuleDate(rule.value, 1);
+        if (date) filters.addedAfter = date;
+        else retainOpaque(rule);
+        break;
+      }
+      case 15: {
+        const date = shiftRuleDate(rule.value, -1);
+        if (date) filters.modifiedBefore = date;
+        else retainOpaque(rule);
+        break;
+      }
+      case 16: {
+        const date = shiftRuleDate(rule.value, 1);
+        if (date) filters.modifiedAfter = date;
+        else retainOpaque(rule);
+        break;
+      }
+      case 43: {
+        const date = ruleDate(rule.value);
+        if (isValidLibraryDate(date) && date) filters.createdBefore = date;
+        else retainOpaque(rule);
+        break;
+      }
+      case 44: {
+        const date = ruleDate(rule.value);
+        if (isValidLibraryDate(date) && date) filters.createdAfter = date;
+        else retainOpaque(rule);
+        break;
+      }
+      case 45: {
+        const date = ruleDate(rule.value);
+        if (isValidLibraryDate(date) && date) filters.addedBefore = date;
+        else retainOpaque(rule);
+        break;
+      }
+      case 46: {
+        const date = ruleDate(rule.value);
+        if (isValidLibraryDate(date) && date) filters.addedAfter = date;
+        else retainOpaque(rule);
+        break;
+      }
       case 2:
-        filters.archiveSerialMin = rule.value || '';
-        filters.archiveSerialMax = rule.value || '';
+        // ASNs are integers. The open interval (n - 1, n + 1) is exactly
+        // equivalent to Paperless' legacy equality rule for n.
+        filters.archiveSerialMin = shiftIntegerRule(rule.value, -1);
+        filters.archiveSerialMax = shiftIntegerRule(rule.value, 1);
+        if (!filters.archiveSerialMin || !filters.archiveSerialMax) extraRules.push(rule);
         break;
       case 18:
-        if (booleanRule(rule.value)) filters.archiveSerialMissing = true;
-        else extraRules.push(rule);
+        filters.archiveSerialMissing = true;
         break;
-      case 23: filters.archiveSerialMin = rule.value || ''; break;
-      case 24: filters.archiveSerialMax = rule.value || ''; break;
-      case 47: filters.mimeTypes = rule.value ? [rule.value] : []; break;
+      case 23:
+        if (rule.value && /^-?\d+$/.test(rule.value)) filters.archiveSerialMin = rule.value;
+        else retainOpaque(rule);
+        break;
+      case 24:
+        if (rule.value && /^-?\d+$/.test(rule.value)) filters.archiveSerialMax = rule.value;
+        else retainOpaque(rule);
+        break;
+      case 47:
+        if (rule.value) filters.mimeTypes = [rule.value];
+        else retainOpaque(rule);
+        break;
       case 19:
       case 20:
+      case 48:
       case 49:
-        if (!query) query = rule.value || '';
-        else extraRules.push(rule);
+        if (queryRuleCount === 1) {
+          if (rule.value) {
+            query = rule.value;
+            queryRuleType = rule.ruleType;
+          } else retainOpaque(rule);
+        } else retainOpaque(rule);
         break;
       default:
-        extraRules.push(rule);
+        retainOpaque(rule);
     }
   }
 
-  return { filters, query, extraRules, sortOrder: sortFromSavedView(view) };
+  const state = {
+    filters,
+    query,
+    queryRuleType,
+    extraRules,
+    sortOrder: sortFromSavedView(view),
+  };
+  return {
+    ...state,
+    sourceRules: view.filterRules.map((rule) => ({ ...rule, extra: { ...(rule.extra ?? {}) } })),
+    sourceRuleStateSignature: savedViewRuleStateSignature(state),
+    savedViewExtra: { ...(view.extra ?? {}) },
+    savedViewPresentation: {
+      pageSize: view.pageSize,
+      displayMode: view.displayMode,
+      displayFields: [...view.displayFields],
+    },
+    savedViewSort: {
+      sortField: view.sortField,
+      sortReverse: view.sortReverse,
+      projectedSortOrder: state.sortOrder,
+    },
+  };
 }
 
 export function isValidLibraryDate(value: string) {

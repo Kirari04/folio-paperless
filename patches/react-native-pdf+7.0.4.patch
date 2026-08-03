@@ -1,0 +1,945 @@
+diff --git a/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfManager.java b/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfManager.java
+index 03e6de2..6e9cf39 100644
+--- a/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfManager.java
++++ b/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfManager.java
+@@ -60,7 +60,8 @@ public class PdfManager extends SimpleViewManager<PdfView> implements RNPDFPdfVi
+
+     @Override
+     public void onDropViewInstance(PdfView pdfView) {
+-        pdfView = null;
++        pdfView.disposeSearch();
++        super.onDropViewInstance(pdfView);
+     }
+
+     @ReactProp(name = "path")
+@@ -154,6 +155,16 @@ public class PdfManager extends SimpleViewManager<PdfView> implements RNPDFPdfVi
+         pdfView.setSinglePage(singlePage);
+     }
+
++    @ReactProp(name = "searchQuery")
++    public void setSearchQuery(PdfView pdfView, String searchQuery) {
++        pdfView.setSearchQuery(searchQuery);
++    }
++
++    @ReactProp(name = "searchCurrentIndex")
++    public void setSearchCurrentIndex(PdfView pdfView, int searchCurrentIndex) {
++        pdfView.setSearchCurrentIndex(searchCurrentIndex);
++    }
++
+     // It seems funny, but this method is called through delegate on Paper, but on Fabric we need to
+     // use `receiveCommand` method and call this one there
+     @Override
+diff --git a/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfView.java b/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfView.java
+index e9a1d16..8c2ee6c 100644
+--- a/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfView.java
++++ b/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfView.java
+@@ -19,17 +19,26 @@ import android.os.ParcelFileDescriptor;
+ import android.util.SizeF;
+ import android.view.View;
+ import android.view.ViewGroup;
+-import android.util.Log;
+ import android.net.Uri;
+ import android.util.AttributeSet;
+ import android.view.MotionEvent;
+ import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.Paint;
++import android.graphics.Rect;
++import android.graphics.RectF;
+ import android.graphics.pdf.PdfRenderer;
+
+ import io.legere.pdfiumandroid.util.Config;
+ import io.legere.pdfiumandroid.util.ConfigKt;
+ import io.legere.pdfiumandroid.util.AlreadyClosedBehavior;
+ import io.legere.pdfiumandroid.DefaultLogger;
++import io.legere.pdfiumandroid.FindResult;
++import io.legere.pdfiumandroid.PdfDocument;
++import io.legere.pdfiumandroid.PdfPage;
++import io.legere.pdfiumandroid.PdfTextPage;
++import io.legere.pdfiumandroid.PdfiumCore;
++import io.legere.pdfiumandroid.util.Size;
+
+ import com.facebook.react.uimanager.ThemedReactContext;
+ import com.facebook.react.uimanager.UIManagerHelper;
+@@ -55,16 +64,26 @@ import com.facebook.react.uimanager.events.Event;
+ import com.facebook.react.uimanager.events.RCTEventEmitter;
+
+
+-import static java.lang.String.format;
+-
+ import java.io.FileNotFoundException;
+ import java.io.InputStream;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++import java.util.concurrent.Future;
++import java.util.concurrent.atomic.AtomicInteger;
+
+ import com.google.gson.Gson;
+
+ import org.wonday.pdf.events.TopChangeEvent;
+
+ public class PdfView extends PDFView implements OnPageChangeListener,OnLoadCompleteListener,OnErrorListener,OnTapListener,OnDrawListener,OnPageScrollListener, LinkHandler {
++    private static final int MAX_SEARCH_MATCHES = 2000;
++    private static final int MAX_SEARCH_QUERY_LENGTH = 160;
++    private static final int MAX_RECTS_PER_MATCH = 64;
++    private static final int SEARCH_SNIPPET_RADIUS = 58;
++
+     private int page = 1;               // start from 1
+     private boolean horizontal = false;
+     private float scale = 1;
+@@ -90,6 +109,15 @@ public class PdfView extends PDFView implements OnPageChangeListener,OnLoadCompl
+     private float lastPageWidth = 0;
+     private float lastPageHeight = 0;
+
++    private final ExecutorService searchExecutor = Executors.newSingleThreadExecutor();
++    private final AtomicInteger searchGeneration = new AtomicInteger();
++    private final Paint searchHighlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint activeSearchHighlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private volatile Future<?> searchTask;
++    private volatile List<PdfSearchMatch> searchMatches = Collections.emptyList();
++    private String searchQuery = "";
++    private int searchCurrentIndex = 0;
++
+     // used to store the parameters for `super.onSizeChanged`
+     private int oldW = 0;
+     private int oldH = 0;
+@@ -97,6 +125,8 @@ public class PdfView extends PDFView implements OnPageChangeListener,OnLoadCompl
+     public PdfView(Context context, AttributeSet set){
+         super(context, set);
+         ConfigKt.setPdfiumConfig(new Config(new DefaultLogger(), AlreadyClosedBehavior.IGNORE));
++        searchHighlightPaint.setColor(Color.argb(92, 255, 221, 45));
++        activeSearchHighlightPaint.setColor(Color.argb(158, 255, 174, 0));
+     }
+
+     @Override
+@@ -104,8 +134,6 @@ public class PdfView extends PDFView implements OnPageChangeListener,OnLoadCompl
+         // pdf lib page start from 0, convert it to our page (start from 1)
+         page = page+1;
+         this.page = page;
+-        showLog(format("%s %s / %s", path, page, numberOfPages));
+-
+         WritableMap event = Arguments.createMap();
+         event.putString("message", "pageChanged|"+page+"|"+numberOfPages);
+
+@@ -170,6 +198,10 @@ public class PdfView extends PDFView implements OnPageChangeListener,OnLoadCompl
+         if (dispatcher != null) {
+             dispatcher.dispatchEvent(tce);
+         }
++
++        if (!searchQuery.isEmpty() && searchTask == null) {
++            startSearch();
++        }
+         //        ReactContext reactContext = (ReactContext)this.getContext();
+ //        reactContext.getJSModule(RCTEventEmitter.class).receiveEvent(
+ //            this.getId(),
+@@ -280,6 +312,24 @@ public class PdfView extends PDFView implements OnPageChangeListener,OnLoadCompl
+
+         lastPageWidth = pageWidth;
+         lastPageHeight = pageHeight;
++
++        List<PdfSearchMatch> matches = searchMatches;
++        if (matches.isEmpty()) return;
++
++        float pageOriginX = horizontal ? 0f : Math.max(0f, (getWidth() * getZoom() - pageWidth) / 2f);
++        float pageOriginY = horizontal ? Math.max(0f, (getHeight() * getZoom() - pageHeight) / 2f) : 0f;
++        for (int index = 0; index < matches.size(); index++) {
++            PdfSearchMatch match = matches.get(index);
++            if (match.page != displayedPage + 1) continue;
++            Paint paint = index == searchCurrentIndex ? activeSearchHighlightPaint : searchHighlightPaint;
++            for (RectF normalized : match.rects) {
++                float left = pageOriginX + normalized.left * pageWidth;
++                float top = pageOriginY + normalized.top * pageHeight;
++                float right = pageOriginX + normalized.right * pageWidth;
++                float bottom = pageOriginY + normalized.bottom * pageHeight;
++                canvas.drawRoundRect(left - 1f, top - 1f, right + 1f, bottom + 1f, 2f, 2f, paint);
++            }
++        }
+     }
+
+     @Override
+@@ -300,8 +350,6 @@ public class PdfView extends PDFView implements OnPageChangeListener,OnLoadCompl
+     }
+
+     public void drawPdf() {
+-        showLog(format("drawPdf path:%s %s", this.path, this.page));
+-
+         if (this.path != null){
+
+             // set scale
+@@ -332,7 +380,7 @@ public class PdfView extends PDFView implements OnPageChangeListener,OnLoadCompl
+                 .onPageChange(this)
+                 .onLoad(this)
+                 .onError(this)
+-                .onDraw(this)
++                .onDrawAll(this)
+                 .onPageScroll(this)
+                 .spacing(this.spacing)
+                 .password(this.password)
+@@ -359,7 +407,7 @@ public class PdfView extends PDFView implements OnPageChangeListener,OnLoadCompl
+                         this.page = pageCount;
+                     }
+                 } catch (IOException e) {
+-                    Log.e("error", "error while reading PDF", e);
++                    onError(new IOException("Unable to determine PDF page count."));
+                 }
+             }
+
+@@ -379,9 +427,255 @@ public class PdfView extends PDFView implements OnPageChangeListener,OnLoadCompl
+     }
+
+     public void setPath(String path) {
++        if (this.path != null && !this.path.equals(path)) {
++            cancelSearch();
++            searchMatches = Collections.emptyList();
++        }
+         this.path = path;
+     }
+
++    public void setSearchQuery(String value) {
++        String next = value == null ? "" : value.trim();
++        if (next.length() > MAX_SEARCH_QUERY_LENGTH || containsControlCharacter(next)) {
++            cancelSearch();
++            searchQuery = "";
++            searchMatches = Collections.emptyList();
++            emitSearchPayload(new PdfSearchPayload("unavailable", "", Collections.emptyList(), false));
++            postInvalidate();
++            return;
++        }
++        if (next.equals(searchQuery)) return;
++        cancelSearch();
++        searchQuery = next;
++        searchCurrentIndex = 0;
++        searchMatches = Collections.emptyList();
++        postInvalidate();
++        if (next.isEmpty()) {
++            emitSearchPayload(new PdfSearchPayload("idle", "", Collections.emptyList(), false));
++            return;
++        }
++        startSearch();
++    }
++
++    public void setSearchCurrentIndex(int value) {
++        searchCurrentIndex = Math.max(0, value);
++        postInvalidate();
++    }
++
++    public void disposeSearch() {
++        cancelSearch();
++        searchExecutor.shutdownNow();
++        searchMatches = Collections.emptyList();
++    }
++
++    private static boolean containsControlCharacter(String value) {
++        for (int index = 0; index < value.length(); index++) {
++            char character = value.charAt(index);
++            if (character <= 0x1f || character == 0x7f) return true;
++        }
++        return false;
++    }
++
++    private void cancelSearch() {
++        searchGeneration.incrementAndGet();
++        Future<?> task = searchTask;
++        searchTask = null;
++        if (task != null) task.cancel(true);
++    }
++
++    private void startSearch() {
++        final String query = searchQuery;
++        final String sourcePath = path;
++        final String documentPassword = password;
++        if (query.isEmpty() || sourcePath == null || sourcePath.isEmpty() || searchExecutor.isShutdown()) return;
++
++        final int generation = searchGeneration.incrementAndGet();
++        emitSearchPayload(new PdfSearchPayload("searching", query, Collections.emptyList(), false));
++        searchTask = searchExecutor.submit(() -> runSearch(generation, sourcePath, documentPassword, query));
++    }
++
++    private void runSearch(int generation, String sourcePath, String documentPassword, String query) {
++        List<PdfSearchMatch> matches = new ArrayList<>();
++        boolean truncated = false;
++        boolean hasSearchableText = false;
++        try {
++            ParcelFileDescriptor descriptor = openSearchDescriptor(sourcePath);
++            if (descriptor == null) throw new IOException("PDF file descriptor unavailable");
++            PdfiumCore core = new PdfiumCore(getContext(), ConfigKt.getPdfiumConfig());
++            try (PdfDocument document = core.newDocument(descriptor, documentPassword.isEmpty() ? null : documentPassword)) {
++                int pageCount = document.getPageCount();
++                for (int pageIndex = 0; pageIndex < pageCount; pageIndex++) {
++                    if (isSearchCanceled(generation)) return;
++                    try (PdfPage pdfPage = document.openPage(pageIndex);
++                         PdfTextPage textPage = pdfPage.openTextPage()) {
++                        int characterCount = Math.max(0, textPage.textPageCountChars());
++                        if (characterCount == 0) continue;
++                        hasSearchableText = true;
++                        Size pageSize = pdfPage.getPageSize(72);
++                        try (FindResult result = textPage.findStart(query, Collections.emptySet(), 0)) {
++                            while (result != null && result.findNext()) {
++                                if (isSearchCanceled(generation)) return;
++                                int start = result.getSchResultIndex();
++                                int length = result.getSchCount();
++                                if (start < 0 || length <= 0) continue;
++                                matches.add(createSearchMatch(
++                                    pageIndex + 1,
++                                    start,
++                                    length,
++                                    characterCount,
++                                    pageSize,
++                                    pdfPage,
++                                    textPage
++                                ));
++                                if (matches.size() >= MAX_SEARCH_MATCHES) {
++                                    truncated = true;
++                                    break;
++                                }
++                            }
++                        }
++                    }
++                    if (truncated) break;
++                }
++            }
++        } catch (Exception ignored) {
++            if (!isSearchCanceled(generation)) {
++                emitSearchPayload(new PdfSearchPayload("unavailable", query, Collections.emptyList(), false));
++            }
++            return;
++        }
++
++        if (isSearchCanceled(generation)) return;
++        List<PdfSearchMatch> completedMatches = Collections.unmodifiableList(new ArrayList<>(matches));
++        searchMatches = completedMatches;
++        searchTask = null;
++        postInvalidate();
++        emitSearchPayload(new PdfSearchPayload(
++            hasSearchableText ? "ready" : "unavailable",
++            query,
++            completedMatches,
++            truncated
++        ));
++    }
++
++    private boolean isSearchCanceled(int generation) {
++        return generation != searchGeneration.get() || Thread.currentThread().isInterrupted();
++    }
++
++    private ParcelFileDescriptor openSearchDescriptor(String sourcePath) throws IOException {
++        Uri uri = getURI(sourcePath);
++        String scheme = uri.getScheme();
++        if (ContentResolver.SCHEME_CONTENT.equals(scheme)) {
++            return getContext().getContentResolver().openFileDescriptor(uri, "r");
++        }
++        if (scheme == null || ContentResolver.SCHEME_FILE.equals(scheme)) {
++            String filePath = uri.getPath();
++            if (filePath == null) throw new IOException("PDF file path unavailable");
++            return ParcelFileDescriptor.open(new File(filePath), ParcelFileDescriptor.MODE_READ_ONLY);
++        }
++        throw new IOException("Only local PDF files can be searched");
++    }
++
++    private PdfSearchMatch createSearchMatch(
++        int pageNumber,
++        int start,
++        int length,
++        int characterCount,
++        Size pageSize,
++        PdfPage pdfPage,
++        PdfTextPage textPage
++    ) {
++        int from = Math.max(0, start - SEARCH_SNIPPET_RADIUS);
++        int to = Math.min(characterCount, start + length + SEARCH_SNIPPET_RADIUS);
++        String excerpt = textPage.textPageGetText(from, Math.max(0, to - from));
++        if (excerpt == null) excerpt = "";
++        int relativeStart = Math.min(excerpt.length(), Math.max(0, start - from));
++        int relativeEnd = Math.min(excerpt.length(), relativeStart + length);
++        String before = (from > 0 ? "…" : "") + excerpt.substring(0, relativeStart);
++        String hit = excerpt.substring(relativeStart, relativeEnd);
++        String after = excerpt.substring(relativeEnd) + (to < characterCount ? "…" : "");
++
++        List<RectF> normalizedRects = new ArrayList<>();
++        int rectangleCount = Math.min(MAX_RECTS_PER_MATCH, Math.max(0, textPage.textPageCountRects(start, length)));
++        int width = Math.max(1, pageSize.getWidth());
++        int height = Math.max(1, pageSize.getHeight());
++        for (int rectIndex = 0; rectIndex < rectangleCount; rectIndex++) {
++            RectF pageRect = textPage.textPageGetRect(rectIndex);
++            if (pageRect == null) continue;
++            Rect deviceRect = pdfPage.mapRectToDevice(0, 0, width, height, 0, pageRect);
++            float left = clamp01(Math.min(deviceRect.left, deviceRect.right) / (float) width);
++            float right = clamp01(Math.max(deviceRect.left, deviceRect.right) / (float) width);
++            float top = clamp01(Math.min(deviceRect.top, deviceRect.bottom) / (float) height);
++            float bottom = clamp01(Math.max(deviceRect.top, deviceRect.bottom) / (float) height);
++            if (right > left && bottom > top) normalizedRects.add(new RectF(left, top, right, bottom));
++        }
++        return new PdfSearchMatch(pageNumber, start, start + length, before, hit, after, normalizedRects);
++    }
++
++    private static float clamp01(float value) {
++        return Math.max(0f, Math.min(1f, value));
++    }
++
++    private void emitSearchPayload(PdfSearchPayload payload) {
++        String json = new Gson().toJson(payload);
++        post(() -> dispatchMessage("searchResult|" + json));
++    }
++
++    private void dispatchMessage(String message) {
++        WritableMap event = Arguments.createMap();
++        event.putString("message", message);
++        ThemedReactContext context = (ThemedReactContext) getContext();
++        EventDispatcher dispatcher = UIManagerHelper.getEventDispatcherForReactTag(context, getId());
++        if (dispatcher != null) {
++            dispatcher.dispatchEvent(new TopChangeEvent(
++                UIManagerHelper.getSurfaceId(this),
++                getId(),
++                event
++            ));
++        }
++    }
++
++    private static final class PdfSearchPayload {
++        final String status;
++        final String query;
++        final List<PdfSearchMatch> matches;
++        final boolean truncated;
++
++        PdfSearchPayload(String status, String query, List<PdfSearchMatch> matches, boolean truncated) {
++            this.status = status;
++            this.query = query;
++            this.matches = matches;
++            this.truncated = truncated;
++        }
++    }
++
++    private static final class PdfSearchMatch {
++        final int page;
++        final int start;
++        final int end;
++        final String snippetBefore;
++        final String snippetMatch;
++        final String snippetAfter;
++        transient final List<RectF> rects;
++
++        PdfSearchMatch(
++            int page,
++            int start,
++            int end,
++            String snippetBefore,
++            String snippetMatch,
++            String snippetAfter,
++            List<RectF> rects
++        ) {
++            this.page = page;
++            this.start = start;
++            this.end = end;
++            this.snippetBefore = snippetBefore;
++            this.snippetMatch = snippetMatch;
++            this.snippetAfter = snippetAfter;
++            this.rects = rects;
++        }
++    }
++
+     // page start from 1
+     public void setPage(int page) {
+         this.page = Math.max(page, 1);
+@@ -508,10 +802,6 @@ public class PdfView extends PDFView implements OnPageChangeListener,OnLoadCompl
+         this.jumpTo(page);
+     }
+
+-    private void showLog(final String str) {
+-        Log.d("PdfView", str);
+-    }
+-
+     private Uri getURI(final String uri) {
+         Uri parsed = Uri.parse(uri);
+
+diff --git a/node_modules/react-native-pdf/android/src/paper/java/com/facebook/react/viewmanagers/RNPDFPdfViewManagerDelegate.java b/node_modules/react-native-pdf/android/src/paper/java/com/facebook/react/viewmanagers/RNPDFPdfViewManagerDelegate.java
+index 43848d9..533f1a9 100644
+--- a/node_modules/react-native-pdf/android/src/paper/java/com/facebook/react/viewmanagers/RNPDFPdfViewManagerDelegate.java
++++ b/node_modules/react-native-pdf/android/src/paper/java/com/facebook/react/viewmanagers/RNPDFPdfViewManagerDelegate.java
+@@ -77,6 +77,12 @@ public class RNPDFPdfViewManagerDelegate<T extends View, U extends BaseViewManag
+       case "singlePage":
+         mViewManager.setSinglePage(view, value == null ? false : (boolean) value);
+         break;
++      case "searchQuery":
++        mViewManager.setSearchQuery(view, value == null ? null : (String) value);
++        break;
++      case "searchCurrentIndex":
++        mViewManager.setSearchCurrentIndex(view, value == null ? 0 : ((Double) value).intValue());
++        break;
+       default:
+         super.setProperty(view, propName, value);
+     }
+diff --git a/node_modules/react-native-pdf/android/src/paper/java/com/facebook/react/viewmanagers/RNPDFPdfViewManagerInterface.java b/node_modules/react-native-pdf/android/src/paper/java/com/facebook/react/viewmanagers/RNPDFPdfViewManagerInterface.java
+index 397268f..618f45a 100644
+--- a/node_modules/react-native-pdf/android/src/paper/java/com/facebook/react/viewmanagers/RNPDFPdfViewManagerInterface.java
++++ b/node_modules/react-native-pdf/android/src/paper/java/com/facebook/react/viewmanagers/RNPDFPdfViewManagerInterface.java
+@@ -31,5 +31,7 @@ public interface RNPDFPdfViewManagerInterface<T extends View> {
+   void setSpacing(T view, int value);
+   void setPassword(T view, @Nullable String value);
+   void setSinglePage(T view, boolean value);
++  void setSearchQuery(T view, @Nullable String value);
++  void setSearchCurrentIndex(T view, int value);
+   void setNativePage(T view, int page);
+ }
+diff --git a/node_modules/react-native-pdf/fabric/RNPDFPdfNativeComponent.js b/node_modules/react-native-pdf/fabric/RNPDFPdfNativeComponent.js
+index 43fea3b..ad9e7c7 100644
+--- a/node_modules/react-native-pdf/fabric/RNPDFPdfNativeComponent.js
++++ b/node_modules/react-native-pdf/fabric/RNPDFPdfNativeComponent.js
+@@ -32,6 +32,8 @@
+    password: ?string,
+    onChange: ?BubblingEventHandler<ChangeEvent>,
+    singlePage: ?boolean,
++   searchQuery: ?string,
++   searchCurrentIndex: ?Int32,
+  |}>;
+
+  interface NativeCommands {
+diff --git a/node_modules/react-native-pdf/index.d.ts b/node_modules/react-native-pdf/index.d.ts
+index cfcea72..ad5e481 100644
+--- a/node_modules/react-native-pdf/index.d.ts
++++ b/node_modules/react-native-pdf/index.d.ts
+@@ -27,6 +27,22 @@ export type Source = {
+     method?: string;
+ };
+
++export type PdfSearchMatch = {
++    page: number;
++    start: number;
++    end: number;
++    snippetBefore: string;
++    snippetMatch: string;
++    snippetAfter: string;
++};
++
++export type PdfSearchResult = {
++    status: 'idle' | 'searching' | 'ready' | 'unavailable';
++    query: string;
++    matches: PdfSearchMatch[];
++    truncated: boolean;
++};
++
+ export interface PdfProps {
+     style?: ReactNative.StyleProp<ReactNative.ViewStyle>,
+     progressContainerStyle?: ReactNative.StyleProp<ReactNative.ViewStyle>,
+@@ -56,6 +72,11 @@ export interface PdfProps {
+     fitPolicy?: 0 | 1 | 2,
+     trustAllCerts?: boolean,
+     singlePage?: boolean,
++    /** Search the locally rendered PDF using native PDFKit/Pdfium text geometry. */
++    searchQuery?: string,
++    /** Zero-based match to emphasize and reveal. */
++    searchCurrentIndex?: number,
++    onPdfSearchResult?: (result: PdfSearchResult) => void,
+     onLoadProgress?: (percent: number,) => void,
+     onLoadComplete?: (numberOfPages: number, path: string, size: {height: number, width: number}, tableContents?: TableContent[]) => void,
+     onPageChanged?: (page: number, numberOfPages: number) => void,
+diff --git a/node_modules/react-native-pdf/index.js b/node_modules/react-native-pdf/index.js
+index f807178..affa2b7 100644
+--- a/node_modules/react-native-pdf/index.js
++++ b/node_modules/react-native-pdf/index.js
+@@ -65,6 +65,9 @@ export default class Pdf extends Component {
+         onPressLink: PropTypes.func,
+         enableTextSelection: PropTypes.bool,
+         onTextSelectionChange: PropTypes.func,
++        searchQuery: PropTypes.string,
++        searchCurrentIndex: PropTypes.number,
++        onPdfSearchResult: PropTypes.func,
+
+         // Props that are not available in the earlier react native version, added to prevent crashed on android
+         accessibilityLabel: PropTypes.string,
+@@ -112,6 +115,10 @@ export default class Pdf extends Component {
+         enableTextSelection: true,
+         onTextSelectionChange: (event) => {
+         },
++        searchQuery: "",
++        searchCurrentIndex: 0,
++        onPdfSearchResult: (result) => {
++        },
+     };
+
+     constructor(props) {
+@@ -375,7 +382,19 @@ export default class Pdf extends Component {
+             return;
+         }
+
+-        let message = event.nativeEvent.message.split('|');
++        const rawMessage = event.nativeEvent.message;
++        if (typeof rawMessage === 'string' && rawMessage.startsWith('searchResult|')) {
++            try {
++                const result = JSON.parse(rawMessage.substring('searchResult|'.length));
++                this.props.onPdfSearchResult && this.props.onPdfSearchResult(result);
++            } catch (error) {
++                // Ignore malformed native search events; never log PDF text or paths.
++            }
++            return;
++        }
++
++        if (typeof rawMessage !== 'string') return;
++        let message = rawMessage.split('|');
+         //__DEV__ && console.log("onChange: " + message);
+         if (message.length > 0) {
+
+diff --git a/node_modules/react-native-pdf/ios/RNPDFPdf/PdfManager.mm b/node_modules/react-native-pdf/ios/RNPDFPdf/PdfManager.mm
+index f004e73..291de32 100644
+--- a/node_modules/react-native-pdf/ios/RNPDFPdf/PdfManager.mm
++++ b/node_modules/react-native-pdf/ios/RNPDFPdf/PdfManager.mm
+@@ -64,7 +64,7 @@ RCT_EXPORT_METHOD(loadFile:(NSString *)path
+         CGPDFDocumentRef pdfRef = CGPDFDocumentCreateWithURL((__bridge CFURLRef) pdfURL);
+
+         if (pdfRef == NULL) {
+-            reject(RCTErrorUnspecified, [NSString stringWithFormat:@"Load pdf failed. path=%s",path.UTF8String], nil);
++            reject(RCTErrorUnspecified, @"Load pdf failed.", nil);
+             return;
+         }
+
+@@ -100,7 +100,7 @@ RCT_EXPORT_METHOD(loadFile:(NSString *)path
+         resolve(params);
+         return;
+     } else {
+-        reject(RCTErrorUnspecified, @"Load pdf failed. path=null", nil);
++        reject(RCTErrorUnspecified, @"Load pdf failed.", nil);
+         return;
+     }
+ }
+diff --git a/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.h b/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.h
+index 723ca7b..2b52444 100644
+--- a/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.h
++++ b/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.h
+@@ -51,6 +51,8 @@ UIView
+ @property(nonatomic) int spacing;
+ @property(nonatomic, strong) NSString *password;
+ @property(nonatomic) BOOL singlePage;
++@property(nonatomic, strong) NSString *searchQuery;
++@property(nonatomic) int searchCurrentIndex;
+
+ @property(nonatomic, copy) RCTBubblingEventBlock onChange;
+
+diff --git a/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.mm b/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.mm
+index de46c98..50214be 100644
+--- a/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.mm
++++ b/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.mm
+@@ -53,10 +53,14 @@
+
+ const float MAX_SCALE = 3.0f;
+ const float MIN_SCALE = 1.0f;
++const NSUInteger MAX_SEARCH_MATCHES = 2000;
++const NSUInteger MAX_SEARCH_QUERY_LENGTH = 160;
++const NSUInteger SEARCH_SNIPPET_RADIUS = 58;
+
+ @interface RNPDFPdfView() <PDFDocumentDelegate, PDFViewDelegate
+ #ifdef RCT_NEW_ARCH_ENABLED
+ , RCTRNPDFPdfViewViewProtocol
+ #endif
+ >
++- (BOOL)pdfDocumentContainsSearchableText;
+ @end
+@@ -75,6 +78,11 @@ const float MIN_SCALE = 1.0f;
+     UIPinchGestureRecognizer *_pinchRecognizer;
+     UILongPressGestureRecognizer *_longPressRecognizer;
+     UITapGestureRecognizer *_doubleTapEmptyRecognizer;
++    NSMutableArray<PDFSelection *> *_searchMatches;
++    NSMutableDictionary<NSNumber *, NSString *> *_searchPageTextCache;
++    NSString *_runningSearchQuery;
++    BOOL _searchTruncated;
++    NSInteger _highlightedSearchIndex;
+ }
+
+ #ifdef RCT_NEW_ARCH_ENABLED
+@@ -162,6 +170,15 @@ using namespace facebook::react;
+         _singlePage = newProps.singlePage;
+         [updatedPropNames addObject:@"singlePage"];
+     }
++    NSString *nextSearchQuery = RCTNSStringFromStringNilIfEmpty(newProps.searchQuery);
++    if (!((_searchQuery == nextSearchQuery) || [_searchQuery isEqualToString:nextSearchQuery])) {
++        _searchQuery = nextSearchQuery;
++        [updatedPropNames addObject:@"searchQuery"];
++    }
++    if (_searchCurrentIndex != newProps.searchCurrentIndex) {
++        _searchCurrentIndex = newProps.searchCurrentIndex;
++        [updatedPropNames addObject:@"searchCurrentIndex"];
++    }
+     if (_showsHorizontalScrollIndicator != newProps.showsHorizontalScrollIndicator) {
+         _showsHorizontalScrollIndicator = newProps.showsHorizontalScrollIndicator;
+         [updatedPropNames addObject:@"showsHorizontalScrollIndicator"];
+@@ -193,6 +210,13 @@ using namespace facebook::react;
+     [_pdfView removeFromSuperview];
+     _pdfDocument = Nil;
+     _pdfView = Nil;
++    _searchMatches = [NSMutableArray new];
++    _searchPageTextCache = [NSMutableDictionary new];
++    _runningSearchQuery = nil;
++    _searchQuery = @"";
++    _searchCurrentIndex = 0;
++    _searchTruncated = NO;
++    _highlightedSearchIndex = -1;
+     //Remove notifications
+     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"PDFViewDocumentChangedNotification" object:nil];
+     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"PDFViewPageChangedNotification" object:nil];
+@@ -267,6 +291,13 @@ using namespace facebook::react;
+     _enableTextSelection = YES;
+     _selectedText = nil;
+     _currentPDFSelection = nil;
++    _searchQuery = @"";
++    _searchCurrentIndex = 0;
++    _searchMatches = [NSMutableArray new];
++    _searchPageTextCache = [NSMutableDictionary new];
++    _runningSearchQuery = nil;
++    _searchTruncated = NO;
++    _highlightedSearchIndex = -1;
+
+     // init and config PDFView
+     _pdfView = [[PDFView alloc] initWithFrame:CGRectMake(0, 0, 500, 500)];
+@@ -352,6 +383,13 @@ using namespace facebook::react;
+
+         if ([changedProps containsObject:@"path"]) {
+
++            [_pdfDocument cancelFindString];
++            _runningSearchQuery = nil;
++            [_searchMatches removeAllObjects];
++            [_searchPageTextCache removeAllObjects];
++            _highlightedSearchIndex = -1;
++            _pdfView.highlightedSelections = @[];
++
+
+             if (_pdfDocument != Nil) {
+                 //Release old doc
+@@ -391,9 +429,10 @@ using namespace facebook::react;
+                 }
+
+                 _pdfView.document = _pdfDocument;
++                _pdfDocument.delegate = self;
+             } else {
+
+-                [self notifyOnChangeWithMessage:[[NSString alloc] initWithString:[NSString stringWithFormat:@"error|Load pdf failed. path=%s",_path.UTF8String]]];
++                [self notifyOnChangeWithMessage:@"error|Load pdf failed."];
+
+                 _pdfDocument = Nil;
+                 return;
+@@ -564,6 +603,12 @@ using namespace facebook::react;
+             }
+         }
+
++        if ([changedProps containsObject:@"searchQuery"] || [changedProps containsObject:@"path"]) {
++            [self updatePdfSearch];
++        } else if ([changedProps containsObject:@"searchCurrentIndex"]) {
++            [self applyPdfSearchHighlightsAndNavigate:YES];
++        }
++
+         _pdfView.backgroundColor = [UIColor clearColor];
+         [_pdfView layoutDocumentView];
+         [self setNeedsDisplay];
+@@ -600,6 +645,9 @@ using namespace facebook::react;
+
+ - (void)dealloc{
+
++    [_pdfDocument cancelFindString];
++    _pdfDocument.delegate = nil;
++
+     _pdfDocument = Nil;
+     _pdfView = Nil;
+
+@@ -616,6 +664,189 @@ using namespace facebook::react;
+     _doubleTapEmptyRecognizer = nil;
+ }
+
++#pragma mark native PDF search
++
++- (BOOL)isValidSearchQuery:(NSString *)query
++{
++    if (query.length > MAX_SEARCH_QUERY_LENGTH) return NO;
++    NSCharacterSet *controls = [NSCharacterSet controlCharacterSet];
++    return [query rangeOfCharacterFromSet:controls].location == NSNotFound;
++}
++
++- (void)updatePdfSearch
++{
++    NSString *query = [_searchQuery ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
++    if (![self isValidSearchQuery:query]) {
++        [_pdfDocument cancelFindString];
++        _runningSearchQuery = nil;
++        _searchQuery = @"";
++        [_searchMatches removeAllObjects];
++        [_searchPageTextCache removeAllObjects];
++        _highlightedSearchIndex = -1;
++        _pdfView.highlightedSelections = @[];
++        [self emitPdfSearchStatus:@"unavailable" query:@"" matches:@[] truncated:NO];
++        return;
++    }
++    _searchQuery = query;
++    _searchCurrentIndex = 0;
++    [_searchMatches removeAllObjects];
++    [_searchPageTextCache removeAllObjects];
++    _highlightedSearchIndex = -1;
++    _pdfView.highlightedSelections = @[];
++
++    if (query.length == 0) {
++        [_pdfDocument cancelFindString];
++        _runningSearchQuery = nil;
++        [self emitPdfSearchStatus:@"idle" query:@"" matches:@[] truncated:NO];
++        return;
++    }
++    if (!_pdfDocument) return;
++    if (_pdfDocument.isFinding) {
++        [_pdfDocument cancelFindString];
++        return;
++    }
++    [self beginPdfSearch];
++}
++
++- (void)beginPdfSearch
++{
++    if (!_pdfDocument || _searchQuery.length == 0 || _pdfDocument.isFinding) return;
++    _runningSearchQuery = [_searchQuery copy];
++    _searchTruncated = NO;
++    [_searchMatches removeAllObjects];
++    [_searchPageTextCache removeAllObjects];
++    _highlightedSearchIndex = -1;
++    [self emitPdfSearchStatus:@"searching" query:_runningSearchQuery matches:@[] truncated:NO];
++    [_pdfDocument beginFindString:_runningSearchQuery withOptions:NSCaseInsensitiveSearch];
++}
++
++- (void)didMatchString:(PDFSelection *)instance
++{
++    void (^recordMatch)(void) = ^{
++        PDFPage *page = instance.pages.firstObject;
++        if (![self->_runningSearchQuery isEqualToString:self->_searchQuery]
++            || !page
++            || [self->_pdfDocument indexForPage:page] == NSNotFound) return;
++        if (self->_searchMatches.count >= MAX_SEARCH_MATCHES) {
++            self->_searchTruncated = YES;
++            [self->_pdfDocument cancelFindString];
++            return;
++        }
++        PDFSelection *selection = [instance copy];
++        selection.color = [UIColor colorWithRed:1.0 green:0.86 blue:0.18 alpha:0.42];
++        [self->_searchMatches addObject:selection];
++        if (self->_searchMatches.count >= MAX_SEARCH_MATCHES) {
++            self->_searchTruncated = YES;
++            [self->_pdfDocument cancelFindString];
++        }
++    };
++    if ([NSThread isMainThread]) recordMatch();
++    else dispatch_async(dispatch_get_main_queue(), recordMatch);
++}
++
++- (void)documentDidEndDocumentFind:(NSNotification *)notification
++{
++    void (^finishSearch)(void) = ^{
++        if (notification.object != self->_pdfDocument) return;
++        NSString *finishedQuery = self->_runningSearchQuery;
++        self->_runningSearchQuery = nil;
++        if (![finishedQuery isEqualToString:self->_searchQuery]) {
++            [self beginPdfSearch];
++            return;
++        }
++        NSArray<PDFSelection *> *matches = [self->_searchMatches copy];
++        [self applyPdfSearchHighlightsAndNavigate:YES];
++        NSString *status = matches.count > 0 || [self pdfDocumentContainsSearchableText]
++            ? @"ready"
++            : @"unavailable";
++        [self emitPdfSearchStatus:status query:finishedQuery ?: @"" matches:matches truncated:self->_searchTruncated];
++    };
++    if ([NSThread isMainThread]) finishSearch();
++    else dispatch_async(dispatch_get_main_queue(), finishSearch);
++}
++
++- (BOOL)pdfDocumentContainsSearchableText
++{
++    if (!_pdfDocument) return NO;
++    for (NSUInteger pageIndex = 0; pageIndex < _pdfDocument.pageCount; pageIndex++) {
++        PDFPage *page = [_pdfDocument pageAtIndex:pageIndex];
++        if (page.string.length > 0) return YES;
++    }
++    return NO;
++}
++
++- (void)applyPdfSearchHighlightsAndNavigate:(BOOL)navigate
++{
++    if (!_pdfView || _searchMatches.count == 0) {
++        _pdfView.highlightedSelections = @[];
++        _highlightedSearchIndex = -1;
++        return;
++    }
++    NSUInteger activeIndex = MIN((NSUInteger)MAX(0, _searchCurrentIndex), _searchMatches.count - 1);
++    if (_highlightedSearchIndex >= 0 && (NSUInteger)_highlightedSearchIndex < _searchMatches.count) {
++        _searchMatches[(NSUInteger)_highlightedSearchIndex].color =
++            [UIColor colorWithRed:1.0 green:0.86 blue:0.18 alpha:0.42];
++    }
++    _searchMatches[activeIndex].color = [UIColor colorWithRed:1.0 green:0.58 blue:0.0 alpha:0.68];
++    _highlightedSearchIndex = (NSInteger)activeIndex;
++    _pdfView.highlightedSelections = [_searchMatches copy];
++    if (navigate) [_pdfView goToSelection:_searchMatches[activeIndex]];
++}
++
++- (NSDictionary *)pdfSearchMatchDictionary:(PDFSelection *)selection
++{
++    PDFPage *page = selection.pages.firstObject;
++    if (!page || !_pdfDocument) return nil;
++    NSUInteger pageIndex = [_pdfDocument indexForPage:page];
++    if (pageIndex == NSNotFound) return nil;
++    NSRange range = [selection rangeAtIndex:0 onPage:page];
++    NSNumber *pageKey = @(pageIndex);
++    NSString *pageText = _searchPageTextCache[pageKey];
++    if (!pageText) {
++        pageText = page.string ?: @"";
++        _searchPageTextCache[pageKey] = pageText;
++    }
++    if (range.location == NSNotFound || NSMaxRange(range) > pageText.length) return nil;
++    NSUInteger from = range.location > SEARCH_SNIPPET_RADIUS ? range.location - SEARCH_SNIPPET_RADIUS : 0;
++    NSUInteger to = MIN(pageText.length, NSMaxRange(range) + SEARCH_SNIPPET_RADIUS);
++    NSString *before = [pageText substringWithRange:NSMakeRange(from, range.location - from)];
++    NSString *hit = [pageText substringWithRange:range];
++    NSString *after = [pageText substringWithRange:NSMakeRange(NSMaxRange(range), to - NSMaxRange(range))];
++    if (from > 0) before = [@"…" stringByAppendingString:before];
++    if (to < pageText.length) after = [after stringByAppendingString:@"…"];
++    return @{
++        @"page": @(pageIndex + 1),
++        @"start": @(range.location),
++        @"end": @(NSMaxRange(range)),
++        @"snippetBefore": before,
++        @"snippetMatch": hit,
++        @"snippetAfter": after,
++    };
++}
++
++- (void)emitPdfSearchStatus:(NSString *)status
++                      query:(NSString *)query
++                    matches:(NSArray<PDFSelection *> *)matches
++                  truncated:(BOOL)truncated
++{
++    NSMutableArray<NSDictionary *> *serializedMatches = [NSMutableArray new];
++    for (PDFSelection *selection in matches) {
++        NSDictionary *serialized = [self pdfSearchMatchDictionary:selection];
++        if (serialized) [serializedMatches addObject:serialized];
++    }
++    NSDictionary *payload = @{
++        @"status": status,
++        @"query": query ?: @"",
++        @"matches": serializedMatches,
++        @"truncated": @(truncated),
++    };
++    NSError *error = nil;
++    NSData *json = [NSJSONSerialization dataWithJSONObject:payload options:0 error:&error];
++    if (!json || error) return;
++    NSString *message = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
++    [self notifyOnChangeWithMessage:[@"searchResult|" stringByAppendingString:message]];
++}
++
+ #pragma mark notification process
+ - (void)onDocumentChanged:(NSNotification *)noti
+ {
+diff --git a/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfViewManager.mm b/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfViewManager.mm
+index 2dfa7f5..143eb87 100644
+--- a/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfViewManager.mm
++++ b/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfViewManager.mm
+@@ -45,6 +45,8 @@ RCT_EXPORT_VIEW_PROPERTY(spacing, int);
+ RCT_EXPORT_VIEW_PROPERTY(password, NSString);
+ RCT_EXPORT_VIEW_PROPERTY(onChange, RCTBubblingEventBlock);
+ RCT_EXPORT_VIEW_PROPERTY(singlePage, BOOL);
++RCT_EXPORT_VIEW_PROPERTY(searchQuery, NSString);
++RCT_EXPORT_VIEW_PROPERTY(searchCurrentIndex, int);
+ RCT_EXPORT_VIEW_PROPERTY(enableTextSelection, BOOL);
+ RCT_EXPORT_VIEW_PROPERTY(onTextSelectionChange, RCTBubblingEventBlock);
+

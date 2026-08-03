@@ -1,0 +1,9 @@
+{
+  "name": "folio-mtls",
+  "version": "0.1.0",
+  "description": "OS-backed client identities and certificate-aware HTTP transport for Folio.",
+  "license": "MIT",
+  "author": "Folio contributors",
+  "homepage": "https://github.com/Kirari04/folio-paperless",
+  "private": true
+}

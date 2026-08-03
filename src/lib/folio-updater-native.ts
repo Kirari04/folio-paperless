@@ -26,8 +26,11 @@ type FolioUpdaterNativeModule = {
   installApkAsync(fileUri: string): Promise<void>;
 };
 
-const updaterModule = requireOptionalNativeModule<FolioUpdaterNativeModule>('FolioUpdater');
+let updaterModule: FolioUpdaterNativeModule | null | undefined;
 
 export function getFolioUpdaterModule() {
+  if (updaterModule === undefined) {
+    updaterModule = requireOptionalNativeModule<FolioUpdaterNativeModule>('FolioUpdater');
+  }
   return updaterModule;
 }

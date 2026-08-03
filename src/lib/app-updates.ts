@@ -1,8 +1,10 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import { formatRuntimeNumber, translateRuntime } from '../i18n/runtime.ts';
 
 export const FOLIO_RELEASES_URL = 'https://github.com/Kirari04/folio-paperless/releases';
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const UPDATE_REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000;
+export const MAX_APK_UPDATE_BYTES = 512 * 1024 * 1024;
 
 const GITHUB_LATEST_RELEASE_URL =
   'https://api.github.com/repos/Kirari04/folio-paperless/releases/latest';
@@ -12,6 +14,7 @@ const UPDATE_DIRECTORY_NAME = 'folio-updates';
 const CACHE_SCHEMA_VERSION = 1;
 const SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const RELEASE_PATH_PREFIX = '/Kirari04/folio-paperless/releases/';
 
 type GitHubAsset = {
   name?: unknown;
@@ -86,6 +89,38 @@ export class FolioUpdateError extends Error {
   }
 }
 
+export function trustedFolioReleaseUrl(value: unknown, fallback = FOLIO_RELEASES_URL) {
+  if (typeof value !== 'string') return fallback;
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== 'https:'
+      || url.hostname.toLocaleLowerCase() !== 'github.com'
+      || url.port
+      || url.username
+      || url.password
+      || (url.pathname !== RELEASE_PATH_PREFIX.slice(0, -1)
+        && !url.pathname.startsWith(RELEASE_PATH_PREFIX))
+    ) return fallback;
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return fallback;
+  }
+}
+
+function updateFileUriIsContained(uri: string) {
+  try {
+    const root = new URL(getUpdateDirectoryUri());
+    const candidate = new URL(uri);
+    return candidate.protocol === 'file:'
+      && candidate.origin === root.origin
+      && candidate.pathname.startsWith(root.pathname.endsWith('/') ? root.pathname : `${root.pathname}/`);
+  } catch {
+    return false;
+  }
+}
+
 export function parseStableVersion(version: string) {
   const match = SEMVER_PATTERN.exec(version);
   if (!match) return null;
@@ -100,7 +135,7 @@ export function compareStableVersions(left: string, right: string) {
   const leftVersion = parseStableVersion(left);
   const rightVersion = parseStableVersion(right);
   if (!leftVersion || !rightVersion) {
-    throw new FolioUpdateError('Folio received an invalid stable version from GitHub.');
+    throw new FolioUpdateError(translateRuntime('updates.errorInvalidVersion'));
   }
 
   for (const component of ['major', 'minor', 'patch'] as const) {
@@ -113,14 +148,17 @@ export function compareStableVersions(left: string, right: string) {
 
 export function versionCodeFor(version: string) {
   const parsed = parseStableVersion(version);
-  if (!parsed) throw new FolioUpdateError(`Version ${version} cannot be installed by Folio.`);
+  if (!parsed) throw new FolioUpdateError(translateRuntime('updates.errorUninstallableVersion', { version }));
   return parsed.major * 1_000_000 + parsed.minor * 1_000 + parsed.patch;
 }
 
 export function formatUpdateSize(bytes: number) {
-  if (!Number.isFinite(bytes) || bytes <= 0) return 'Unknown size';
+  if (!Number.isFinite(bytes) || bytes <= 0) return translateRuntime('updates.unknownSize');
   const megabytes = bytes / (1024 * 1024);
-  return `${megabytes >= 100 ? Math.round(megabytes) : megabytes.toFixed(1)} MB`;
+  return `${formatRuntimeNumber(megabytes >= 100 ? Math.round(megabytes) : megabytes, {
+    maximumFractionDigits: megabytes >= 100 ? 0 : 1,
+    minimumFractionDigits: megabytes >= 100 ? 0 : 1,
+  })} MB`;
 }
 
 export function cleanReleaseNotes(notes: string) {
@@ -133,13 +171,13 @@ export function cleanReleaseNotes(notes: string) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  if (!cleaned) return 'Polish, fixes, and improvements are included in this release.';
+  if (!cleaned) return translateRuntime('updates.defaultReleaseNotes');
   return cleaned.length > 4_000 ? `${cleaned.slice(0, 3_997).trimEnd()}…` : cleaned;
 }
 
 export function getUpdateDirectoryUri() {
   if (!FileSystem.cacheDirectory) {
-    throw new FolioUpdateError('Temporary storage is unavailable on this device.');
+    throw new FolioUpdateError(translateRuntime('updates.errorStorage'));
   }
   return `${FileSystem.cacheDirectory}${UPDATE_DIRECTORY_NAME}/`;
 }
@@ -159,7 +197,7 @@ export async function getUpdateFileUri(version: string) {
 }
 
 export async function removeDownloadedUpdate(downloaded: DownloadedUpdate | null) {
-  if (!downloaded?.fileUri) return;
+  if (!downloaded?.fileUri || !updateFileUriIsContained(downloaded.fileUri)) return;
   try {
     const info = await FileSystem.getInfoAsync(downloaded.fileUri);
     if (info.exists) await FileSystem.deleteAsync(downloaded.fileUri, { idempotent: true });
@@ -169,7 +207,7 @@ export async function removeDownloadedUpdate(downloaded: DownloadedUpdate | null
 }
 
 export async function downloadedUpdateExists(downloaded: DownloadedUpdate | null) {
-  if (!downloaded?.fileUri) return false;
+  if (!downloaded?.fileUri || !updateFileUriIsContained(downloaded.fileUri)) return false;
   try {
     const info = await FileSystem.getInfoAsync(downloaded.fileUri);
     return info.exists && !info.isDirectory && (info.size ?? 0) > 0;
@@ -213,14 +251,20 @@ function parseRelease(value: unknown): FolioRelease | null {
       typeof candidate.name === 'string' &&
       typeof candidate.downloadUrl === 'string' &&
       typeof candidate.size === 'number' &&
+      Number.isSafeInteger(candidate.size) &&
+      candidate.size > 0 &&
+      candidate.size <= MAX_APK_UPDATE_BYTES &&
       isStringOrNull(candidate.digestSha256)
     ) {
-      apk = {
-        name: candidate.name,
-        downloadUrl: candidate.downloadUrl,
-        size: candidate.size,
-        digestSha256: candidate.digestSha256,
-      };
+      const downloadUrl = trustedFolioReleaseUrl(candidate.downloadUrl, '');
+      if (downloadUrl) {
+        apk = {
+          name: candidate.name,
+          downloadUrl,
+          size: candidate.size,
+          digestSha256: candidate.digestSha256,
+        };
+      }
     }
   }
 
@@ -229,10 +273,12 @@ function parseRelease(value: unknown): FolioRelease | null {
     tagName: release.tagName,
     title: release.title,
     notes: release.notes,
-    htmlUrl: release.htmlUrl,
+    htmlUrl: trustedFolioReleaseUrl(release.htmlUrl),
     publishedAt: release.publishedAt,
     apk,
-    checksumUrl: isStringOrNull(release.checksumUrl) ? release.checksumUrl : null,
+    checksumUrl: typeof release.checksumUrl === 'string'
+      ? trustedFolioReleaseUrl(release.checksumUrl, '') || null
+      : null,
   };
 }
 
@@ -252,6 +298,7 @@ export async function readUpdateCache(): Promise<UpdateCache> {
       typeof downloaded === 'object' &&
       typeof downloaded.version === 'string' &&
       typeof downloaded.fileUri === 'string' &&
+      updateFileUriIsContained(downloaded.fileUri) &&
       typeof downloaded.digestSha256 === 'string' &&
       SHA256_PATTERN.test(downloaded.digestSha256)
         ? downloaded
@@ -283,10 +330,15 @@ function assetFromGitHub(value: GitHubAsset): FolioReleaseAsset | null {
   if (
     typeof value.name !== 'string' ||
     typeof value.browser_download_url !== 'string' ||
-    typeof value.size !== 'number'
+    typeof value.size !== 'number' ||
+    !Number.isSafeInteger(value.size) ||
+    value.size <= 0 ||
+    value.size > MAX_APK_UPDATE_BYTES
   ) {
     return null;
   }
+  const downloadUrl = trustedFolioReleaseUrl(value.browser_download_url, '');
+  if (!downloadUrl) return null;
 
   const digest =
     typeof value.digest === 'string' && value.digest.startsWith('sha256:')
@@ -295,7 +347,7 @@ function assetFromGitHub(value: GitHubAsset): FolioReleaseAsset | null {
 
   return {
     name: value.name,
-    downloadUrl: value.browser_download_url,
+    downloadUrl,
     size: value.size,
     digestSha256: digest && SHA256_PATTERN.test(digest) ? digest : null,
   };
@@ -303,19 +355,19 @@ function assetFromGitHub(value: GitHubAsset): FolioReleaseAsset | null {
 
 function parseGitHubRelease(value: unknown): FolioRelease | null {
   if (!value || typeof value !== 'object') {
-    throw new FolioUpdateError('GitHub returned an unreadable release response.');
+    throw new FolioUpdateError(translateRuntime('updates.errorReleaseResponse'));
   }
   const release = value as GitHubRelease;
   if (release.draft === true || release.prerelease === true) return null;
   if (typeof release.tag_name !== 'string') {
-    throw new FolioUpdateError('The latest GitHub release has no version tag.');
+    throw new FolioUpdateError(translateRuntime('updates.errorMissingVersion'));
   }
 
   const version = release.tag_name.startsWith('v')
     ? release.tag_name.slice(1)
     : release.tag_name;
   if (!parseStableVersion(version)) {
-    throw new FolioUpdateError(`GitHub release ${release.tag_name} is not a stable Folio version.`);
+    throw new FolioUpdateError(translateRuntime('updates.errorUnstableVersion', { tag: release.tag_name }));
   }
 
   const assets = Array.isArray(release.assets) ? (release.assets as GitHubAsset[]) : [];
@@ -335,15 +387,15 @@ function parseGitHubRelease(value: unknown): FolioRelease | null {
         ? release.name.trim()
         : `Folio v${version}`,
     notes: cleanReleaseNotes(typeof release.body === 'string' ? release.body : ''),
-    htmlUrl:
-      typeof release.html_url === 'string' && release.html_url
-        ? release.html_url
-        : `${FOLIO_RELEASES_URL}/tag/v${version}`,
+    htmlUrl: trustedFolioReleaseUrl(
+      release.html_url,
+      `${FOLIO_RELEASES_URL}/tag/v${version}`,
+    ),
     publishedAt: typeof release.published_at === 'string' ? release.published_at : null,
     apk,
     checksumUrl:
       checksumAsset && typeof checksumAsset.browser_download_url === 'string'
-        ? checksumAsset.browser_download_url
+        ? trustedFolioReleaseUrl(checksumAsset.browser_download_url, '') || null
         : null,
   };
 }
@@ -351,9 +403,9 @@ function parseGitHubRelease(value: unknown): FolioRelease | null {
 function messageForRequestError(error: unknown) {
   if (error instanceof FolioUpdateError) return error.message;
   if (error instanceof Error && error.name === 'AbortError') {
-    return 'GitHub took too long to respond. Check your connection and try again.';
+    return translateRuntime('updates.errorTimeout');
   }
-  return 'Could not reach GitHub Releases. Check your connection and try again.';
+  return translateRuntime('updates.errorUnreachable');
 }
 
 export async function fetchLatestFolioRelease(
@@ -385,14 +437,14 @@ export async function fetchLatestFolioRelease(
     }
     if (response.status === 403 || response.status === 429) {
       throw new FolioUpdateError(
-        'GitHub temporarily limited update checks. Folio will try again later.',
+        translateRuntime('updates.errorRateLimited'),
       );
     }
     if (response.status === 404) {
-      throw new FolioUpdateError('No published Folio release is available on GitHub yet.');
+      throw new FolioUpdateError(translateRuntime('updates.errorNoRelease'));
     }
     if (!response.ok) {
-      throw new FolioUpdateError(`GitHub could not check for updates (HTTP ${response.status}).`);
+      throw new FolioUpdateError(translateRuntime('updates.errorCheckHttp', { status: response.status }));
     }
 
     const latestRelease = parseGitHubRelease(await response.json());
@@ -413,7 +465,7 @@ export async function fetchLatestFolioRelease(
 export async function expectedReleaseSha256(release: FolioRelease) {
   if (release.apk?.digestSha256) return release.apk.digestSha256;
   if (!release.apk || !release.checksumUrl) {
-    throw new FolioUpdateError('This release has no verifiable Android checksum.');
+    throw new FolioUpdateError(translateRuntime('updates.errorChecksumMissing'));
   }
 
   const controller = new AbortController();
@@ -421,11 +473,11 @@ export async function expectedReleaseSha256(release: FolioRelease) {
   try {
     const response = await fetch(release.checksumUrl, { signal: controller.signal });
     if (!response.ok) {
-      throw new FolioUpdateError(`GitHub could not download the checksum (HTTP ${response.status}).`);
+      throw new FolioUpdateError(translateRuntime('updates.errorChecksumHttp', { status: response.status }));
     }
     const checksum = (await response.text()).trim().split(/\s+/)[0]?.toLocaleLowerCase();
     if (!checksum || !SHA256_PATTERN.test(checksum)) {
-      throw new FolioUpdateError('The release checksum is invalid.');
+      throw new FolioUpdateError(translateRuntime('updates.errorChecksumInvalid'));
     }
     return checksum;
   } catch (error) {
