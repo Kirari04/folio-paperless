@@ -44,9 +44,15 @@ import { UpdateProvider } from '@/context/update-context';
 import { I18nProvider, useI18n } from '@/context/ui-preferences-context';
 import {
   authenticateForFolio,
+  cancelAuthenticationForFolio,
   dismissProfileNotifications,
   setRuntimeNotificationPrivacyLocked,
 } from '@/lib/device-features';
+import {
+  BiometricLockController,
+  performBiometricUnlockAttempt,
+  type BiometricLockSnapshot,
+} from '@/lib/biometric-lock-controller';
 import { IN_APP_APK_UPDATES_ENABLED } from '@/lib/distribution-runtime';
 import { NavigationProvider, useNavigationMotion } from '@/lib/router';
 import type { RootStackParamList } from '@/lib/router';
@@ -145,68 +151,66 @@ function PrivacyCurtain() {
   );
 }
 
-function ProtectedApp() {
+function ProtectedAppRuntime({ lockEnabled }: { lockEnabled: boolean }) {
   const {
     connected,
     inboxDocuments,
     isBootstrapping,
-    preferences,
-    preferencesReady,
     profiles,
   } = useApp();
   const { locale, t } = useI18n();
-  const [locked, setLocked] = useState(true);
-  const [unlocking, setUnlocking] = useState(false);
-  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
-  const authenticating = useRef(false);
-  const unlockAttempted = useRef(false);
-  const lockGeneration = useRef(0);
   const widgetUpdateTail = useRef<Promise<void>>(Promise.resolve());
-  const lockEnabled = preferencesReady && preferences.biometricLock;
-  const showLock = lockEnabled && locked;
+  const [lockController] = useState(
+    () => new BiometricLockController({
+      enabled: lockEnabled,
+      appState: AppState.currentState,
+    }),
+  );
+  const [lockState, setLockState] = useState<BiometricLockSnapshot>(
+    () => lockController.snapshot(),
+  );
+  const appActive = lockState.appState === 'active';
+  const showLock = lockEnabled && lockState.locked;
 
-  const unlock = useCallback(async () => {
-    if (!lockEnabled || !appActive) return;
-    const generation = lockGeneration.current;
-    authenticating.current = true;
-    setUnlocking(true);
-    try {
-      if (
-        (await authenticateForFolio()) &&
-        generation === lockGeneration.current &&
-        AppState.currentState === 'active'
-      ) {
-        setRuntimeNotificationPrivacyLocked(false);
-        setLocked(false);
-      }
-    } finally {
-      authenticating.current = false;
-      if (generation === lockGeneration.current) setUnlocking(false);
-    }
-  }, [appActive, lockEnabled]);
+  const publishLockState = useCallback(() => {
+    setLockState(lockController.snapshot());
+  }, [lockController]);
+
+  const unlock = useCallback(async (mode: 'automatic' | 'manual') => {
+    const unlocked = await performBiometricUnlockAttempt({
+      controller: lockController,
+      mode,
+      currentAppState: AppState.currentState,
+      authenticate: async () => {
+        if (AppState.currentState !== 'active') return false;
+        return authenticateForFolio();
+      },
+      onStateChange: setLockState,
+    });
+    if (unlocked) setRuntimeNotificationPrivacyLocked(false);
+  }, [lockController]);
 
   useEffect(() => {
-    if (appActive && showLock && !unlockAttempted.current) {
-      unlockAttempted.current = true;
-      void unlock();
+    if (appActive && showLock && !lockState.unlocking) {
+      void unlock('automatic');
     }
-  }, [appActive, showLock, unlock]);
+  }, [appActive, lockState.unlocking, showLock, unlock]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      const active = state === 'active';
-      setAppActive(active);
-      if (lockEnabled && !active) {
-        lockGeneration.current += 1;
-        if (!authenticating.current) unlockAttempted.current = false;
+      const previous = lockController.snapshot();
+      const next = lockController.transitionAppState(state);
+      publishLockState();
+      if (next.enabled && state !== 'active') {
+        if (previous.unlocking) {
+          void cancelAuthenticationForFolio().catch(() => undefined);
+        }
         setRuntimeNotificationPrivacyLocked(true);
-        setUnlocking(false);
-        setLocked(true);
         void Promise.all(profiles.map((profile) => dismissProfileNotifications(profile.id)));
       }
     });
     return () => subscription.remove();
-  }, [lockEnabled, profiles]);
+  }, [lockController, profiles, publishLockState]);
 
   useEffect(() => {
     setRuntimeNotificationPrivacyLocked(showLock);
@@ -274,19 +278,34 @@ function ProtectedApp() {
           </View>
           <Text style={styles.lockTitle}>{t('app.lockedTitle')}</Text>
           <Text style={styles.lockCopy}>{t('app.lockedCopy')}</Text>
-          <Pressable disabled={unlocking} onPress={unlock} style={styles.unlockButton}>
-            {unlocking ? (
+          <Pressable
+            disabled={lockState.unlocking}
+            onPress={() => void unlock('manual')}
+            style={styles.unlockButton}>
+            {lockState.unlocking ? (
               <ActivityIndicator color={palette.accentInk} />
             ) : (
               <LockKeyhole color={palette.accentInk} size={18} />
             )}
             <Text style={styles.unlockText}>
-              {unlocking ? t('app.checking') : t('app.unlock')}
+              {lockState.unlocking ? t('app.checking') : t('app.unlock')}
             </Text>
           </Pressable>
         </View>
       ) : null}
     </View>
+  );
+}
+
+function ProtectedApp() {
+  const { preferences, preferencesReady } = useApp();
+  const lockEnabled = preferencesReady && preferences.biometricLock;
+
+  return (
+    <ProtectedAppRuntime
+      key={lockEnabled ? 'biometric-lock-enabled' : 'biometric-lock-disabled'}
+      lockEnabled={lockEnabled}
+    />
   );
 }
 

@@ -78,6 +78,12 @@ export async function authenticateForFolio() {
   return result.success;
 }
 
+export async function cancelAuthenticationForFolio() {
+  if (Platform.OS !== 'android') return;
+  const LocalAuthentication = await import('expo-local-authentication');
+  await LocalAuthentication.cancelAuthenticate();
+}
+
 export async function requestProcessingNotificationPermission() {
   if (Platform.OS === 'web') return false;
   const Notifications = await import('expo-notifications');
