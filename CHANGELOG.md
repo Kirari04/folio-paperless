@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.1](https://github.com/Kirari04/folio-paperless/compare/v0.3.0...v0.3.1) (2026-08-03)
+
+
+### Bug Fixes
+
+* **auth:** recover biometric unlock after resume ([4debda6](https://github.com/Kirari04/folio-paperless/commit/4debda6b129fdbf8ecf57652940ae1b5826c7516))
+* **auth:** recover biometric unlock after resume ([bc18dd0](https://github.com/Kirari04/folio-paperless/commit/bc18dd00a966a83e215c56804a46bf4554128005))
+* **auth:** recover biometric unlock after resume ([6089b88](https://github.com/Kirari04/folio-paperless/commit/6089b88c2575dcc6a9c5d618ea1f055f7d9a794f))
+
 ## [0.3.0](https://github.com/Kirari04/folio-paperless/compare/v0.2.0...v0.3.0) (2026-08-03)
 
 
