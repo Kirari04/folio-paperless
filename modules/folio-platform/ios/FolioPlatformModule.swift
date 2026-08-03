@@ -164,172 +164,48 @@ public final class FolioPlatformModule: Module {
     }
 
     AsyncFunction("getCapabilitiesAsync") { () -> [String: Any] in
-      let available = CSSearchableIndex.isIndexingAvailable()
-      return [
-        "osSearch": [
-          "supported": available,
-          "engine": available ? "ios-core-spotlight" : "unsupported",
-          "reason": available ? NSNull() : "core-spotlight-unavailable"
-        ],
-        "shortcuts": [
-          "supported": true,
-          "transport": "ios-app-delegate"
-        ],
-        "oidcRs256": [
-          "supported": true,
-          "engine": "security-framework"
-        ]
-      ]
+      return self.capabilities()
     }
 
     AsyncFunction("acquireProtectedStorageLeaseAsync") { (promise: Promise) in
-      FolioProtectedStorageExclusiveCoordinator.shared.acquire(
-        ownerId: self.protectedStorageOwnerId,
-        promise: promise
-      )
+      self.acquireProtectedStorageLease(promise)
     }
 
     AsyncFunction("releaseProtectedStorageLeaseAsync") { (leaseId: String) throws -> Void in
-      try FolioProtectedStorageExclusiveCoordinator.shared.release(
-        ownerId: self.protectedStorageOwnerId,
-        leaseId: leaseId
-      )
+      try self.releaseProtectedStorageLease(leaseId)
     }
 
     AsyncFunction("setSearchAccessStateAsync") {
       (unlocked: Bool, clearOnBackground: Bool, promise: Promise) in
-      let access = FolioSearchPrivacyState.shared.configure(
+      self.setSearchAccessState(
         unlocked: unlocked,
-        clearOnBackground: clearOnBackground
-      )
-      guard access.needsCleanup else {
-        promise.resolve()
-        return
-      }
-      guard CSSearchableIndex.isIndexingAvailable() else {
-        promise.resolve()
-        return
-      }
-      self.clearIndex(
-        promise,
-        unlockAfter: unlocked,
-        expectedGeneration: access.generation
+        clearOnBackground: clearOnBackground,
+        promise: promise
       )
     }
 
     AsyncFunction("replaceSearchIndexAsync") {
       (entries: [FolioSearchEntryRecord], promise: Promise) in
-      guard self.requireIndexAvailable(promise) else { return }
-      do {
-        let items = try entries.map(self.searchableItem)
-        guard let generation = FolioSearchPrivacyState.shared.beginWrite() else {
-          FolioPlatformNativeError.reject(
-            promise,
-            code: "ERR_FOLIO_SEARCH_LOCKED",
-            message: "Folio must be unlocked before writing OS search entries."
-          )
-          return
-        }
-        self.index.deleteAllSearchableItems { error in
-          if let error {
-            promise.reject(error)
-            return
-          }
-          guard !items.isEmpty else {
-            promise.resolve()
-            return
-          }
-          guard FolioSearchPrivacyState.shared.mayWrite(generation: generation) else {
-            self.clearAfterStaleWrite(promise)
-            return
-          }
-          self.index.indexSearchableItems(items) { indexError in
-            if let indexError {
-              promise.reject(indexError)
-            } else if !FolioSearchPrivacyState.shared.mayWrite(generation: generation) {
-              self.clearAfterStaleWrite(promise)
-            } else {
-              promise.resolve()
-            }
-          }
-        }
-      } catch {
-        promise.reject(error)
-      }
+      self.replaceSearchIndex(entries, promise: promise)
     }
 
     AsyncFunction("upsertSearchEntriesAsync") {
       (entries: [FolioSearchEntryRecord], promise: Promise) in
-      guard self.requireIndexAvailable(promise) else { return }
-      guard let generation = FolioSearchPrivacyState.shared.beginWrite() else {
-        FolioPlatformNativeError.reject(
-          promise,
-          code: "ERR_FOLIO_SEARCH_LOCKED",
-          message: "Folio must be unlocked before writing OS search entries."
-        )
-        return
-      }
-      do {
-        let items = try entries.map(self.searchableItem)
-        guard !items.isEmpty else {
-          promise.resolve()
-          return
-        }
-        self.index.indexSearchableItems(items) { error in
-          if let error {
-            promise.reject(error)
-          } else if !FolioSearchPrivacyState.shared.mayWrite(generation: generation) {
-            self.clearAfterStaleWrite(promise)
-          } else {
-            promise.resolve()
-          }
-        }
-      } catch {
-        promise.reject(error)
-      }
+      self.upsertSearchEntries(entries, promise: promise)
     }
 
     AsyncFunction("removeSearchEntriesAsync") {
       (identifiers: [String], promise: Promise) in
-      guard self.requireIndexAvailable(promise) else { return }
-      do {
-        let safeIdentifiers = try identifiers.map(self.validIdentifier)
-        guard !safeIdentifiers.isEmpty else {
-          promise.resolve()
-          return
-        }
-        self.index.deleteSearchableItems(withIdentifiers: safeIdentifiers) { error in
-          if let error {
-            promise.reject(error)
-          } else {
-            promise.resolve()
-          }
-        }
-      } catch {
-        promise.reject(error)
-      }
+      self.removeSearchEntries(identifiers, promise: promise)
     }
 
     AsyncFunction("removeSearchProfileAsync") {
       (profileId: String, promise: Promise) in
-      guard self.requireIndexAvailable(promise) else { return }
-      do {
-        let domain = try self.profileDomain(profileId)
-        self.index.deleteSearchableItems(withDomainIdentifiers: [domain]) { error in
-          if let error {
-            promise.reject(error)
-          } else {
-            promise.resolve()
-          }
-        }
-      } catch {
-        promise.reject(error)
-      }
+      self.removeSearchProfile(profileId, promise: promise)
     }
 
     AsyncFunction("clearSearchIndexAsync") { (promise: Promise) in
-      FolioSearchPrivacyState.shared.markCleanupNeeded()
-      self.clearIndex(promise, unlockAfter: false, expectedGeneration: nil)
+      self.clearSearchIndex(promise)
     }
 
     AsyncFunction("consumeInitialShortcutAsync") { () -> String? in
@@ -347,7 +223,7 @@ public final class FolioPlatformModule: Module {
         modulusBase64Url: String,
         exponentBase64Url: String
       ) throws -> Bool in
-      return try folioVerifyOidcRs256(
+      return try self.verifyOidcRs256(
         signingInput: signingInput,
         signatureBase64Url: signatureBase64Url,
         modulusBase64Url: modulusBase64Url,
@@ -356,49 +232,247 @@ public final class FolioPlatformModule: Module {
     }
 
     AsyncFunction("excludeFileFromBackupAsync") { (fileUri: String) throws -> Void in
-      guard
-        let source = URL(string: fileUri),
-        source.isFileURL,
-        source.host == nil || source.host?.isEmpty == true,
-        source.query == nil,
-        source.fragment == nil
-      else {
-        throw self.validationError("The sensitive file URI is invalid.")
-      }
-      let file = source.standardizedFileURL.resolvingSymlinksInPath()
-      guard let documents = FileManager.default.urls(
-        for: .documentDirectory,
-        in: .userDomainMask
-      ).first else {
-        throw self.validationError("The private document directory is unavailable.")
-      }
-      let stagingRoot = documents
-        .appendingPathComponent("folio", isDirectory: true)
-        .appendingPathComponent("profiles", isDirectory: true)
-        .standardizedFileURL
-        .resolvingSymlinksInPath()
-      let rootPath = stagingRoot.path.hasSuffix("/") ? stagingRoot.path : "\(stagingRoot.path)/"
-      guard file.path.hasPrefix(rootPath) else {
-        throw self.validationError("The sensitive file is outside Folio private staging.")
-      }
-      let values = try file.resourceValues(forKeys: [.isRegularFileKey])
-      guard values.isRegularFile == true else {
-        throw self.validationError("The sensitive staging file is unavailable.")
-      }
-      var protectedFile = file
-      var protection = URLResourceValues()
-      protection.isExcludedFromBackup = true
-      try protectedFile.setResourceValues(protection)
-      let readback = try protectedFile.resourceValues(forKeys: [.isExcludedFromBackupKey])
-      guard readback.isExcludedFromBackup == true else {
-        throw self.validationError("The sensitive file could not be excluded from backup.")
-      }
+      try self.excludeFileFromBackup(fileUri)
     }
 
     OnDestroy {
       FolioProtectedStorageExclusiveCoordinator.shared.unregisterOwner(
         self.protectedStorageOwnerId
       )
+    }
+  }
+
+  private func capabilities() -> [String: Any] {
+    let available = CSSearchableIndex.isIndexingAvailable()
+    let osSearch: [String: Any] = [
+      "supported": available,
+      "engine": available ? "ios-core-spotlight" : "unsupported",
+      "reason": available ? NSNull() : "core-spotlight-unavailable"
+    ]
+    let shortcuts: [String: Any] = [
+      "supported": true,
+      "transport": "ios-app-delegate"
+    ]
+    let oidcRs256: [String: Any] = [
+      "supported": true,
+      "engine": "security-framework"
+    ]
+    return [
+      "osSearch": osSearch,
+      "shortcuts": shortcuts,
+      "oidcRs256": oidcRs256
+    ]
+  }
+
+  private func acquireProtectedStorageLease(_ promise: Promise) {
+    FolioProtectedStorageExclusiveCoordinator.shared.acquire(
+      ownerId: protectedStorageOwnerId,
+      promise: promise
+    )
+  }
+
+  private func releaseProtectedStorageLease(_ leaseId: String) throws {
+    try FolioProtectedStorageExclusiveCoordinator.shared.release(
+      ownerId: protectedStorageOwnerId,
+      leaseId: leaseId
+    )
+  }
+
+  private func setSearchAccessState(
+    unlocked: Bool,
+    clearOnBackground: Bool,
+    promise: Promise
+  ) {
+    let access = FolioSearchPrivacyState.shared.configure(
+      unlocked: unlocked,
+      clearOnBackground: clearOnBackground
+    )
+    guard access.needsCleanup else {
+      promise.resolve()
+      return
+    }
+    guard CSSearchableIndex.isIndexingAvailable() else {
+      promise.resolve()
+      return
+    }
+    clearIndex(
+      promise,
+      unlockAfter: unlocked,
+      expectedGeneration: access.generation
+    )
+  }
+
+  private func replaceSearchIndex(
+    _ entries: [FolioSearchEntryRecord],
+    promise: Promise
+  ) {
+    guard requireIndexAvailable(promise) else { return }
+    do {
+      let items = try entries.map { try self.searchableItem($0) }
+      guard let generation = FolioSearchPrivacyState.shared.beginWrite() else {
+        FolioPlatformNativeError.reject(
+          promise,
+          code: "ERR_FOLIO_SEARCH_LOCKED",
+          message: "Folio must be unlocked before writing OS search entries."
+        )
+        return
+      }
+      index.deleteAllSearchableItems { error in
+        if let error {
+          promise.reject(error)
+          return
+        }
+        guard !items.isEmpty else {
+          promise.resolve()
+          return
+        }
+        guard FolioSearchPrivacyState.shared.mayWrite(generation: generation) else {
+          self.clearAfterStaleWrite(promise)
+          return
+        }
+        self.index.indexSearchableItems(items) { indexError in
+          if let indexError {
+            promise.reject(indexError)
+          } else if !FolioSearchPrivacyState.shared.mayWrite(generation: generation) {
+            self.clearAfterStaleWrite(promise)
+          } else {
+            promise.resolve()
+          }
+        }
+      }
+    } catch {
+      promise.reject(error)
+    }
+  }
+
+  private func upsertSearchEntries(
+    _ entries: [FolioSearchEntryRecord],
+    promise: Promise
+  ) {
+    guard requireIndexAvailable(promise) else { return }
+    guard let generation = FolioSearchPrivacyState.shared.beginWrite() else {
+      FolioPlatformNativeError.reject(
+        promise,
+        code: "ERR_FOLIO_SEARCH_LOCKED",
+        message: "Folio must be unlocked before writing OS search entries."
+      )
+      return
+    }
+    do {
+      let items = try entries.map { try self.searchableItem($0) }
+      guard !items.isEmpty else {
+        promise.resolve()
+        return
+      }
+      index.indexSearchableItems(items) { error in
+        if let error {
+          promise.reject(error)
+        } else if !FolioSearchPrivacyState.shared.mayWrite(generation: generation) {
+          self.clearAfterStaleWrite(promise)
+        } else {
+          promise.resolve()
+        }
+      }
+    } catch {
+      promise.reject(error)
+    }
+  }
+
+  private func removeSearchEntries(
+    _ identifiers: [String],
+    promise: Promise
+  ) {
+    guard requireIndexAvailable(promise) else { return }
+    do {
+      let safeIdentifiers = try identifiers.map { try self.validIdentifier($0) }
+      guard !safeIdentifiers.isEmpty else {
+        promise.resolve()
+        return
+      }
+      index.deleteSearchableItems(withIdentifiers: safeIdentifiers) { error in
+        if let error {
+          promise.reject(error)
+        } else {
+          promise.resolve()
+        }
+      }
+    } catch {
+      promise.reject(error)
+    }
+  }
+
+  private func removeSearchProfile(_ profileId: String, promise: Promise) {
+    guard requireIndexAvailable(promise) else { return }
+    do {
+      let domain = try profileDomain(profileId)
+      index.deleteSearchableItems(withDomainIdentifiers: [domain]) { error in
+        if let error {
+          promise.reject(error)
+        } else {
+          promise.resolve()
+        }
+      }
+    } catch {
+      promise.reject(error)
+    }
+  }
+
+  private func clearSearchIndex(_ promise: Promise) {
+    FolioSearchPrivacyState.shared.markCleanupNeeded()
+    clearIndex(promise, unlockAfter: false, expectedGeneration: nil)
+  }
+
+  private func verifyOidcRs256(
+    signingInput: String,
+    signatureBase64Url: String,
+    modulusBase64Url: String,
+    exponentBase64Url: String
+  ) throws -> Bool {
+    return try folioVerifyOidcRs256(
+      signingInput: signingInput,
+      signatureBase64Url: signatureBase64Url,
+      modulusBase64Url: modulusBase64Url,
+      exponentBase64Url: exponentBase64Url
+    )
+  }
+
+  private func excludeFileFromBackup(_ fileUri: String) throws {
+    guard
+      let source = URL(string: fileUri),
+      source.isFileURL,
+      source.host == nil || source.host?.isEmpty == true,
+      source.query == nil,
+      source.fragment == nil
+    else {
+      throw validationError("The sensitive file URI is invalid.")
+    }
+    let file = source.standardizedFileURL.resolvingSymlinksInPath()
+    guard let documents = FileManager.default.urls(
+      for: .documentDirectory,
+      in: .userDomainMask
+    ).first else {
+      throw validationError("The private document directory is unavailable.")
+    }
+    let stagingRoot = documents
+      .appendingPathComponent("folio", isDirectory: true)
+      .appendingPathComponent("profiles", isDirectory: true)
+      .standardizedFileURL
+      .resolvingSymlinksInPath()
+    let rootPath = stagingRoot.path.hasSuffix("/") ? stagingRoot.path : "\(stagingRoot.path)/"
+    guard file.path.hasPrefix(rootPath) else {
+      throw validationError("The sensitive file is outside Folio private staging.")
+    }
+    let values = try file.resourceValues(forKeys: [.isRegularFileKey])
+    guard values.isRegularFile == true else {
+      throw validationError("The sensitive staging file is unavailable.")
+    }
+    var protectedFile = file
+    var protection = URLResourceValues()
+    protection.isExcludedFromBackup = true
+    try protectedFile.setResourceValues(protection)
+    let readback = try protectedFile.resourceValues(forKeys: [.isExcludedFromBackupKey])
+    guard readback.isExcludedFromBackup == true else {
+      throw validationError("The sensitive file could not be excluded from backup.")
     }
   }
 
