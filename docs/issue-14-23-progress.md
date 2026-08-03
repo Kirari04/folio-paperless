@@ -3,8 +3,8 @@
 This document reconciles the current working tree with the complete GitHub issue
 bodies for [#14](https://github.com/Kirari04/folio-paperless/issues/14) through
 [#23](https://github.com/Kirari04/folio-paperless/issues/23). The issues were
-read through the authenticated GitHub API on 2026-08-02. All ten issues are open
-and each has one implementation-status comment. Those comments do not change the
+read through the authenticated GitHub API on 2026-08-02. All ten issues were open
+when reviewed and each had one implementation-status comment. Those comments do not change the
 issue bodies' acceptance criteria; this record supersedes their older test counts
 and verification notes.
 
@@ -24,13 +24,13 @@ Status language is intentionally strict:
 
 ## Candidate-tree baseline
 
-- Stack tip: `stack/issues-20-21-platform`, above
-  `stack/issues-17-19-22-23-workflows`, `stack/issues-14-16-intake`, and
-  `stack/issues-14-23-foundation`.
-- Integration base: `216664347245d42ca540586a01301de0ea122085`
-  (`origin/dev`, including merged PRs #24, #13, and #26).
-- Delivery state: draft PRs #27–#30 are open in dependency order. Final hardening
-  is split into its owning stack layers and propagated bottom-up without history
+- Integration tip: `c794a35f3373cbfb137228a7a9e28d911a836e51`
+  (`origin/dev`, including merged PRs #27–#30 in dependency order).
+- Release-history base: `f196c7af413ebfbc59d841582b7fbd382ffa8b77`
+  (`origin/main`, released as v0.2.0). The integration reconciliation preserves
+  that version, manifest, and changelog before the feature set advances to main.
+- Delivery state: PRs #27–#30 are merged into `dev`. Final hardening remained
+  split into its owning stack layers and was propagated bottom-up without history
   rewrites.
 - Local database schema: **version 7**
   (`FOLIO_DATABASE_VERSION` in `src/lib/database-schema.ts`).
@@ -43,7 +43,7 @@ Status language is intentionally strict:
 - The ten issue bodies contain **121** acceptance criteria. This record maps all
   **121/121**: **107** are software-verified and **14** remain external/manual.
 - Independently run on the candidate tree on 2026-08-03:
-  - `npm test` — pass, **580/580** tests; 0 failed, 0 skipped, 0 todo.
+  - `npm test` — pass, **581/581** tests; 0 failed, 0 skipped, 0 todo.
   - `npx tsc --noEmit` — pass.
   - `npm run lint` — pass.
   - `npx expo-doctor` — pass, **20/20** checks.
@@ -53,6 +53,9 @@ Status language is intentionally strict:
   - Clean store-flavor Android release AAB — build and structural flavor audit
     pass; the local debug-signed artifact is not a Play-signed candidate and does
     not satisfy protected store-certificate verification.
+  - GitHub-hosted Xcode 26.6 unsigned iOS Release archive — pass. The arm64 IPA,
+    absence of signing material, privacy manifest, reviewed entitlements, and
+    AltStore/SideStore source generation were verified by PR #30 CI.
 - Disposable Paperless 3.0.0 and 3.0.5 stacks were exercised with full and
   restricted users. Identity-provider, real mTLS, iOS-device, printer, and store
   account checks remain unavailable.
@@ -62,7 +65,7 @@ Status language is intentionally strict:
 | Issue | Workstream | Software-verified criteria | External/manual criteria | Status | Precise remaining blocker |
 | --- | --- | ---: | ---: | --- | --- |
 | #14 | Intake and durable upload | 11/13 | 2/13 | Android PDF/text intake and restart verified; cross-platform matrix open | Android registration, a real Files PDF share, synthetic text share, durable staging, and restart were exercised. iOS plus Mail/browser/scanner, biometric-entry, and full multi-provider device coverage remain. |
-| #15 | Profiles and authentication | 12/13 | 1/13 | Software path verified; native mTLS/live auth QA open | Linux cannot build/test the iOS Keychain/`URLSession` path; no device certificate identity or live OTP/OIDC/Paperless fixtures were available. |
+| #15 | Profiles and authentication | 12/13 | 1/13 | Hosted native compile passed; device mTLS/live auth QA open | Xcode 26.6 compiled the iOS Keychain/`URLSession` path, but no device certificate identity or live OTP/OIDC/Paperless fixtures were available. |
 | #16 | Upload metadata and presets | 11/11 | 0/11 | Software acceptance verified; live compatibility partially exercised | Both Paperless versions accepted a multipart upload and exact title/date/tag/filename readback. Workflow, custom-field clear/value matrix, owner-transfer visibility loss, matching, and preset UI still need device/live coverage. |
 | #17 | Bulk library operations | 13/13 | 0/13 | Software acceptance verified; live error-matrix QA open | Restricted 403 and permission readback were exercised on both versions. Live 404/429, mixed partial results, retry, export, and reprocess task correlation remain. |
 | #18 | Offline and Task Center | 14/15 | 1/15 | Durable restart verified; background device matrix open | Android intake state survived force-stop/relaunch. Reboot, OS scheduler timing, notification routing, connectivity return, disk pressure, and iOS process behavior remain. |
@@ -75,10 +78,10 @@ Status language is intentionally strict:
 
 ## External environment facts
 
-- The verification host is Linux. A previous hosted Xcode 26.6 archive exposed
-  concrete `FolioMtls` Swift/Security API errors; the candidate tree replaces
-  those APIs and delegate signatures, but the corrected source still needs a new
-  hosted archive. No signed IPA or TestFlight candidate was produced.
+- The verification host is Linux. Hosted Xcode 26.6 CI compiled the corrected
+  `FolioMtls`, platform, widget, and share-extension sources and produced a
+  structurally verified unsigned IPA plus AltStore/SideStore source. No signed
+  IPA, physical-iOS run, or TestFlight candidate was produced.
 - A Samsung SM-G781B on Android 16/API 36 was previously exercised through ADB with a
   non-incrementally installed GitHub release APK. Warm/cold allowlisted deep
   links, native scan launch, and text/invalid-provider share intake were
@@ -181,7 +184,8 @@ Primary local evidence: `tests/auth-foundation.test.mjs`,
   with a real securely stored client identity, including selection/import,
   password-protected identity, missing private key, expiry, replacement, hostname
   trust, and cleanup on Android and iOS. Source contracts and adapter tests pass,
-  but the criterion is not complete without native compile/device evidence.
+  and the iOS sources compile in hosted Xcode, but the criterion is not complete
+  without device evidence.
 - [x] **Software-verified:** Custom headers are allowlisted, profile-scoped,
   secret-stored, value-redacted, and applied only through the owning session.
 - [x] **Software-verified:** No configuration or transport path disables global
