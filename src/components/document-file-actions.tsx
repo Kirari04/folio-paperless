@@ -23,6 +23,7 @@ import {
   WifiOff,
   X,
 } from 'lucide-react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
 import { createThemedStyleSheet, fonts, palette, radii, shadows } from '@/constants/theme';
@@ -499,7 +500,7 @@ export function DocumentFileActions({
       onRequestClose={onClose}
       presentationStyle="pageSheet"
       visible={visible}>
-      <View style={styles.root}>
+      <SafeAreaView edges={['top']} style={styles.root}>
         <View style={styles.header}>
           <View style={styles.headerCopy}>
             <Text style={styles.title}>{t('fileActions.title')}</Text>
@@ -669,7 +670,7 @@ export function DocumentFileActions({
             </>
           )}
         </ScrollView>
-      </View>
+      </SafeAreaView>
     </Modal>
   );
 }

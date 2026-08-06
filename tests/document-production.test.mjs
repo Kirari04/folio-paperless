@@ -69,6 +69,10 @@ test('representation selection never silently substitutes a requested file', () 
     safeRepresentationFilename(8, 'Tax / Return', { ...representations.archive, filename: '../Tax:Return?.pdf' }),
     '-Tax-Return-.pdf',
   );
+  assert.equal(
+    safeRepresentationFilename(8, 'Invoice', { ...representations.archive, filename: '[Docker] Confirmation.pdf' }),
+    '-Docker- Confirmation.pdf',
+  );
 });
 
 test('native printing is offered only for an explicit PDF representation', () => {

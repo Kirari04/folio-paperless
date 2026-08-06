@@ -15,11 +15,16 @@ test('document quick actions run their named action without opening the file-opt
   assert.doesNotMatch(detail, /setFileActions(?:Open)?\(['"](?:share|save)['"]\)/);
 });
 
-test('direct preview clears an advanced representation request before opening the viewer', () => {
+test('direct preview uses a profile-scoped pinned representation during cached/offline states', () => {
   assert.match(
     detail,
-    /function openDocumentPreview\(\) \{\s*setPreviewRequest\(null\);\s*setPreviewFailed\(false\);\s*setPreviewOpen\(true\);\s*\}/,
+    /async function openDocumentPreview\(\)/,
   );
+  assert.match(detail, /syncState !== 'current'/);
+  assert.match(detail, /resolveOfflineDocument\(document\.id, 'archive'\)/);
+  assert.match(detail, /resolveOfflineDocument\(document\.id, 'original'\)/);
+  assert.match(detail, /resolvePreferredCachedPreviewSource/);
+  assert.match(detail, /setPreviewRequest\(request\)/);
 });
 
 test('advanced representation, offline, and public-link controls remain explicitly available', () => {

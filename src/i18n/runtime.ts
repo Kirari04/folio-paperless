@@ -1,4 +1,5 @@
 import { catalogs, type TranslationKey } from './catalogs.ts';
+import { formatListForLocale, formatNumberForLocale } from './core.ts';
 
 type RuntimeLocale = keyof typeof catalogs;
 type InterpolationValues = Record<string, string | number>;
@@ -34,9 +35,9 @@ export function translateRuntime(key: TranslationKey, values?: InterpolationValu
 }
 
 export function formatRuntimeNumber(value: number, options?: Intl.NumberFormatOptions) {
-  return new Intl.NumberFormat(runtimeLocaleTag, options).format(value);
+  return formatNumberForLocale(value, runtimeLocaleTag, options);
 }
 
 export function formatRuntimeList(values: string[], options?: Intl.ListFormatOptions) {
-  return new Intl.ListFormat(runtimeLocaleTag, options).format(values);
+  return formatListForLocale(values, runtimeLocaleTag, options);
 }

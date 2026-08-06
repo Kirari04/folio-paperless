@@ -68,3 +68,15 @@ test('printing is disabled outside native PDF support and rechecked at handoff',
   assert.match(actions, /disabled=\{!printSupported \|\| !!busy/);
   assert.match(platform, /Platform\.OS !== 'ios' && Platform\.OS !== 'android'/);
 });
+
+test('full-page document modals keep their headers below the system status bar', async () => {
+  const [actions, workspace] = await Promise.all([
+    readFile(new URL('../src/components/document-file-actions.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/document-paperless3-workspace.tsx', import.meta.url), 'utf8'),
+  ]);
+
+  for (const source of [actions, workspace]) {
+    assert.match(source, /import \{ SafeAreaView \} from 'react-native-safe-area-context'/);
+    assert.match(source, /<SafeAreaView edges=\{\['top'\]\} style=\{styles\.root\}>/);
+  }
+});

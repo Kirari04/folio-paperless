@@ -40,6 +40,7 @@ type CountRow = { count: number };
 
 export class SQLiteFolioRepository implements FolioRepository {
   private databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
+  private mutationQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly databaseName = 'folio.db') {}
 
@@ -48,13 +49,32 @@ export class SQLiteFolioRepository implements FolioRepository {
     return this.databasePromise;
   }
 
+  private enqueueMutation<T>(mutation: () => Promise<T>): Promise<T> {
+    const queued = this.mutationQueue.then(mutation, mutation);
+    this.mutationQueue = queued.then(() => undefined, () => undefined);
+    return queued;
+  }
+
+  private exclusiveMutation(
+    database: SQLite.SQLiteDatabase,
+    mutation: (transaction: SQLite.SQLiteDatabase) => Promise<void>,
+  ) {
+    return this.enqueueMutation(() => database.withExclusiveTransactionAsync(mutation));
+  }
+
+  private queuedRunAsync(source: string, ...params: SQLite.SQLiteBindValue[]) {
+    return this.enqueueMutation(async () => (
+      (await this.database()).runAsync(source, ...params)
+    ));
+  }
+
   async initialize() {
     const database = await this.database();
     await database.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     const row = await database.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
     const currentVersion = row?.user_version ?? 0;
     for (const migration of migrationsAfter(currentVersion)) {
-      await database.withExclusiveTransactionAsync(async (transaction) => {
+      await this.exclusiveMutation(database, async (transaction) => {
         await transaction.execAsync(migration.sql);
         await transaction.execAsync(`PRAGMA user_version = ${migration.version}`);
       });
@@ -71,7 +91,7 @@ export class SQLiteFolioRepository implements FolioRepository {
 
   async replaceWorkspace(workspace: CachedWorkspace) {
     const database = await this.database();
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const currentRow = await transaction.getFirstAsync<JsonRow>(
         'SELECT payload_json FROM workspaces WHERE profile_id = ?',
         workspace.profileId,
@@ -116,7 +136,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   ) {
     const database = await this.database();
     let committed: CachedWorkspace | null = null;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const row = await transaction.getFirstAsync<JsonRow>(
         'SELECT payload_json FROM workspaces WHERE profile_id = ?',
         profileId,
@@ -163,7 +183,7 @@ export class SQLiteFolioRepository implements FolioRepository {
 
   async upsertSavedView(profileId: string, view: import('@/types/document').PaperlessSavedView) {
     const database = await this.database();
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const row = await transaction.getFirstAsync<JsonRow>(
         'SELECT payload_json FROM workspaces WHERE profile_id = ?',
         profileId,
@@ -201,7 +221,7 @@ export class SQLiteFolioRepository implements FolioRepository {
 
   async deleteSavedView(profileId: string, remoteId: number) {
     const database = await this.database();
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const row = await transaction.getFirstAsync<JsonRow>(
         'SELECT payload_json FROM workspaces WHERE profile_id = ?',
         profileId,
@@ -244,7 +264,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   ) {
     const database = await this.database();
     let committed: CachedWorkspace | null = null;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const row = await transaction.getFirstAsync<JsonRow>(
         'SELECT payload_json FROM workspaces WHERE profile_id = ?',
         profileId,
@@ -284,7 +304,7 @@ export class SQLiteFolioRepository implements FolioRepository {
 
   async writeSavedViewSnapshot(profileId: string, snapshot: import('@/types/persistence').CachedSavedViewSnapshot) {
     const database = await this.database();
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const row = await transaction.getFirstAsync<JsonRow>(
         'SELECT payload_json FROM workspaces WHERE profile_id = ?',
         profileId,
@@ -309,7 +329,7 @@ export class SQLiteFolioRepository implements FolioRepository {
 
   async writeWorkspaceError(profileId: string, error: string) {
     const database = await this.database();
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const row = await transaction.getFirstAsync<JsonRow>(
         'SELECT payload_json FROM workspaces WHERE profile_id = ?',
         profileId,
@@ -338,7 +358,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   }
 
   async writeDocumentDetail(detail: CachedDocumentDetail) {
-    await (await this.database()).runAsync(
+    await this.queuedRunAsync(
       `INSERT INTO document_details (profile_id, document_id, payload_json, fetched_at)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(profile_id, document_id) DO UPDATE SET
@@ -368,7 +388,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   }
 
   async writeTask(task: PersistentTask) {
-    const result = await (await this.database()).runAsync(
+    const result = await this.queuedRunAsync(
       `INSERT INTO persistent_tasks (
          profile_id, task_id, kind, stage, next_attempt_at, lease_owner,
          lease_expires_at, updated_at, payload_json
@@ -407,7 +427,7 @@ export class SQLiteFolioRepository implements FolioRepository {
       throw new Error('A task batch cannot cross connection profiles.');
     }
     const database = await this.database();
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const removal = await transaction.getFirstAsync<{ operation_id: string }>(
         'SELECT operation_id FROM profile_removal_tombstones WHERE profile_id = ?',
         profileId,
@@ -449,7 +469,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   ) {
     const database = await this.database();
     let claimed: PersistentTask | null = null;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const removal = await transaction.getFirstAsync<{ operation_id: string }>(
         'SELECT operation_id FROM profile_removal_tombstones WHERE profile_id = ?',
         task.profileId,
@@ -509,7 +529,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   ) {
     const database = await this.database();
     let renewed: PersistentTask | null = null;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const removal = await transaction.getFirstAsync<{ operation_id: string }>(
         'SELECT operation_id FROM profile_removal_tombstones WHERE profile_id = ?',
         profileId,
@@ -556,7 +576,7 @@ export class SQLiteFolioRepository implements FolioRepository {
     ) throw new Error('A workspace sync commit must retain one profile, task, and terminal state.');
     const database = await this.database();
     let committed = false;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const removal = await transaction.getFirstAsync<{ operation_id: string }>(
         'SELECT operation_id FROM profile_removal_tombstones WHERE profile_id = ?',
         expectedLease.profileId,
@@ -638,7 +658,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   ) {
     const database = await this.database();
     let claimed: PersistentTask | null = null;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const removal = await transaction.getFirstAsync<{ operation_id: string }>(
         'SELECT operation_id FROM profile_removal_tombstones WHERE profile_id = ?',
         profileId,
@@ -697,7 +717,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   ) {
     const database = await this.database();
     let claimed: PersistentTask | null = null;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const removal = await transaction.getFirstAsync<{ operation_id: string }>(
         'SELECT operation_id FROM profile_removal_tombstones WHERE profile_id = ?',
         profileId,
@@ -748,7 +768,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   ) {
     const database = await this.database();
     let claimed: PersistentTask | null = null;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const removal = await transaction.getFirstAsync<{ operation_id: string }>(
         'SELECT operation_id FROM profile_removal_tombstones WHERE profile_id = ?',
         profileId,
@@ -803,7 +823,7 @@ export class SQLiteFolioRepository implements FolioRepository {
     ) throw new Error('A leased task update must retain its profile, identity, and kind.');
     const database = await this.database();
     let committed: PersistentTask | null = null;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const removal = await transaction.getFirstAsync<{ operation_id: string }>(
         'SELECT operation_id FROM profile_removal_tombstones WHERE profile_id = ?',
         expectedLease.profileId,
@@ -855,7 +875,7 @@ export class SQLiteFolioRepository implements FolioRepository {
       throw new Error('A metadata cache mutation must match its durable task target.');
     }
     const database = await this.database();
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const row = await transaction.getFirstAsync<JsonRow>(
         'SELECT payload_json FROM workspaces WHERE profile_id = ?',
         task.profileId,
@@ -934,7 +954,7 @@ export class SQLiteFolioRepository implements FolioRepository {
     ) throw new Error('A metadata task commit must retain one profile and task.');
     const database = await this.database();
     let committed = false;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const removal = await transaction.getFirstAsync<{ operation_id: string }>(
         'SELECT operation_id FROM profile_removal_tombstones WHERE profile_id = ?',
         expectedLease.profileId,
@@ -1015,7 +1035,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   }
 
   async deleteTask(profileId: string, taskId: string) {
-    await (await this.database()).runAsync(
+    await this.queuedRunAsync(
       'DELETE FROM persistent_tasks WHERE profile_id = ? AND task_id = ?',
       profileId,
       taskId,
@@ -1034,7 +1054,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   }
 
   async writePreset(preset: UploadPreset) {
-    await (await this.database()).runAsync(
+    await this.queuedRunAsync(
       `INSERT INTO upload_presets (profile_id, preset_id, updated_at, payload_json)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(profile_id, preset_id) DO UPDATE SET
@@ -1047,7 +1067,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   }
 
   async deletePreset(profileId: string, presetId: string) {
-    await (await this.database()).runAsync(
+    await this.queuedRunAsync(
       'DELETE FROM upload_presets WHERE profile_id = ? AND preset_id = ?',
       profileId,
       presetId,
@@ -1070,7 +1090,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   }
 
   async writeRouteAlias(alias: RouteAlias) {
-    await (await this.database()).runAsync(
+    await this.queuedRunAsync(
       `INSERT INTO route_aliases (profile_id, source_id, target_id, created_at)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(profile_id, source_id) DO UPDATE SET
@@ -1125,7 +1145,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   }
 
   async writeOfflineFile(file: OfflineFileRecord) {
-    await (await this.database()).runAsync(
+    await this.queuedRunAsync(
       `INSERT INTO offline_files (
          profile_id, document_id, representation, uri, byte_size, pinned,
          last_accessed_at, created_at, file_name, mime_type
@@ -1152,7 +1172,7 @@ export class SQLiteFolioRepository implements FolioRepository {
     documentId: string,
     representation: OfflineFileRecord['representation'],
   ) {
-    await (await this.database()).runAsync(
+    await this.queuedRunAsync(
       `DELETE FROM offline_files
        WHERE profile_id = ? AND document_id = ? AND representation = ?`,
       profileId,
@@ -1171,7 +1191,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   ) {
     const database = await this.database();
     let claim: TaskNotificationClaim | null = null;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const removal = await transaction.getFirstAsync<{ operation_id: string }>(
         'SELECT operation_id FROM profile_removal_tombstones WHERE profile_id = ?',
         profileId,
@@ -1233,7 +1253,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   async completeTaskNotification(claim: TaskNotificationClaim, now: Date) {
     const database = await this.database();
     let completed: PersistentTask | null = null;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const removal = await transaction.getFirstAsync<{ operation_id: string }>(
         'SELECT operation_id FROM profile_removal_tombstones WHERE profile_id = ?',
         claim.profileId,
@@ -1288,7 +1308,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   }
 
   async releaseTaskNotification(claim: TaskNotificationClaim, now: Date) {
-    const result = await (await this.database()).runAsync(
+    const result = await this.queuedRunAsync(
       `UPDATE task_notification_outbox
        SET lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
        WHERE profile_id = ? AND task_id = ? AND state = 'pending'
@@ -1317,7 +1337,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   }
 
   async writeCapabilities(capabilities: CachedCapabilitySet) {
-    await (await this.database()).runAsync(
+    await this.queuedRunAsync(
       `INSERT INTO capabilities (profile_id, fingerprint, discovered_at, payload_json)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(profile_id) DO UPDATE SET
@@ -1351,7 +1371,7 @@ export class SQLiteFolioRepository implements FolioRepository {
 
   async deleteProfileData(profileId: string) {
     const database = await this.database();
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       for (const table of [
         'workspaces',
         'document_details',
@@ -1369,7 +1389,7 @@ export class SQLiteFolioRepository implements FolioRepository {
 
   async deleteProfileDataAndWriteRemovalTombstone(tombstone: ProfileRemovalTombstone) {
     const database = await this.database();
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       for (const table of [
         'workspaces',
         'document_details',
@@ -1399,7 +1419,7 @@ export class SQLiteFolioRepository implements FolioRepository {
 
   async writeProfileRemovalManifest(manifest: ProfileRemovalManifestRecord) {
     const database = await this.database();
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.exclusiveMutation(database, async (transaction) => {
       const removal = await transaction.getFirstAsync<{ operation_id: string }>(
         'SELECT operation_id FROM profile_removal_tombstones WHERE profile_id = ?',
         manifest.profileId,
@@ -1451,7 +1471,7 @@ export class SQLiteFolioRepository implements FolioRepository {
   }
 
   async deleteProfileRemovalManifest(operationId: string) {
-    await (await this.database()).runAsync(
+    await this.queuedRunAsync(
       'DELETE FROM profile_removal_manifests WHERE operation_id = ?',
       operationId,
     );

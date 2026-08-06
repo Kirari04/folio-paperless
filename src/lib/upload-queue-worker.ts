@@ -302,9 +302,11 @@ export async function runNextUploadTask(options: {
       task = canceled;
       return { kind: 'canceled', task };
     }
+    const adoptsPolledDocumentIdentity = task.kind === 'upload'
+      || task.kind === 'paperless-processing';
     if (
       completedPollResult.documentId
-      && (task.kind === 'upload' || task.kind === 'paperless-processing')
+      && adoptsPolledDocumentIdentity
     ) {
       task = {
         ...task,
@@ -333,7 +335,7 @@ export async function runNextUploadTask(options: {
       error: undefined,
       result: {
         ...task.result,
-        ...(completedPollResult.documentId ? {
+        ...(completedPollResult.documentId && adoptsPolledDocumentIdentity ? {
           remoteDocumentId: completedPollResult.documentId,
           routeDocumentId: `remote-${completedPollResult.documentId}`,
         } : {}),

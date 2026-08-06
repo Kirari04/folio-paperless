@@ -10,6 +10,8 @@ import {
 import type { TranslationKey } from './catalogs.ts';
 import {
   formatFileSizeForLocale,
+  formatListForLocale,
+  formatNumberForLocale,
   resolveColorScheme,
   resolveLocaleTag,
   resolveSupportedLocale,
@@ -92,7 +94,7 @@ export function I18nRenderProvider({
   );
   const formatNumber = useCallback(
     (value: number, options?: Intl.NumberFormatOptions) =>
-      new Intl.NumberFormat(localeTag, options).format(value),
+      formatNumberForLocale(value, localeTag, options),
     [localeTag],
   );
   const formatDocumentDate = useCallback((value: Date | string | number) => {
@@ -119,7 +121,7 @@ export function I18nRenderProvider({
   }, [localeTag, now, t]);
   const formatList = useCallback(
     (values: string[], options?: Intl.ListFormatOptions) =>
-      new Intl.ListFormat(localeTag, options).format(values),
+      formatListForLocale(values, localeTag, options),
     [localeTag],
   );
   const formatFileSize = useCallback(

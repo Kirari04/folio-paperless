@@ -8,6 +8,10 @@ export type CachedPreviewSource = {
   uri: string;
 };
 
+export type PreferredCachedPreviewSource = CachedPreviewSource & {
+  byteSize: number;
+};
+
 /**
  * Resolves a pinned representation without consulting live server capabilities.
  * The record is accepted only when every persisted identity matches the active
@@ -33,4 +37,37 @@ export function resolveCachedPreviewSource(input: {
     filename: file.fileName ?? input.filename,
     mimeType: file.mimeType ?? input.mimeType,
   };
+}
+
+/**
+ * Selects the user's preferred pinned representation, falling back only to a
+ * different representation that is also present in the same profile-scoped
+ * offline cache. This never substitutes a remote URL.
+ */
+export function resolvePreferredCachedPreviewSource(input: {
+  documentId: string;
+  expectedProfileId?: string;
+  files: Partial<Record<PaperlessRepresentation, OfflineFileRecord | null | undefined>>;
+  filenames?: Partial<Record<PaperlessRepresentation, string | null>>;
+  mimeTypes?: Partial<Record<PaperlessRepresentation, string | null>>;
+  preference: PaperlessRepresentation | null;
+  versionId?: number;
+}): PreferredCachedPreviewSource | null {
+  const order: PaperlessRepresentation[] = input.preference
+    ? [input.preference, input.preference === 'archive' ? 'original' : 'archive']
+    : ['archive', 'original'];
+  for (const representation of order) {
+    const file = input.files[representation];
+    const source = resolveCachedPreviewSource({
+      documentId: input.documentId,
+      expectedProfileId: input.expectedProfileId,
+      file,
+      filename: input.filenames?.[representation] ?? null,
+      mimeType: input.mimeTypes?.[representation] ?? null,
+      representation,
+      versionId: input.versionId,
+    });
+    if (source && file) return { ...source, byteSize: file.byteSize };
+  }
+  return null;
 }

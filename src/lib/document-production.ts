@@ -13,6 +13,7 @@ import type {
   PaperlessOption,
 } from '../types/document.ts';
 import { normalizePermissionSet } from './paperless-advanced.ts';
+import { sanitizeExportFilename } from './export-filename.ts';
 
 export type RepresentationChoice = {
   selected: PaperlessRepresentation;
@@ -64,7 +65,6 @@ export type PdfEditorPage = {
   splitAfter: boolean;
 };
 
-const SAFE_FILENAME_CHARACTERS = /[\/:*?"<>|\u0000-\u001f\u007f]/g;
 const OPAQUE_SLUG = /^[A-Za-z0-9_-]{1,256}$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -127,13 +127,10 @@ export function safeRepresentationFilename(
 ) {
   const serverName = info.filename?.trim();
   const candidate = serverName || `${title || `document-${documentId}`}${info.representation === 'archive' ? '.pdf' : ''}`;
-  const safe = candidate
-    .replace(SAFE_FILENAME_CHARACTERS, '-')
-    .replace(/\s+/g, ' ')
-    .replace(/^\.+/, '')
-    .trim()
-    .slice(0, 180);
-  return safe || `document-${documentId}-${info.representation}${info.representation === 'archive' ? '.pdf' : ''}`;
+  return sanitizeExportFilename(
+    candidate,
+    `document-${documentId}-${info.representation}${info.representation === 'archive' ? '.pdf' : ''}`,
+  );
 }
 
 export function representationLabel(info: PaperlessRepresentationInfo) {

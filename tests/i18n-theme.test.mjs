@@ -8,6 +8,8 @@ import { act, create } from 'react-test-renderer';
 import { de, en } from '../src/i18n/catalogs.ts';
 import {
   formatFileSizeForLocale,
+  formatListForLocale,
+  formatNumberForLocale,
   resolveColorScheme,
   resolveSupportedLocale,
   translate,
@@ -145,6 +147,24 @@ test('system locale selection falls back to English and honors German preference
   assert.equal(resolveSupportedLocale('system', ['de-CH']), 'de');
   assert.equal(resolveSupportedLocale('en', ['de']), 'en');
   assert.equal(resolveSupportedLocale('de', ['en']), 'de');
+});
+
+test('native formatting stays usable when optional Intl constructors are absent', () => {
+  const NumberFormat = Intl.NumberFormat;
+  const ListFormat = Intl.ListFormat;
+  try {
+    Intl.NumberFormat = undefined;
+    Intl.ListFormat = undefined;
+    assert.equal(formatNumberForLocale(12_345.6, 'en-US'), '12345.6');
+    assert.equal(formatNumberForLocale(0.125, 'en-US', { style: 'percent' }), '12.5%');
+    assert.equal(formatListForLocale(['Alpha', 'Beta'], 'en-US'), 'Alpha, Beta');
+    assert.equal(formatFileSizeForLocale(1.5 * 1024 * 1024, 'en-US'), '1.5 MB');
+    assert.equal(formatRuntimeNumber(3), '3');
+    assert.equal(formatRuntimeList(['one', 'two']), 'one, two');
+  } finally {
+    Intl.NumberFormat = NumberFormat;
+    Intl.ListFormat = ListFormat;
+  }
 });
 
 test('representative screen copy interpolates in both supported languages', () => {
