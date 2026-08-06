@@ -22,6 +22,7 @@ import {
   Users,
   X,
 } from 'lucide-react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
 import { DocumentPdfPageEditor } from '@/components/document-pdf-page-editor';
@@ -243,7 +244,15 @@ export function DocumentPaperless3Workspace({
         `/api/documents/${remoteId}/${fullPermissions ? '?full_perms=true' : ''}`,
         nextController.signal,
       );
-      setPdfAccess(parsePdfAccess(detail.data, remoteId));
+      let nextPdfAccess = parsePdfAccess(detail.data, remoteId);
+      if (!nextPdfAccess && fullPermissions) {
+        const accessDetail = await advancedApi.client.get<unknown>(
+          `/api/documents/${remoteId}/`,
+          nextController.signal,
+        );
+        nextPdfAccess = parsePdfAccess(accessDetail.data, remoteId);
+      }
+      setPdfAccess(nextPdfAccess);
       setDuplicates(extractDuplicateSummaries(detail.data));
       if (fullPermissions) {
         try {
@@ -523,7 +532,7 @@ export function DocumentPaperless3Workspace({
 
   return (
     <Modal animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose} presentationStyle="pageSheet" visible={visible}>
-      <View style={styles.root}>
+      <SafeAreaView edges={['top']} style={styles.root}>
         <View style={styles.header}>
           <View style={styles.headerCopy}>
             <Text style={styles.title}>{t('paperless3.title')}</Text>
@@ -533,9 +542,19 @@ export function DocumentPaperless3Workspace({
             <X color={palette.ink} size={20} />
           </Pressable>
         </View>
-        <ScrollView horizontal contentContainerStyle={styles.tabs} showsHorizontalScrollIndicator={false}>
+        <ScrollView
+          accessibilityRole="tablist"
+          horizontal
+          contentContainerStyle={styles.tabs}
+          showsHorizontalScrollIndicator={false}
+          style={styles.tabScroller}>
           {tabs.map(({ id, label, icon: Icon }) => (
-            <Pressable key={id} onPress={() => setTab(id)} style={[styles.tab, tab === id && styles.tabActive]}>
+            <Pressable
+              accessibilityRole="tab"
+              accessibilityState={{ selected: tab === id }}
+              key={id}
+              onPress={() => setTab(id)}
+              style={[styles.tab, tab === id && styles.tabActive]}>
               <Icon color={tab === id ? palette.accentInk : palette.ink} size={16} />
               <Text style={[styles.tabText, tab === id && styles.tabTextActive]}>{label}</Text>
             </Pressable>
@@ -705,7 +724,7 @@ export function DocumentPaperless3Workspace({
             </>
           )}
         </ScrollView>
-      </View>
+      </SafeAreaView>
     </Modal>
   );
 }
@@ -764,8 +783,9 @@ const styles = createThemedStyleSheet({
   title: { color: palette.ink, fontFamily: fonts.serif, fontSize: 23, fontWeight: '600' },
   subtitle: { color: palette.muted, fontFamily: fonts.sans, fontSize: 11, marginTop: 3 },
   close: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.paper },
-  tabs: { gap: 7, paddingHorizontal: 16, paddingVertical: 10 },
-  tab: { minHeight: 41, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 13, borderRadius: radii.pill, backgroundColor: palette.paper },
+  tabScroller: { flexGrow: 0, flexShrink: 0 },
+  tabs: { alignItems: 'center', gap: 7, paddingHorizontal: 16, paddingVertical: 10 },
+  tab: { flexShrink: 0, minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 13, borderRadius: radii.pill, backgroundColor: palette.paper },
   tabActive: { backgroundColor: palette.lime },
   tabText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 10, fontWeight: '900' },
   tabTextActive: { color: palette.accentInk },

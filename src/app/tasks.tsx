@@ -23,6 +23,7 @@ import {
   summarizeBulkOutcomes,
   taskCancellationMeaning,
 } from '@/lib/task-policy';
+import { taskResultRouteId } from '@/lib/task-center';
 import { useRouter } from '@/lib/router';
 import type { PersistentTask } from '@/types/tasks';
 
@@ -196,6 +197,7 @@ export default function TaskCenterScreen() {
           const bulkSummary = task.result?.bulkOutcomes
             ? summarizeBulkOutcomes(task.result.bulkOutcomes)
             : null;
+          const resultRouteId = taskResultRouteId(task);
           return (
             <View key={task.id} style={styles.taskCard}>
               <View style={styles.taskTop}>
@@ -280,8 +282,8 @@ export default function TaskCenterScreen() {
                     <Text style={styles.reviewText}>{t('tasks.resubmitUncertainAction')}</Text>
                   </Pressable>
                 )}
-                {!!task.result?.routeDocumentId && (
-                  <Pressable onPress={() => router.push({ pathname: '/document/[id]', params: { id: task.result!.routeDocumentId } })} style={styles.actionButton}>
+                {!!resultRouteId && (
+                  <Pressable onPress={() => router.push({ pathname: '/document/[id]', params: { id: resultRouteId } })} style={styles.actionButton}>
                     <Text style={styles.actionText}>{t('tasks.openResult')}</Text>
                   </Pressable>
                 )}

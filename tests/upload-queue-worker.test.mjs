@@ -361,7 +361,7 @@ test('a durable PDF operation is claimed after restart and only polls its Paperl
       async poll(task) {
         pollCalls += 1;
         assert.equal(task.paperlessTaskId, 'paperless-pdf-task-1');
-        return { documentId: 44, summary: 'PDF rotation complete.' };
+        return { documentId: 99, summary: 'PDF rotation complete.' };
       },
     },
   });
@@ -369,6 +369,8 @@ test('a durable PDF operation is claimed after restart and only polls its Paperl
   assert.equal(pollCalls, 1);
   assert.equal(result.kind, 'ready');
   assert.equal(result.task.result.summary, 'PDF rotation complete.');
+  assert.equal(result.task.result.remoteDocumentId, 44);
+  assert.equal(result.task.result.routeDocumentId, undefined);
 });
 
 test('a failed PDF consume job remains a durable non-retryable Task Center failure', async () => {

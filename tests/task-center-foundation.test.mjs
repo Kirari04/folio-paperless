@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { MemoryFolioRepository } from '../src/lib/memory-repository.ts';
-import { TaskCenterService, projectTask } from '../src/lib/task-center.ts';
+import { TaskCenterService, projectTask, taskResultRouteId } from '../src/lib/task-center.ts';
 
 const taskCenterScreenSource = await readFile(
   new URL('../src/app/tasks.tsx', import.meta.url),
@@ -39,6 +39,17 @@ test('Task Center projects profile-scoped active, failed, and completed counts',
   assert.deepEqual(snapshot.counts, { active: 1, failed: 1, completed: 1, canceled: 0 });
   assert.equal(snapshot.tasks.length, 3);
   assert.equal(snapshot.tasks.find((item) => item.id === 'ready').resultRouteId, 'remote-44');
+});
+
+test('PDF task results always route to their durable source document', () => {
+  const pdfTask = task({
+    kind: 'pdf-operation',
+    stage: 'ready',
+    documentId: 'remote-44',
+    result: { remoteDocumentId: 99, routeDocumentId: 'remote-99' },
+  });
+  assert.equal(taskResultRouteId(pdfTask), 'remote-44');
+  assert.equal(projectTask(pdfTask).resultRouteId, 'remote-44');
 });
 
 test('retry state survives service restart and a Paperless task resumes polling', async () => {
@@ -167,7 +178,7 @@ test('Task Center exposes recovery controls for failed local upload drafts', () 
   assert.match(taskCenterScreenSource, /const cancellable = !metadataConflict && \([\s\S]*task\.stage === 'failed'[\s\S]*task\.stage === 'submission-uncertain'/);
   assert.match(taskCenterScreenSource, /task\.stage === 'failed'[\s\S]*task\.kind === 'upload'[\s\S]*tasks\.editMetadata/);
   assert.doesNotMatch(taskCenterScreenSource, /task\.kind === 'upload'[\s\S]{0,160}!task\.paperlessTaskId[\s\S]{0,160}tasks\.editMetadata/);
-  assert.match(taskCenterScreenSource, /!!task\.result\?\.routeDocumentId[\s\S]*tasks\.openResult/);
+  assert.match(taskCenterScreenSource, /resultRouteId = taskResultRouteId\(task\)[\s\S]*!!resultRouteId[\s\S]*tasks\.openResult/);
   assert.match(taskCenterScreenSource, /\{cancellable && \([\s\S]*confirmCancel\(task\)/);
 });
 

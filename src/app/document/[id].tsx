@@ -55,15 +55,20 @@ import { useApp, useDocumentDetail } from '@/context/app-context';
 import { useI18n } from '@/i18n';
 import { presentRuntimeError, presentRuntimeMessage } from '@/i18n/error-presentation';
 import {
+  loadRepresentationPreference,
+} from '@/lib/document-production';
+import {
   findRoutedDocument,
   isPendingDocument,
   taskIdFromPlaceholderId,
 } from '@/lib/document-routing';
+import { resolvePreferredCachedPreviewSource } from '@/lib/offline-preview-policy';
 import {
   getPaperlessDocumentUrl,
   paperlessCredentialFileHeaders,
   usesNativeMutualTls,
 } from '@/lib/paperless';
+import { createPlatformStringStore } from '@/lib/platform-storage';
 import { useLocalSearchParams, useRouter } from '@/lib/router';
 import { isValidIsoDate } from '@/lib/validation';
 import { deriveSearchablePdfPages } from '@/lib/viewer-search';
@@ -84,6 +89,7 @@ type DocumentDetailScreenProps = {
 
 const credentialBindingGenerations = new WeakMap<PaperlessCredentials, number>();
 let nextCredentialBindingGeneration = 1;
+const detailRepresentationPreferenceStore = createPlatformStringStore();
 
 function credentialBindingGeneration(credentials: PaperlessCredentials | null) {
   if (!credentials) return 0;
@@ -119,6 +125,7 @@ function ProfileBoundDocumentDetailScreen({
     documents,
     credentials,
     activeProfile,
+    syncState,
     catalog,
     creationCapabilities,
     isSyncing,
@@ -130,6 +137,7 @@ function ProfileBoundDocumentDetailScreen({
     retryDocumentProcessing,
     refresh,
     resolveDocumentId,
+    resolveOfflineDocument,
     saveDocument: saveDocumentFile,
     shareDocument: shareDocumentFile,
   } = useApp();
@@ -382,8 +390,46 @@ function ProfileBoundDocumentDetailScreen({
     }
   }
 
-  function openDocumentPreview() {
-    setPreviewRequest(null);
+  async function openDocumentPreview() {
+    let request: RepresentationPreviewRequest | null = null;
+    if (
+      previewVersionId === undefined
+      && syncState !== 'current'
+      && activeProfile
+      && document
+    ) {
+      const [archive, original, preference] = await Promise.all([
+        resolveOfflineDocument(document.id, 'archive').catch(() => null),
+        resolveOfflineDocument(document.id, 'original').catch(() => null),
+        loadRepresentationPreference(detailRepresentationPreferenceStore),
+      ]);
+      const cached = resolvePreferredCachedPreviewSource({
+        documentId: document.id,
+        expectedProfileId: activeProfile.id,
+        files: { archive, original },
+        filenames: {
+          archive: `${title || `document-${document.remoteId || document.id}`}.pdf`,
+          original: document.originalFileName,
+        },
+        mimeTypes: {
+          archive: 'application/pdf',
+          original: document.mimeType,
+        },
+        preference,
+      });
+      if (cached) {
+        request = {
+          checksum: null,
+          filename: cached.filename,
+          mimeType: cached.mimeType,
+          offline: true,
+          representation: cached.representation,
+          size: cached.byteSize,
+          uri: cached.uri,
+        };
+      }
+    }
+    setPreviewRequest(request);
     setPreviewFailed(false);
     setPreviewOpen(true);
   }

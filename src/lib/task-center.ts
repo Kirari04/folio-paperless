@@ -73,13 +73,21 @@ function title(task: PersistentTask) {
     ?? translateRuntime(`tasks.kind.${task.kind}` as TranslationKey);
 }
 
+export function taskResultRouteId(task: PersistentTask) {
+  // Paperless PDF endpoints can report a short-lived consume job document ID
+  // even when the operation ultimately updates the original document. The
+  // durable source identity is therefore the only safe route for PDF jobs.
+  if (task.kind === 'pdf-operation' && task.documentId) return task.documentId;
+  return task.result?.routeDocumentId
+    ?? (task.result?.remoteDocumentId ? `remote-${task.result.remoteDocumentId}` : undefined);
+}
+
 export function projectTask(task: PersistentTask): TaskCenterProjection {
   const taskCategory = category(task);
   const acceptance = serverAcceptance(task);
   const active = taskCategory === 'active';
   const cancellable = active || taskCategory === 'failed';
-  const resultRouteId = task.result?.routeDocumentId
-    ?? (task.result?.remoteDocumentId ? `remote-${task.result.remoteDocumentId}` : undefined);
+  const resultRouteId = taskResultRouteId(task);
   const bulkSummary = task.result?.bulkOutcomes
     ? summarizeBulkOutcomes(task.result.bulkOutcomes)
     : undefined;

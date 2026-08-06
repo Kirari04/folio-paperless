@@ -6,7 +6,10 @@ import {
   requestForegroundUploadReconciliation,
 } from '../src/lib/background-upload-reconciliation.ts';
 import { MemoryFolioRepository } from '../src/lib/memory-repository.ts';
-import { resolveCachedPreviewSource } from '../src/lib/offline-preview-policy.ts';
+import {
+  resolveCachedPreviewSource,
+  resolvePreferredCachedPreviewSource,
+} from '../src/lib/offline-preview-policy.ts';
 import { presentSyncStatus } from '../src/lib/sync-status-presentation.ts';
 
 function readyUpload(profileId, id, overrides = {}) {
@@ -59,6 +62,40 @@ test('a profile-scoped pinned file resolves without live capability discovery af
   assert.equal(resolveCachedPreviewSource({
     documentId: 'remote-42', expectedProfileId: 'profile-a', file,
     filename: null, mimeType: null, representation: 'archive', versionId: 9,
+  }), null);
+});
+
+test('cold-start preview prefers a pinned representation and falls back only within the active profile', () => {
+  const archive = {
+    profileId: 'profile-a', documentId: 'remote-42', representation: 'archive',
+    uri: 'file:///protected/profile-a/remote-42/archive.pdf', byteSize: 4096,
+    pinned: true, lastAccessedAt: '2026-08-02T10:00:00.000Z', createdAt: '2026-08-01T10:00:00.000Z',
+  };
+  const original = {
+    ...archive,
+    representation: 'original',
+    uri: 'file:///protected/profile-a/remote-42/original.pdf',
+    byteSize: 2048,
+    fileName: 'invoice.pdf',
+    mimeType: 'application/pdf',
+  };
+  assert.deepEqual(resolvePreferredCachedPreviewSource({
+    documentId: 'remote-42',
+    expectedProfileId: 'profile-a',
+    files: { archive, original },
+    preference: 'original',
+  }), {
+    byteSize: 2048,
+    filename: 'invoice.pdf',
+    mimeType: 'application/pdf',
+    representation: 'original',
+    uri: original.uri,
+  });
+  assert.equal(resolvePreferredCachedPreviewSource({
+    documentId: 'remote-42',
+    expectedProfileId: 'profile-b',
+    files: { archive, original },
+    preference: 'original',
   }), null);
 });
 

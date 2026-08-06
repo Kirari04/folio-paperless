@@ -210,7 +210,7 @@ test('SQLite workspace errors read and write the latest row in one exclusive tra
   assert.notEqual(methodEnd, -1);
   const method = source.slice(methodStart, methodEnd);
 
-  const transactionStart = method.indexOf('withExclusiveTransactionAsync');
+  const transactionStart = method.indexOf('exclusiveMutation');
   const transactionRead = method.indexOf('transaction.getFirstAsync');
   const transactionWrite = method.indexOf('transaction.runAsync');
   assert.ok(transactionStart >= 0);
@@ -219,6 +219,18 @@ test('SQLite workspace errors read and write the latest row in one exclusive tra
   assert.doesNotMatch(method, /this\.(?:readWorkspace|replaceWorkspace)/);
   assert.match(method, /UPDATE workspaces SET payload_json = \?, sync_state = \?, sync_error = \?/);
   assert.doesNotMatch(method, /INSERT INTO workspaces/);
+});
+
+test('SQLite repository serializes direct writes and exclusive transactions', () => {
+  const source = readFileSync(
+    new URL('../src/lib/sqlite-repository.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /private enqueueMutation<T>[\s\S]*this\.mutationQueue = queued\.then/);
+  assert.equal((source.match(/database\.withExclusiveTransactionAsync/g) ?? []).length, 1);
+  assert.equal((source.match(/\(await this\.database\(\)\)\.runAsync/g) ?? []).length, 1);
+  assert.ok((source.match(/this\.exclusiveMutation\(database/g) ?? []).length > 20);
+  assert.ok((source.match(/this\.queuedRunAsync\(/g) ?? []).length > 10);
 });
 
 test('profile cleanup never deletes another profile with the same server data', async () => {

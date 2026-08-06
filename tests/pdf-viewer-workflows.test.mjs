@@ -39,6 +39,8 @@ test('native PDF search remains page-aware, cancellable, highlighted, and local-
   assert.match(nativePdfPatch, /\.onDrawAll\(this\)/);
   assert.match(nativePdfPatch, /task\.cancel\(true\)/);
   assert.match(nativePdfPatch, /Only local PDF files can be searched/);
+  assert.match(nativePdfPatch, /if \(changed && !searchQuery\.isEmpty\(\) && searchTask == null\)/);
+  assert.doesNotMatch(nativePdfPatch, /loadComplete[\s\S]{0,1200}if \(!searchQuery\.isEmpty\(\) && searchTask == null\)/);
   assert.doesNotMatch(nativePdfPatch, /^\+.*Load pdf failed\. path=/m);
   assert.doesNotMatch(nativePdfPatch, /^\+.*Log\.[a-z]+\([^\n]*(?:path|query|snippet)/mi);
 });

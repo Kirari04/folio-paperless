@@ -345,6 +345,8 @@ test('PDF operation UI and submission mirror Paperless change, add, delete, and 
   assert.match(selectionSource, /if \(!canSubmitMerge\) return;[\s\S]*onMerge\(\[\.\.\.selectedIds\]\)/);
   assert.match(workspaceSource, /capabilities\?\.permissions\.document\.change === true/);
   assert.match(workspaceSource, /pdfAccess\?\.canChange === true/);
+  assert.match(workspaceSource, /nextPdfAccess = parsePdfAccess\(detail\.data, remoteId\)/);
+  assert.match(workspaceSource, /if \(!nextPdfAccess && fullPermissions\)[\s\S]*`\/api\/documents\/\$\{remoteId\}\/`[\s\S]*parsePdfAccess\(accessDetail\.data, remoteId\)/);
   assert.match(workspaceSource, /pdfAccess\.ownerId === null[\s\S]*pdfAccess\.ownerId === capabilities\?\.permissions\.currentUserId/);
   assert.match(workspaceSource, /pdfSplitEnabled = pdfEditEnabled[\s\S]*permissions\.document\.add === true/);
   assert.match(workspaceSource, /pdfMergeEnabled = pdfChangeAuthorized[\s\S]*permissions\.document\.add === true/);
@@ -356,6 +358,19 @@ test('PDF operation UI and submission mirror Paperless change, add, delete, and 
   assert.match(advancedSource, /\['delete', requirements\.delete === true\]/);
   assert.match(advancedSource, /requirements\.owner && response\.data\.owner !== null/);
   assert.match(advancedSource, /objectPermissionDenied[\s\S]*reason: 'permission-denied'/);
+});
+
+test('document tool tabs stay compact and expose native tab semantics', async () => {
+  const workspaceSource = await readFile(
+    new URL('../src/components/document-paperless3-workspace.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(workspaceSource, /accessibilityRole="tablist"[\s\S]*style=\{styles\.tabScroller\}/);
+  assert.match(workspaceSource, /accessibilityRole="tab"[\s\S]*accessibilityState=\{\{ selected: tab === id \}\}/);
+  assert.match(workspaceSource, /tabScroller: \{ flexGrow: 0, flexShrink: 0 \}/);
+  assert.match(workspaceSource, /tabs: \{ alignItems: 'center'/);
+  assert.match(workspaceSource, /tab: \{ flexShrink: 0, minHeight: 44/);
 });
 
 test('saved-view serializer stores query, sort, filters, and lossless extra rules', () => {

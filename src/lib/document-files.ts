@@ -18,6 +18,7 @@ import {
   nativeProfileRootStorage,
 } from '@/lib/native-profile-root-storage';
 import { translateRuntime } from '@/i18n/runtime';
+import { sanitizeExportFilename } from '@/lib/export-filename';
 
 const mimeExtensions: Record<string, string> = {
   'application/pdf': 'pdf',
@@ -30,11 +31,11 @@ const mimeExtensions: Record<string, string> = {
 function safeFileName(document: DocumentItem) {
   const originalExtension = document.originalFileName?.match(/\.([a-z0-9]{1,8})$/i)?.[1];
   const extension = originalExtension || mimeExtensions[document.mimeType || ''] || 'pdf';
-  const base = document.title
-    .trim()
-    .replace(/[\\/:*?"<>|]/g, '-')
-    .replace(/\s+/g, ' ')
-    .slice(0, 100) || `document-${document.remoteId}`;
+  const base = sanitizeExportFilename(
+    document.title,
+    `document-${document.remoteId}`,
+    100,
+  );
   return `${base}.${extension}`;
 }
 
