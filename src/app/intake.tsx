@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
-  StyleSheet,
   Switch,
   Text,
   TextInput,
@@ -14,7 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MotionPressable as Pressable, hapticFeedback } from '@/components/motion';
 import { IntakeRejectionList } from '@/components/intake-rejection-list';
-import { fonts, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n, type TranslationKey } from '@/i18n';
 import { presentRuntimeError } from '@/i18n/error-presentation';
@@ -1033,7 +1032,7 @@ export default function IntakeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: { flex: 1, backgroundColor: palette.canvas },
   header: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 18, paddingVertical: 14 },
   iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: palette.paper },

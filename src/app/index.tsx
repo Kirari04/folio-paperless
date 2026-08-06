@@ -11,7 +11,7 @@ import {
   UserRound,
 } from 'lucide-react-native';
 import { useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Text, TextInput, View } from 'react-native';
 
 import { AppShell } from '@/components/app-shell';
 import { MotionPressable as Pressable, hapticFeedback } from '@/components/motion';
@@ -19,7 +19,7 @@ import { DocumentCard } from '@/components/document-card';
 import { FolioLogo } from '@/components/folio-logo';
 import { PaperThumbnail } from '@/components/paper-thumbnail';
 import { SectionHeading } from '@/components/section-heading';
-import { fonts, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n } from '@/context/ui-preferences-context';
 import { presentRuntimeError } from '@/i18n/error-presentation';
@@ -310,7 +310,7 @@ export default function HomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   taskCenterCard: {
     minHeight: 68,
     flexDirection: 'row',

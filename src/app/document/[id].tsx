@@ -26,7 +26,6 @@ import {
   BackHandler,
   Easing,
   Share,
-  StyleSheet,
   Text,
   View,
   type ColorValue,
@@ -38,7 +37,6 @@ import { ChoiceSheet } from '@/components/choice-sheet';
 import { DocumentDeepSections } from '@/components/document-deep-sections';
 import {
   DocumentFileActions,
-  type DocumentFileActionIntent,
   type RepresentationPreviewRequest,
 } from '@/components/document-file-actions';
 import { DocumentPaperless3Workspace } from '@/components/document-paperless3-workspace';
@@ -52,7 +50,7 @@ import {
   hapticFeedback,
   useReducedMotion,
 } from '@/components/motion';
-import { fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
 import { useApp, useDocumentDetail } from '@/context/app-context';
 import { useI18n } from '@/i18n';
 import { presentRuntimeError, presentRuntimeMessage } from '@/i18n/error-presentation';
@@ -132,6 +130,7 @@ function ProfileBoundDocumentDetailScreen({
     retryDocumentProcessing,
     refresh,
     resolveDocumentId,
+    saveDocument: saveDocumentFile,
     shareDocument: shareDocumentFile,
   } = useApp();
   const resolvedId = resolveDocumentId(requestedId);
@@ -155,7 +154,7 @@ function ProfileBoundDocumentDetailScreen({
   const [previewFailed, setPreviewFailed] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewRequest, setPreviewRequest] = useState<RepresentationPreviewRequest | null>(null);
-  const [fileActions, setFileActions] = useState<DocumentFileActionIntent | null>(null);
+  const [fileActionsOpen, setFileActionsOpen] = useState(false);
   const [paperlessToolsOpen, setPaperlessToolsOpen] = useState(false);
   const [picker, setPicker] = useState<PickerKind>(null);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -312,7 +311,7 @@ function ProfileBoundDocumentDetailScreen({
     setPreviewFailed(false);
     setPreviewOpen(false);
     setPreviewRequest(null);
-    setFileActions(null);
+    setFileActionsOpen(false);
     setPaperlessToolsOpen(false);
     setPicker(null);
     setMoreOpen(false);
@@ -366,6 +365,27 @@ function ProfileBoundDocumentDetailScreen({
     } finally {
       setBusyAction(null);
     }
+  }
+
+  async function downloadDocument() {
+    if (!document?.remoteId) return;
+    setBusyAction('download');
+    try {
+      await saveDocumentFile(
+        document.id,
+        typeof selectedVersionId === 'number' ? selectedVersionId : undefined,
+      );
+    } catch (error) {
+      showToast(presentRuntimeError(error, t('detail.downloadError')), true);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function openDocumentPreview() {
+    setPreviewRequest(null);
+    setPreviewFailed(false);
+    setPreviewOpen(true);
   }
 
   async function saveTitle(nextValue: string) {
@@ -679,6 +699,19 @@ function ProfileBoundDocumentDetailScreen({
 
       {moreOpen && (
         <View style={[styles.moreMenu, { top: insets.top + 51 }]}>
+          <Pressable
+            disabled={!document.remoteId}
+            onPress={() => {
+              setMoreOpen(false);
+              setFileActionsOpen(true);
+            }}
+            style={styles.moreAction}>
+            <FolderArchive color={palette.ink} size={17} />
+            <View style={styles.moreCopy}>
+              <Text style={styles.moreLabel}>{t('detail.fileOptions')}</Text>
+              <Text style={styles.moreMeta}>{t('detail.fileOptionsCopy')}</Text>
+            </View>
+          </Pressable>
           <Pressable disabled={!document.remoteId} onPress={reprocess} style={styles.moreAction}>
             <RefreshCw color={palette.ink} size={17} />
             <View style={styles.moreCopy}>
@@ -721,7 +754,7 @@ function ProfileBoundDocumentDetailScreen({
             accessibilityLabel={t('detail.openPreviewOf', { title: document.title })}
             disabled={!canOpenPreview}
             haptic="medium"
-            onPress={() => setFileActions('manage')}
+            onPress={openDocumentPreview}
             pressedScale={0.99}
             style={[styles.previewBackground, { backgroundColor: document.color }]}>
             {previewReady && !!activeCredentials && !!document.remoteId && !previewFailed
@@ -795,14 +828,14 @@ function ProfileBoundDocumentDetailScreen({
               icon={Share2}
               label={t('detail.share')}
               loading={busyAction === 'share'}
-              onPress={() => document.remoteId ? setFileActions('share') : void shareDocument()}
+              onPress={() => void shareDocument()}
             />
             <DocumentAction
               disabled={!document.remoteId}
               icon={Download}
               label={t('detail.download')}
               loading={busyAction === 'download'}
-              onPress={() => setFileActions('save')}
+              onPress={() => void downloadDocument()}
             />
             <DocumentAction
               disabled={document.canEdit === false}
@@ -1056,12 +1089,11 @@ function ProfileBoundDocumentDetailScreen({
         />
       )}
 
-      {!!activeCredentials && !!document.remoteId && !!fileActions && (
+      {!!activeCredentials && !!document.remoteId && fileActionsOpen && (
         <DocumentFileActions
           credentials={activeCredentials}
           document={document}
-          intent={fileActions}
-          onClose={() => setFileActions(null)}
+          onClose={() => setFileActionsOpen(false)}
           onOpenPreview={(request) => {
             setPreviewRequest(request);
             setPreviewFailed(false);
@@ -1162,7 +1194,7 @@ function DetailRow({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: {
     flex: 1,
     backgroundColor: palette.canvas,

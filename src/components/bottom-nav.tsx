@@ -8,10 +8,10 @@ import {
 } from 'lucide-react-native';
 import type { SFSymbol } from 'expo-symbols';
 import { useEffect, useState } from 'react';
-import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { bottomNavHeight, fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, bottomNavHeight, fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
 import { PlatformIcon } from '@/components/platform-icon';
 import { useI18n } from '@/context/ui-preferences-context';
@@ -34,9 +34,11 @@ function isActive(pathname: string, href: NavItem['href']) {
 
 export function BottomNav({
   activePathname,
+  onTabNavigate,
   visible = true,
 }: {
   activePathname?: TabPathname;
+  onTabNavigate?: (pathname: TabPathname) => void;
   visible?: boolean;
 }) {
   const currentPathname = usePathname();
@@ -91,7 +93,10 @@ export function BottomNav({
             {...item}
             active={isActive(pathname, item.href)}
             onPress={() => {
-              if (!isActive(pathname, item.href)) router.navigate(item.href);
+              if (!isActive(pathname, item.href)) {
+                onTabNavigate?.(item.href);
+                router.navigate(item.href);
+              }
             }}
           />
         ))}
@@ -116,7 +121,10 @@ export function BottomNav({
             {...item}
             active={isActive(pathname, item.href)}
             onPress={() => {
-              if (!isActive(pathname, item.href)) router.navigate(item.href);
+              if (!isActive(pathname, item.href)) {
+                onTabNavigate?.(item.href);
+                router.navigate(item.href);
+              }
             }}
           />
         ))}
@@ -200,7 +208,7 @@ function NavButton({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   positioner: {
     position: 'absolute',
     zIndex: 20,

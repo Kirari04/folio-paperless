@@ -1,6 +1,6 @@
-import { View, StyleSheet } from 'react-native';
+import { View } from 'react-native';
 
-import { palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, palette, radii } from '@/constants/theme';
 
 export function FolioLogo({ size = 38, inverse = false }: { size?: number; inverse?: boolean }) {
   const pageColor = inverse ? palette.lime : palette.ink;
@@ -45,7 +45,7 @@ export function FolioLogo({ size = 38, inverse = false }: { size?: number; inver
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   mark: {
     alignItems: 'center',
     justifyContent: 'center',

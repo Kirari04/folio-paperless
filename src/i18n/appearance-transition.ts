@@ -10,6 +10,7 @@ type AppearanceTransition<T extends AppearanceSettings> = {
   applyNative: (settings: T) => Promise<void>;
   persist: (settings: T) => Promise<void>;
   publish: (settings: T) => void;
+  yieldToPresentation?: () => Promise<void>;
 };
 
 async function restoreNativeAppearance<T extends AppearanceSettings>(
@@ -25,9 +26,10 @@ async function restoreNativeAppearance<T extends AppearanceSettings>(
 }
 
 /**
- * Applies an explicit native appearance before React descendants receive the
- * matching setting. If either application or protected persistence fails, the
- * previous native and published state are restored together.
+ * Publishes the selected appearance immediately, then gives React one frame to
+ * start presentation work before Android performs its AppCompat configuration
+ * change. If native application or protected persistence fails, the previous
+ * native and published state are restored together.
  */
 export async function commitNativeAppearanceTransition<T extends AppearanceSettings>({
   previous,
@@ -35,15 +37,18 @@ export async function commitNativeAppearanceTransition<T extends AppearanceSetti
   applyNative,
   persist,
   publish,
+  yieldToPresentation,
 }: AppearanceTransition<T>) {
+  publish(next);
   try {
+    await yieldToPresentation?.();
     await applyNative(next);
   } catch (error) {
     await restoreNativeAppearance(previous, applyNative);
+    publish(previous);
     throw error;
   }
 
-  publish(next);
   try {
     await persist(next);
   } catch (error) {

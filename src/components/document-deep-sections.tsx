@@ -12,13 +12,13 @@ import {
   Upload,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Text, View } from 'react-native';
 
 import { ChoiceSheet } from '@/components/choice-sheet';
 import { CustomFieldSheet } from '@/components/custom-field-sheet';
 import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/components/motion';
 import { TextEditSheet } from '@/components/text-edit-sheet';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n, type TranslationKey } from '@/i18n';
 import { presentRuntimeError } from '@/i18n/error-presentation';
@@ -589,7 +589,7 @@ export function DocumentDeepSections({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   section: { marginTop: 29 },
   sectionHeading: { minHeight: 32, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 11 },
   sectionTitle: { color: palette.ink, fontFamily: fonts.sans, fontSize: 17, fontWeight: '900' },

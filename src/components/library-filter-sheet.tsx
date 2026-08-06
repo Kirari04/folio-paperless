@@ -28,7 +28,7 @@ import {
 
 import { KeyboardSheet, KeyboardSheetHandle } from '@/components/keyboard-sheet';
 import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n, type TranslationKey } from '@/i18n';
 import {
   cloneLibraryFilters,
@@ -959,7 +959,7 @@ function archiveSummary(filters: LibraryFilters, t: Translator) {
   return filters.archiveSerialMin ? `>${filters.archiveSerialMin}` : `<${filters.archiveSerialMax}`;
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   mainContent: { paddingTop: 16, paddingBottom: 18 },
   sectionLabel: {
     marginTop: 18,

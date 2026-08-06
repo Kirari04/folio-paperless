@@ -1,11 +1,11 @@
 import { ChevronDown } from 'lucide-react-native';
 import { useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, ScrollView, Switch, Text, TextInput, View } from 'react-native';
 
 import { KeyboardSheet, type KeyboardSheetHandle } from '@/components/keyboard-sheet';
 import { MotionPressable as Pressable } from '@/components/motion';
 import { availableTagParents, buildSparseCatalogEdit } from '@/lib/catalog-management';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/i18n';
 import { presentRuntimeError } from '@/i18n/error-presentation';
 import type { PaperlessCatalogEditByResource, PaperlessCatalogObject, PaperlessCatalogResource, PaperlessTag } from '@/types/paperless-advanced';
@@ -183,7 +183,7 @@ function Field({ autoCapitalize = 'sentences', label, onChangeText, placeholder,
   return <View><Text style={styles.label}>{label.toLocaleUpperCase()}</Text><TextInput accessibilityLabel={label} autoCapitalize={autoCapitalize} autoCorrect={false} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={palette.faint} style={styles.input} value={value} /></View>;
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   content: { gap: 14, paddingBottom: 24 },
   label: { color: palette.muted, fontFamily: fonts.sans, fontSize: 9, fontWeight: '900', letterSpacing: 0.65, marginBottom: 6 },
   input: { minHeight: 52, color: palette.ink, fontFamily: fonts.sans, fontSize: 14, paddingHorizontal: 14, borderRadius: radii.md, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.paper },

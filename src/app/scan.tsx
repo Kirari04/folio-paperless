@@ -36,7 +36,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/components/motion';
-import { fonts, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n, type TranslationKey } from '@/i18n';
 import { presentRuntimeError } from '@/i18n/error-presentation';
@@ -851,7 +851,7 @@ export default function ScanScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   launcher: {
     flex: 1,
     backgroundColor: palette.canvas,

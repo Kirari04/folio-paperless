@@ -14,7 +14,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-nat
 
 import { KeyboardSheet, type KeyboardSheetHandle } from '@/components/keyboard-sheet';
 import { MotionPressable as Pressable } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/i18n';
 import { presentRuntimeMessage } from '@/i18n/error-presentation';
 import type { LibrarySelectionSummary } from '@/lib/bulk-document-controller';
@@ -216,7 +216,7 @@ export function BulkActionSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   progress: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, borderRadius: radii.sm, backgroundColor: palette.paper },
   progressText: { flex: 1, color: palette.ink, fontFamily: fonts.sans, fontSize: 13, fontWeight: '700' },
   summary: { padding: 14, borderRadius: radii.md, backgroundColor: palette.paper, borderWidth: 1, borderColor: palette.line, marginBottom: 10 },

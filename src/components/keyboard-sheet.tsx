@@ -23,7 +23,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
-import { fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
 import { useI18n } from '@/context/ui-preferences-context';
 
 export type KeyboardSheetHandle = {
@@ -183,7 +183,7 @@ export const KeyboardSheet = forwardRef<KeyboardSheetHandle, KeyboardSheetProps>
   },
 );
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   overlay: {
     flex: 1,
     justifyContent: 'flex-end',

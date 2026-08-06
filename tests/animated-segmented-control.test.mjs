@@ -53,6 +53,7 @@ test('animated segmented control preserves radio semantics, reduced motion, and 
   assert.match(componentSource, /accessibilityRole="radiogroup"/);
   assert.match(componentSource, /accessibilityRole="radio"/);
   assert.match(componentSource, /accessibilityState=\{\{ checked: selected, disabled: optionDisabled \}\}/);
+  assert.match(componentSource, /accessibilityState=\{\{ busy \}\}/);
   assert.match(componentSource, /aria-checked=\{selected\}/);
   assert.match(componentSource, /numberOfLines=\{2\}/);
   assert.match(componentSource, /minHeight: Platform\.OS === 'android' \? 48 : 44/);
@@ -61,6 +62,9 @@ test('animated segmented control preserves radio semantics, reduced motion, and 
   assert.match(componentSource, /transform: \[\{ translateX \}\]/);
   assert.match(componentSource, /backgroundColor: palette\.lime/);
   assert.match(componentSource, /color: palette\.accentInk/);
+  assert.match(componentSource, /const optionDisabled = busy \|\| disabled/);
+  assert.match(componentSource, /useThemedStyles\(themedStyles, colorScheme\)/);
+  assert.match(settingsSource, /busy=\{uiPreferenceSaving === 'appearance'\}/);
   assert.equal(settingsSource.match(/<AnimatedSegmentedControl/g)?.length, 2);
   assert.equal(settingsSource.includes('quotaOptionSelected'), false);
   assert.equal(settingsSource.includes('segmentSelected'), false);

@@ -6,7 +6,6 @@ import {
   Modal,
   Platform,
   ScrollView,
-  StyleSheet,
   Text,
   View,
 } from 'react-native';
@@ -16,7 +15,7 @@ import {
   IntakeRejectionList,
   type IntakeRejectionListItem,
 } from '@/components/intake-rejection-list';
-import { fonts, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n } from '@/i18n';
 import { presentRuntimeError } from '@/i18n/error-presentation';
@@ -291,7 +290,7 @@ export function IncomingShareGateway() {
   return <NativeIncomingShareGateway />;
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   backdrop: {
     flex: 1,
     justifyContent: 'flex-end',

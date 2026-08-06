@@ -4,14 +4,13 @@ import {
   Platform,
   ScrollView,
   StyleProp,
-  StyleSheet,
   View,
   ViewStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { DemoModeBanner } from '@/components/demo-mode-banner';
-import { bottomNavHeight, maxContentWidth, palette } from '@/constants/theme';
+import { createThemedStyleSheet, bottomNavHeight, maxContentWidth, palette } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 
 type AppShellProps = PropsWithChildren<{
@@ -79,7 +78,7 @@ export function AppShell({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: {
     flex: 1,
     backgroundColor: palette.canvas,

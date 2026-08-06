@@ -1,11 +1,11 @@
 import { StatusBar } from 'expo-status-bar';
 import { FileStack, X } from 'lucide-react-native';
 import { useState } from 'react';
-import { Modal, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, ScrollView, Text, View } from 'react-native';
 
 import { DocumentPdfMergeSelection } from '@/components/document-pdf-merge-selection';
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/i18n';
 import type { DocumentItem, PaperlessCredentials } from '@/types/document';
 import type { PaperlessPdfPageOperation } from '@/types/paperless-advanced';
@@ -83,7 +83,7 @@ export function DocumentPdfPageEditor({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: { flex: 1, backgroundColor: palette.canvas },
   header: { minHeight: 74, flexDirection: 'row', alignItems: 'center', gap: 14, padding: 18, borderBottomWidth: 1, borderColor: palette.line },
   flexCopy: { flex: 1, minWidth: 0 },

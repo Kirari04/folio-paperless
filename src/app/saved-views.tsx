@@ -1,11 +1,11 @@
 import { Bookmark, ChevronLeft, CircleAlert, Copy, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SavedViewEditorSheet, type SavedViewPresentationEdit } from '@/components/saved-view-editor-sheet';
 import { MotionPressable as Pressable, hapticFeedback } from '@/components/motion';
-import { fonts, maxContentWidth, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, maxContentWidth, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n } from '@/i18n';
 import { presentRuntimeError, presentRuntimeMessage } from '@/i18n/error-presentation';
@@ -257,7 +257,7 @@ function SmallAction({ danger, disabled, icon, label, onPress }: { danger?: bool
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={[styles.action, disabled && styles.disabled]}>{icon}<Text style={[styles.actionText, danger && styles.dangerText]}>{label}</Text></Pressable>;
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: { flex: 1, backgroundColor: palette.canvas },
   header: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 18, paddingVertical: 12 },
   iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: palette.paper },

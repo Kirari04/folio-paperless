@@ -1,8 +1,8 @@
 import { CircleAlert } from 'lucide-react-native';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 
 import { MotionPressable as Pressable } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/i18n';
 
 export type IntakeRejectionListItem = {
@@ -95,7 +95,7 @@ export function IntakeRejectionList({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   alert: {
     gap: 12,
     padding: 15,

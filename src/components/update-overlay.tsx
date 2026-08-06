@@ -27,10 +27,10 @@ import {
   hapticFeedback,
   useReducedMotion,
 } from '@/components/motion';
-import { bottomNavHeight, fonts, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, bottomNavHeight, fonts, palette, radii, shadows } from '@/constants/theme';
 import { UpdateStatus, useUpdates } from '@/context/update-context';
 import { useI18n, type TranslationKey } from '@/i18n';
-import { trustedFolioReleaseUrl } from '@/lib/app-updates';
+import { compareStableVersions, trustedFolioReleaseUrl } from '@/lib/app-updates';
 
 type DismissAction = 'close' | 'remind';
 
@@ -107,7 +107,11 @@ export function UpdateOverlay() {
   const dismissActionRef = useRef<DismissAction>('close');
   const [bannerEntrance] = useState(() => new Animated.Value(reducedMotion ? 1 : 0));
   const releaseVersion = updates.release?.version ?? null;
-  const copy = sheetCopy(updates.status, releaseVersion, updates.support, t);
+  const releaseIsNewer = releaseVersion !== null
+    && compareStableVersions(releaseVersion, updates.currentVersion) > 0;
+  const availableVersion = releaseIsNewer ? releaseVersion : null;
+  const showReleaseDetails = releaseIsNewer && updates.status !== 'up-to-date';
+  const copy = sheetCopy(updates.status, availableVersion, updates.support, t);
   const showProgress = updates.status === 'downloading' || updates.status === 'verifying';
 
   useEffect(() => {
@@ -211,7 +215,9 @@ export function UpdateOverlay() {
                     styles.releaseMark,
                     updates.status === 'error' && styles.releaseMarkError,
                   ]}>
-                    {updates.status === 'error' ? (
+                    {updates.status === 'checking' ? (
+                      <ActivityIndicator color={palette.paper} size="small" />
+                    ) : updates.status === 'error' ? (
                       <CircleAlert color={palette.paper} size={25} />
                     ) : updates.status === 'up-to-date' ? (
                       <Check color={palette.paper} size={26} strokeWidth={2.6} />
@@ -222,13 +228,13 @@ export function UpdateOverlay() {
                   <View style={styles.releaseCopy}>
                     <Text style={styles.releaseVersion}>
                       {t('updates.version', {
-                        version: updates.release?.version ?? updates.currentVersion,
+                        version: availableVersion ?? updates.currentVersion,
                       })}
                     </Text>
                     <Text style={styles.releaseMeta}>
-                      {updates.release && updates.status !== 'up-to-date'
+                      {showReleaseDetails
                         ? t('updates.androidApk', {
-                            size: formatFileSize(updates.release.apk?.size ?? 0),
+                            size: formatFileSize(updates.release?.apk?.size ?? 0),
                           })
                         : formatCheckedAt(updates.lastCheckedAt, t, formatDate)}
                     </Text>
@@ -290,7 +296,7 @@ export function UpdateOverlay() {
                   </View>
                 )}
 
-                {updates.release && updates.status !== 'up-to-date' && (
+                {updates.release && showReleaseDetails && (
                   <View style={styles.notesBlock}>
                     <View style={styles.notesHeader}>
                       <Text style={styles.notesTitle}>{t('updates.whatsNew')}</Text>
@@ -303,7 +309,7 @@ export function UpdateOverlay() {
                   </View>
                 )}
 
-                {updates.status !== 'error' && updates.status !== 'up-to-date' && (
+                {showReleaseDetails && updates.status !== 'error' && (
                   <View style={styles.trustRow}>
                     <ShieldCheck color={palette.limeDark} size={19} />
                     <Text style={styles.trustText}>
@@ -486,7 +492,7 @@ function SecondaryButton({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   banner: {
     position: 'absolute',
     left: 16,

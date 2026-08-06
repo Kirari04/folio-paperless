@@ -112,6 +112,7 @@
         }
       ],
       "expo-system-ui",
+      "expo-image",
       "expo-secure-store",
       "expo-sqlite",
       "expo-background-task",

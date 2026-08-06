@@ -6,7 +6,6 @@ import {
   Platform,
   ScrollView,
   Share,
-  StyleSheet,
   Text,
   TextInput,
   View,
@@ -26,7 +25,7 @@ import {
 } from 'lucide-react-native';
 
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
-import { fonts, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n } from '@/i18n';
 import { presentRuntimeError, presentRuntimeMessage } from '@/i18n/error-presentation';
@@ -60,8 +59,6 @@ import type {
 } from '@/types/paperless-advanced';
 import type { OfflineFileRecord } from '@/types/persistence';
 
-export type DocumentFileActionIntent = 'share' | 'save' | 'manage';
-
 export type RepresentationPreviewRequest = {
   checksum: string | null;
   representation: PaperlessRepresentation;
@@ -75,7 +72,6 @@ export type RepresentationPreviewRequest = {
 type DocumentFileActionsProps = {
   credentials: PaperlessCredentials;
   document: DocumentItem;
-  intent: DocumentFileActionIntent;
   onClose: () => void;
   onOpenPreview: (request: RepresentationPreviewRequest) => void;
   onToast: (message: string, error?: boolean) => void;
@@ -97,7 +93,6 @@ function errorMessage(error: unknown, fallback: string) {
 export function DocumentFileActions({
   credentials,
   document,
-  intent,
   onClose,
   onOpenPreview,
   onToast,
@@ -150,11 +145,6 @@ export function DocumentFileActions({
   const shareCapabilities = advanced.phase === 'ready' ? advanced.capabilities.features.shareLinks : null;
   const advancedApi = advanced.phase === 'ready' ? advanced.api : null;
   const advancedCapabilities = advanced.phase === 'ready' ? advanced.capabilities : null;
-  const actionPrompt = intent === 'share'
-    ? t('fileActions.sharePrompt')
-    : intent === 'save'
-      ? t('fileActions.savePrompt')
-      : t('fileActions.managePrompt');
   const offlineFile = versionId ? null : offlineFiles[selected] ?? null;
   const contentState = documentFileActionContentState({
     capabilityLoading: advanced.phase === 'loading',
@@ -513,7 +503,7 @@ export function DocumentFileActions({
         <View style={styles.header}>
           <View style={styles.headerCopy}>
             <Text style={styles.title}>{t('fileActions.title')}</Text>
-            <Text style={styles.subtitle}>{actionPrompt}</Text>
+            <Text style={styles.subtitle}>{t('fileActions.managePrompt')}</Text>
           </View>
           <Pressable accessibilityLabel={t('fileActions.close')} onPress={onClose} style={styles.close}>
             <X color={palette.ink} size={20} />
@@ -693,7 +683,7 @@ function ActionButton({ disabled, icon: Icon, label, loading, onPress }: { disab
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: { flex: 1, backgroundColor: palette.canvas },
   header: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1, borderColor: palette.line },
   headerCopy: { flex: 1, minWidth: 0 },

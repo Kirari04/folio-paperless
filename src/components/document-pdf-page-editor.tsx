@@ -18,7 +18,6 @@ import {
   Modal,
   Platform,
   ScrollView,
-  StyleSheet,
   Text,
   UIManager,
   View,
@@ -27,7 +26,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DocumentPdfMergeSelection } from '@/components/document-pdf-merge-selection';
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/i18n';
 import {
   compilePdfEditorOperations,
@@ -471,7 +470,7 @@ function ToolButton({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   openButton: {
     minHeight: 48,
     alignSelf: 'flex-start',
