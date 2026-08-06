@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/Kirari04/folio-paperless/compare/v0.3.1...v0.3.2) (2026-08-06)
+
+
+### Bug Fixes
+
+* polish theme, updates, and document actions ([#37](https://github.com/Kirari04/folio-paperless/issues/37)) ([d14af06](https://github.com/Kirari04/folio-paperless/commit/d14af064e72cc458915c8523e5b11f842ea007f1))
+
 ## [0.3.1](https://github.com/Kirari04/folio-paperless/compare/v0.3.0...v0.3.1) (2026-08-03)
 
 
