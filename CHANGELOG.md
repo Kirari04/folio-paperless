@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.3](https://github.com/Kirari04/folio-paperless/compare/v0.3.2...v0.3.3) (2026-08-06)
+
+
+### Bug Fixes
+
+* stabilize document files and background tasks ([4c2e0fb](https://github.com/Kirari04/folio-paperless/commit/4c2e0fbdca95577bb6a2f5a16c8d461a18040b18))
+* stabilize document files and background tasks ([283ad42](https://github.com/Kirari04/folio-paperless/commit/283ad42b7c813dc06414f4ffcc15edea5963cc9d))
+
 ## [0.3.2](https://github.com/Kirari04/folio-paperless/compare/v0.3.1...v0.3.2) (2026-08-06)
 
 
