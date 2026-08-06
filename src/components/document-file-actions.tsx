@@ -59,8 +59,6 @@ import type {
 } from '@/types/paperless-advanced';
 import type { OfflineFileRecord } from '@/types/persistence';
 
-export type DocumentFileActionIntent = 'share' | 'save' | 'manage';
-
 export type RepresentationPreviewRequest = {
   checksum: string | null;
   representation: PaperlessRepresentation;
@@ -74,7 +72,6 @@ export type RepresentationPreviewRequest = {
 type DocumentFileActionsProps = {
   credentials: PaperlessCredentials;
   document: DocumentItem;
-  intent: DocumentFileActionIntent;
   onClose: () => void;
   onOpenPreview: (request: RepresentationPreviewRequest) => void;
   onToast: (message: string, error?: boolean) => void;
@@ -96,7 +93,6 @@ function errorMessage(error: unknown, fallback: string) {
 export function DocumentFileActions({
   credentials,
   document,
-  intent,
   onClose,
   onOpenPreview,
   onToast,
@@ -149,11 +145,6 @@ export function DocumentFileActions({
   const shareCapabilities = advanced.phase === 'ready' ? advanced.capabilities.features.shareLinks : null;
   const advancedApi = advanced.phase === 'ready' ? advanced.api : null;
   const advancedCapabilities = advanced.phase === 'ready' ? advanced.capabilities : null;
-  const actionPrompt = intent === 'share'
-    ? t('fileActions.sharePrompt')
-    : intent === 'save'
-      ? t('fileActions.savePrompt')
-      : t('fileActions.managePrompt');
   const offlineFile = versionId ? null : offlineFiles[selected] ?? null;
   const contentState = documentFileActionContentState({
     capabilityLoading: advanced.phase === 'loading',
@@ -512,7 +503,7 @@ export function DocumentFileActions({
         <View style={styles.header}>
           <View style={styles.headerCopy}>
             <Text style={styles.title}>{t('fileActions.title')}</Text>
-            <Text style={styles.subtitle}>{actionPrompt}</Text>
+            <Text style={styles.subtitle}>{t('fileActions.managePrompt')}</Text>
           </View>
           <Pressable accessibilityLabel={t('fileActions.close')} onPress={onClose} style={styles.close}>
             <X color={palette.ink} size={20} />
