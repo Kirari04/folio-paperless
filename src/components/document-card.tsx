@@ -1,9 +1,9 @@
 import { ChevronRight } from 'lucide-react-native';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
 import { PaperThumbnail } from '@/components/paper-thumbnail';
 import { MotionPressable as Pressable } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/context/ui-preferences-context';
 import { useRouter } from '@/lib/router';
 import { DocumentItem } from '@/types/document';
@@ -45,7 +45,7 @@ export function DocumentCard({ document }: { document: DocumentItem }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   card: {
     flexDirection: 'row',
     alignItems: 'center',

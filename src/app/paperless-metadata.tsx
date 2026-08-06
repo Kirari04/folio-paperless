@@ -1,11 +1,11 @@
 import { ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Edit3, FolderTree, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Alert, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { CatalogEditorSheet, type CatalogEditorValue } from '@/components/catalog-editor-sheet';
 import { MotionPressable as Pressable, hapticFeedback } from '@/components/motion';
-import { fonts, maxContentWidth, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, maxContentWidth, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n } from '@/i18n';
 import { presentRuntimeError } from '@/i18n/error-presentation';
@@ -353,7 +353,7 @@ function State({ copy, icon, title }: { copy: string; icon: ReactNode; title: st
   return <View style={styles.state}>{icon}<Text style={styles.stateTitle}>{title}</Text><Text style={styles.stateCopy}>{copy}</Text></View>;
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: { flex: 1, backgroundColor: palette.canvas },
   header: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 18, paddingVertical: 12 },
   iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: palette.paper },

@@ -26,7 +26,6 @@ import {
   BackHandler,
   Easing,
   Share,
-  StyleSheet,
   Text,
   View,
   type ColorValue,
@@ -52,7 +51,7 @@ import {
   hapticFeedback,
   useReducedMotion,
 } from '@/components/motion';
-import { fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, maxContentWidth, palette, radii, shadows } from '@/constants/theme';
 import { useApp, useDocumentDetail } from '@/context/app-context';
 import { useI18n } from '@/i18n';
 import { presentRuntimeError, presentRuntimeMessage } from '@/i18n/error-presentation';
@@ -1162,7 +1161,7 @@ function DetailRow({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: {
     flex: 1,
     backgroundColor: palette.canvas,

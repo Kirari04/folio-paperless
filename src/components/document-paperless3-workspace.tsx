@@ -4,7 +4,6 @@ import {
   Alert,
   Modal,
   ScrollView,
-  StyleSheet,
   Text,
   TextInput,
   View,
@@ -26,7 +25,7 @@ import {
 
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
 import { DocumentPdfPageEditor } from '@/components/document-pdf-page-editor';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n } from '@/i18n';
 import { presentRuntimeError, presentRuntimeMessage } from '@/i18n/error-presentation';
@@ -758,7 +757,7 @@ function SuggestionRow<Field extends string>({ canAccept, children, decision, fi
 
 function PdfCapability({ children, detail, label, supported }: { children: React.ReactNode; detail?: string; label: string; supported: boolean }) { const { t } = useI18n(); return <View style={[styles.pdfBlock, !supported && styles.pdfDisabled]}><Text style={styles.rowTitle}>{label}</Text>{supported ? children : <Text style={styles.rowMeta}>{detail ? presentRuntimeMessage(detail) : t('paperless3.notAdvertisedPdf')}</Text>}</View>; }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: { flex: 1, backgroundColor: palette.canvas },
   header: { minHeight: 74, flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 11, borderBottomWidth: 1, borderColor: palette.line },
   headerCopy: { flex: 1, minWidth: 0 },

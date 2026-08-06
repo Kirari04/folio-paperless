@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import {
   Animated,
   Platform,
-  StyleSheet,
   Text,
   View,
   type LayoutChangeEvent,
@@ -18,10 +17,18 @@ import {
   type SegmentedControlOption,
 } from '@/components/animated-segmented-control-model';
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import {
+  createThemedStyleSheet,
+  fonts,
+  palette,
+  radii,
+  useThemedStyles,
+} from '@/constants/theme';
+import { useI18n } from '@/context/ui-preferences-context';
 
 type AnimatedSegmentedControlProps<T extends string> = {
   accessibilityLabel: string;
+  busy?: boolean;
   compact?: boolean;
   disabled?: boolean;
   onChange: (value: T) => void;
@@ -32,6 +39,7 @@ type AnimatedSegmentedControlProps<T extends string> = {
 
 export function AnimatedSegmentedControl<T extends string>({
   accessibilityLabel,
+  busy = false,
   compact = false,
   disabled = false,
   onChange,
@@ -39,6 +47,8 @@ export function AnimatedSegmentedControl<T extends string>({
   testID,
   value,
 }: AnimatedSegmentedControlProps<T>) {
+  const { colorScheme } = useI18n();
+  const styles = useThemedStyles(themedStyles, colorScheme);
   const reducedMotion = useReducedMotion();
   const selectedIndex = getSelectedSegmentIndex(options, value);
   const [position] = useState(() => new Animated.Value(selectedIndex));
@@ -71,6 +81,7 @@ export function AnimatedSegmentedControl<T extends string>({
     <View
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="radiogroup"
+      accessibilityState={{ busy }}
       onLayout={measureTrack}
       style={[styles.track, disabled && styles.disabled]}
       testID={testID}>
@@ -87,7 +98,7 @@ export function AnimatedSegmentedControl<T extends string>({
       />
       {options.map((option, index) => {
         const selected = option.value === value;
-        const optionDisabled = disabled || option.disabled === true;
+        const optionDisabled = busy || disabled || option.disabled === true;
         return (
           <Pressable
             accessibilityRole="radio"
@@ -97,7 +108,7 @@ export function AnimatedSegmentedControl<T extends string>({
             haptic="none"
             key={option.value}
             onPress={() => {
-              const nextValue = getNextSegmentValue(options, index, value, disabled);
+              const nextValue = getNextSegmentValue(options, index, value, busy || disabled);
               if (nextValue !== null) onChange(nextValue);
             }}
             style={[styles.segment, compact && styles.segmentCompact]}>
@@ -117,7 +128,7 @@ export function AnimatedSegmentedControl<T extends string>({
   );
 }
 
-const styles = StyleSheet.create({
+const themedStyles = createThemedStyleSheet({
   track: {
     position: 'relative',
     flexDirection: 'row',

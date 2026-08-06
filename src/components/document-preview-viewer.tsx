@@ -16,7 +16,6 @@ import {
   Animated,
   Modal,
   Platform,
-  StyleSheet,
   Text,
   TextInput,
   UIManager,
@@ -29,7 +28,7 @@ import {
   MotionPressable as Pressable,
   useReducedMotion,
 } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/i18n';
 import { downloadPaperlessFileWithCredentials } from '@/lib/paperless';
 import {
@@ -747,7 +746,7 @@ function FallbackPreview({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: {
     flex: 1,
     backgroundColor: palette.canvas,

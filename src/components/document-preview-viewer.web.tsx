@@ -2,10 +2,10 @@ import { Image } from 'expo-image';
 import { StatusBar } from 'expo-status-bar';
 import { ExternalLink, X } from 'lucide-react-native';
 import { createElement, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Text, View } from 'react-native';
 
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/i18n';
 import {
   hasPdfHeader,
@@ -226,7 +226,7 @@ export function DocumentPreviewViewer({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: {
     backgroundColor: palette.canvas,
     flex: 1,

@@ -18,7 +18,6 @@ import {
   Alert,
   Platform,
   ScrollView,
-  StyleSheet,
   Text,
   TextInput,
   View,
@@ -26,7 +25,7 @@ import {
 
 import { KeyboardSheet, type KeyboardSheetHandle } from '@/components/keyboard-sheet';
 import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n } from '@/context/ui-preferences-context';
 import { presentAuthError } from '@/lib/auth/error-presentation';
@@ -791,7 +790,7 @@ function Callout({ icon: Icon, text, tone }: {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   scrollContent: { paddingTop: 14, paddingBottom: 30 },
   profileList: { gap: 10 },
   profileRow: {

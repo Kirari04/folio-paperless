@@ -1,7 +1,7 @@
 import { ArrowRight, FlaskConical } from 'lucide-react-native';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { MotionPressable as Pressable } from '@/components/motion';
 import { useI18n } from '@/context/ui-preferences-context';
 import { useRouter } from '@/lib/router';
@@ -33,7 +33,7 @@ export function DemoModeBanner() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   banner: {
     minHeight: 58,
     flexDirection: 'row',

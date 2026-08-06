@@ -11,7 +11,6 @@ import {
   ActivityIndicator,
   AppState,
   Platform,
-  StyleSheet,
   Text,
   View,
 } from 'react-native';
@@ -38,7 +37,7 @@ import {
 } from '@/components/motion';
 import { OsSearchRuntimeGateway } from '@/components/os-search-runtime-gateway';
 import { UpdateOverlay } from '@/components/update-overlay';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { AppProvider, useApp } from '@/context/app-context';
 import { UpdateProvider } from '@/context/update-context';
 import { I18nProvider, useI18n } from '@/context/ui-preferences-context';
@@ -74,11 +73,34 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 function TabNavigator() {
   const { lastTab } = useNavigationMotion();
+  const { colorScheme } = useI18n();
+  const [mountedTabSchemes, setMountedTabSchemes] = useState<Record<TabPath, 'light' | 'dark'>>({
+    '/': colorScheme,
+    '/documents': colorScheme,
+    '/inbox': colorScheme,
+    '/settings': colorScheme,
+  });
+
+  const prepareTabTheme = useCallback((target: TabPath) => {
+    setMountedTabSchemes((current) => ({
+      ...current,
+      [lastTab as TabPath]: colorScheme,
+      [target]: colorScheme,
+    }));
+  }, [colorScheme, lastTab]);
 
   return (
     <View style={styles.navigationRoot}>
       {tabScreens.map(({ pathname, Screen }) => {
         const active = lastTab === pathname;
+        // Settings is explicitly theme-reactive so its selector spring keeps
+        // running. Hidden tabs refresh lazily when opened instead of making a
+        // preference change rebuild all four screens at once.
+        const mountedScheme = pathname === '/settings'
+          ? 'reactive'
+          : active
+            ? colorScheme
+            : mountedTabSchemes[pathname];
         return (
           <View
             accessibilityElementsHidden={!active}
@@ -88,11 +110,14 @@ function TabNavigator() {
             renderToHardwareTextureAndroid={active}
             shouldRasterizeIOS={active}
             style={[styles.tabScene, { zIndex: active ? 2 : 1 }]}>
-            <Screen />
+            <Screen key={`${pathname}:${mountedScheme}`} />
           </View>
         );
       })}
-      <BottomNav activePathname={lastTab as TabPath} />
+      <BottomNav
+        activePathname={lastTab as TabPath}
+        onTabNavigate={prepareTabTheme}
+      />
     </View>
   );
 }
@@ -310,7 +335,7 @@ function ProtectedApp() {
 }
 
 function LocalizedApp() {
-  const { colorScheme, nativePaletteKey, ready } = useI18n();
+  const { colorScheme, ready } = useI18n();
 
   useEffect(() => {
     if (ready) SplashScreen.hide();
@@ -325,12 +350,7 @@ function LocalizedApp() {
           <UpdateProvider>
             <NavigationProvider>
               <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
-              {/* Android resolves PlatformColor values when native views mount.
-                  Recreate only the presentation tree after AppCompat finishes
-                  its uiMode change; profile and durable app state stay above. */}
-              <View
-                key={nativePaletteKey}
-                style={{ flex: 1, backgroundColor: palette.canvas }}>
+              <View style={{ flex: 1, backgroundColor: palette.canvas }}>
                 <ProtectedApp />
               </View>
             </NavigationProvider>
@@ -349,7 +369,7 @@ export default function App() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   protectedRoot: {
     flex: 1,
   },

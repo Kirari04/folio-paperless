@@ -23,7 +23,6 @@ import {
   Keyboard,
   RefreshControl,
   ScrollView,
-  StyleSheet,
   Text,
   TextInput,
   useWindowDimensions,
@@ -38,7 +37,7 @@ import { LibraryFilterSheet } from '@/components/library-filter-sheet';
 import { LibrarySortSheet } from '@/components/library-sort-sheet';
 import { MotionPressable as Pressable, hapticFeedback } from '@/components/motion';
 import { PaperThumbnail } from '@/components/paper-thumbnail';
-import { bottomNavHeight, fonts, maxContentWidth, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, bottomNavHeight, fonts, maxContentWidth, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n, type TranslationKey } from '@/i18n';
 import { presentRuntimeError } from '@/i18n/error-presentation';
@@ -1622,7 +1621,7 @@ const LibraryDocument = memo(function LibraryDocument({
   );
 });
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   librarySurfaces: {
     flex: 1,
     width: '100%',

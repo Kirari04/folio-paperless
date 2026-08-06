@@ -123,6 +123,12 @@ async function saveSettings(settings: UISettings) {
   await SecureStore.setItemAsync(UI_PREFERENCES_STORAGE_KEY, serialized);
 }
 
+function yieldToPresentationFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
 export function I18nProvider({ children }: PropsWithChildren) {
   const systemScheme = useColorScheme();
   const systemLocales = useLocales();
@@ -184,6 +190,7 @@ export function I18nProvider({ children }: PropsWithChildren) {
         applyNative: applyNativeAppearance,
         persist: saveSettings,
         publish: setHydratedSettings,
+        yieldToPresentation: yieldToPresentationFrame,
       });
     },
     [settings, updateSettings],
@@ -195,7 +202,6 @@ export function I18nProvider({ children }: PropsWithChildren) {
 
   return (
     <I18nRenderProvider
-      nativePaletteRemountEnabled={Platform.OS === 'android'}
       ready={ready}
       settings={settings}
       setAppearance={setAppearance}

@@ -1,7 +1,7 @@
 import { FileText } from 'lucide-react-native';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { DocumentItem } from '@/types/document';
 
 export function PaperThumbnail({
@@ -49,7 +49,7 @@ export function PaperThumbnail({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   backdrop: {
     alignItems: 'center',
     justifyContent: 'center',

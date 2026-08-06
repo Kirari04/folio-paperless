@@ -1,7 +1,7 @@
 import { ReactNode } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
-import { fonts, palette } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette } from '@/constants/theme';
 
 export function SectionHeading({ title, action }: { title: string; action?: ReactNode }) {
   return (
@@ -12,7 +12,7 @@ export function SectionHeading({ title, action }: { title: string; action?: Reac
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   row: {
     flexDirection: 'row',
     justifyContent: 'space-between',

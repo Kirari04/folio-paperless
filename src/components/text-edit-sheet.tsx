@@ -3,7 +3,6 @@ import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardTypeOptions,
-  StyleSheet,
   Text,
   TextInput,
   TextInputProps,
@@ -12,7 +11,7 @@ import {
 
 import { KeyboardSheet, KeyboardSheetHandle } from '@/components/keyboard-sheet';
 import { MotionPressable as Pressable, hapticFeedback } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/context/ui-preferences-context';
 
 type TextEditSheetProps = {
@@ -162,7 +161,7 @@ function TextEditSheetEditor({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   body: {
     paddingTop: 18,
   },

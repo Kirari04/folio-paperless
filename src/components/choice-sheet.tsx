@@ -5,7 +5,6 @@ import {
   FlatList,
   Platform,
   ScrollView,
-  StyleSheet,
   Text,
   TextInput,
   View,
@@ -17,7 +16,7 @@ import {
   animateLayout,
   hapticFeedback,
 } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/context/ui-preferences-context';
 import { presentRuntimeError } from '@/i18n/error-presentation';
 import { PaperlessOption } from '@/types/document';
@@ -385,7 +384,7 @@ export function ChoiceSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   search: {
     minHeight: 52,
     flexDirection: 'row',

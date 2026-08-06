@@ -1,10 +1,10 @@
 import { Check } from 'lucide-react-native';
 import { useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Text, TextInput, View } from 'react-native';
 
 import { KeyboardSheet, type KeyboardSheetHandle } from '@/components/keyboard-sheet';
 import { MotionPressable as Pressable } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/i18n';
 import { presentRuntimeError } from '@/i18n/error-presentation';
 
@@ -242,7 +242,7 @@ function BooleanField({ label, onPress, selected }: { label: string; onPress: ()
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   warning: { padding: 13, borderRadius: radii.md, backgroundColor: palette.dangerSurface, marginBottom: 14 },
   warningTitle: { color: palette.ink, fontFamily: fonts.sans, fontSize: 12, fontWeight: '900' },
   warningCopy: { color: palette.inkSoft, fontFamily: fonts.sans, fontSize: 11, lineHeight: 16, marginTop: 3 },

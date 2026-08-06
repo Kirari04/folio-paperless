@@ -8,12 +8,12 @@ import {
   WandSparkles,
 } from 'lucide-react-native';
 import { useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Text, View } from 'react-native';
 
 import { AppShell } from '@/components/app-shell';
 import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/components/motion';
 import { PaperThumbnail } from '@/components/paper-thumbnail';
-import { fonts, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n } from '@/context/ui-preferences-context';
 import { presentRuntimeError } from '@/i18n/error-presentation';
@@ -291,7 +291,7 @@ function MetadataRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   header: {
     flexDirection: 'row',
     alignItems: 'flex-end',

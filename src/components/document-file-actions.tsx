@@ -6,7 +6,6 @@ import {
   Platform,
   ScrollView,
   Share,
-  StyleSheet,
   Text,
   TextInput,
   View,
@@ -26,7 +25,7 @@ import {
 } from 'lucide-react-native';
 
 import { MotionPressable as Pressable, useReducedMotion } from '@/components/motion';
-import { fonts, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n } from '@/i18n';
 import { presentRuntimeError, presentRuntimeMessage } from '@/i18n/error-presentation';
@@ -693,7 +692,7 @@ function ActionButton({ disabled, icon: Icon, label, loading, onPress }: { disab
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: { flex: 1, backgroundColor: palette.canvas },
   header: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1, borderColor: palette.line },
   headerCopy: { flex: 1, minWidth: 0 },

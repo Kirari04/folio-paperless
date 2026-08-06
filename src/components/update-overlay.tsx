@@ -27,7 +27,7 @@ import {
   hapticFeedback,
   useReducedMotion,
 } from '@/components/motion';
-import { bottomNavHeight, fonts, palette, radii, shadows } from '@/constants/theme';
+import { createThemedStyleSheet, bottomNavHeight, fonts, palette, radii, shadows } from '@/constants/theme';
 import { UpdateStatus, useUpdates } from '@/context/update-context';
 import { useI18n, type TranslationKey } from '@/i18n';
 import { trustedFolioReleaseUrl } from '@/lib/app-updates';
@@ -486,7 +486,7 @@ function SecondaryButton({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   banner: {
     position: 'absolute',
     left: 16,

@@ -2,18 +2,56 @@ import {
   DynamicColorIOS,
   Platform,
   PlatformColor,
+  StyleSheet,
+  type ImageStyle,
+  type TextStyle,
+  type ViewStyle,
 } from 'react-native';
 
 import { themeHex } from './theme-colors';
 
 type AndroidPlatformColorValue = {
-  resource_paths?: string[];
+  readonly resource_paths?: string[];
 };
 
-const androidSemanticColors: {
-  color: AndroidPlatformColorValue;
-  resource: string;
-}[] = [];
+let androidSemanticColorScheme: 'light' | 'dark' = 'light';
+const androidSemanticColorCache = new WeakMap<
+  object,
+  Partial<Record<'light' | 'dark', AndroidPlatformColorValue>>
+>();
+
+function getAndroidSemanticResource(value: unknown) {
+  if (!value || typeof value !== 'object') return null;
+  const paths = (value as AndroidPlatformColorValue).resource_paths;
+  if (!Array.isArray(paths)) return null;
+  return paths.find((path) => /^@color\/folio_(?!light_|dark_)[a-z0-9_]+$/.test(path)) ?? null;
+}
+
+function androidSemanticColor(resource: string): AndroidPlatformColorValue {
+  return PlatformColor(
+    resource.replace('@color/folio_', '@color/folio_light_'),
+    resource,
+  ) as unknown as AndroidPlatformColorValue;
+}
+
+function resolveAndroidSemanticColor(
+  value: unknown,
+  colorScheme = androidSemanticColorScheme,
+) {
+  const resource = getAndroidSemanticResource(value);
+  if (!resource) return value;
+
+  const color = value as object;
+  const cached = androidSemanticColorCache.get(color) ?? {};
+  if (!cached[colorScheme]) {
+    cached[colorScheme] = PlatformColor(
+      resource.replace('@color/folio_', `@color/folio_${colorScheme}_`),
+      resource,
+    ) as unknown as AndroidPlatformColorValue;
+    androidSemanticColorCache.set(color, cached);
+  }
+  return cached[colorScheme];
+}
 
 function semanticColor(
   name: string,
@@ -32,9 +70,7 @@ function semanticColor(
   }
   if (Platform.OS === 'android') {
     const resource = `@color/folio_${name.replaceAll('-', '_')}`;
-    const color = PlatformColor(resource) as unknown as AndroidPlatformColorValue;
-    androidSemanticColors.push({ color, resource });
-    return color as unknown as string;
+    return androidSemanticColor(resource) as unknown as string;
   }
   if (Platform.OS === 'web') return `var(--folio-${name})`;
   return light;
@@ -42,20 +78,15 @@ function semanticColor(
 
 /**
  * Fabric's surface context can retain the previous uiMode after an in-process
- * AppCompat change. Point each remount at an explicit light/dark resource so
- * semantic colors never depend on that stale context.
+ * AppCompat change. Resolve explicit light/dark resources during the next
+ * React render so semantic colors never depend on that stale context.
  */
 export function prepareAndroidSemanticColors(colorScheme: 'light' | 'dark') {
   if (Platform.OS !== 'android') return;
-  for (const { color, resource } of androidSemanticColors) {
-    color.resource_paths = [
-      resource.replace('@color/folio_', `@color/folio_${colorScheme}_`),
-      resource,
-    ];
-  }
+  androidSemanticColorScheme = colorScheme;
 }
 
-export const palette = {
+const semanticPalette = {
   canvas: semanticColor('canvas', themeHex.light.canvas, themeHex.dark.canvas),
   paper: semanticColor('paper', themeHex.light.paper, themeHex.dark.paper),
   paperStrong: semanticColor('paper-strong', themeHex.light.paperStrong, themeHex.dark.paperStrong),
@@ -92,6 +123,107 @@ export const palette = {
   inverseSurface: '#2B3A30',
   viewerSurface: semanticColor('viewer-surface', themeHex.light.viewerSurface, themeHex.dark.viewerSurface),
 };
+
+export const palette: typeof semanticPalette = Platform.OS === 'android'
+  ? new Proxy(semanticPalette, {
+      get(target, property, receiver) {
+        return resolveAndroidSemanticColor(Reflect.get(target, property, receiver));
+      },
+    })
+  : semanticPalette;
+
+const androidPaletteCache: Partial<Record<'light' | 'dark', typeof semanticPalette>> = {};
+
+/** Returns immutable Android color values for an explicitly resolved scheme. */
+export function resolveThemedPalette(colorScheme: 'light' | 'dark'): typeof semanticPalette {
+  if (Platform.OS !== 'android') return palette;
+  if (!androidPaletteCache[colorScheme]) {
+    androidPaletteCache[colorScheme] = Object.fromEntries(
+      Object.entries(semanticPalette).map(([name, color]) => [
+        name,
+        resolveAndroidSemanticColor(color, colorScheme),
+      ]),
+    ) as typeof semanticPalette;
+  }
+  return androidPaletteCache[colorScheme];
+}
+
+type FolioNamedStyles<T> = {
+  [P in keyof T]: ViewStyle | TextStyle | ImageStyle;
+};
+
+const androidStyleCache = new WeakMap<
+  object,
+  Partial<Record<'light' | 'dark', ViewStyle | TextStyle | ImageStyle>>
+>();
+const androidStyleSheetCache = new WeakMap<
+  object,
+  Record<'light' | 'dark', object>
+>();
+
+function resolveAndroidStyle<T extends ViewStyle | TextStyle | ImageStyle>(
+  style: T,
+  colorScheme = androidSemanticColorScheme,
+): T {
+  const cached = androidStyleCache.get(style) ?? {};
+  if (!cached[colorScheme]) {
+    cached[colorScheme] = Object.fromEntries(
+      Object.entries(style).map(([property, value]) => [
+        property,
+        resolveAndroidSemanticColor(value, colorScheme),
+      ]),
+    ) as unknown as T;
+    androidStyleCache.set(style, cached);
+  }
+  return cached[colorScheme] as T;
+}
+
+/**
+ * Keeps module-level styles allocation-free during normal renders while giving
+ * Fabric a new immutable color value only when Android's resolved scheme
+ * changes. This refreshes mounted views without remounting navigation or screen
+ * state.
+ */
+export function createThemedStyleSheet<
+  T extends FolioNamedStyles<T> | FolioNamedStyles<Record<string, unknown>>,
+>(styles: T & FolioNamedStyles<Record<string, unknown>>): T {
+  const created = StyleSheet.create(styles);
+  if (Platform.OS !== 'android') return created;
+  const themed = Object.fromEntries(
+    (['light', 'dark'] as const).map((colorScheme) => [
+      colorScheme,
+      Object.fromEntries(
+        Object.entries(created).map(([name, style]) => [
+          name,
+          resolveAndroidStyle(
+            style as ViewStyle | TextStyle | ImageStyle,
+            colorScheme,
+          ),
+        ]),
+      ),
+    ]),
+  ) as Record<'light' | 'dark', object>;
+  const proxied = new Proxy(created, {
+    get(_target, property) {
+      return Reflect.get(themed[androidSemanticColorScheme], property);
+    },
+  });
+  androidStyleSheetCache.set(proxied, themed);
+  return proxied;
+}
+
+/**
+ * Materializes an Android sheet for the resolved context scheme. Passing the
+ * scheme explicitly keeps compiler-memoized child components reactive without
+ * remounting their state.
+ */
+export function useThemedStyles<T extends FolioNamedStyles<T>>(
+  styles: T,
+  colorScheme: 'light' | 'dark',
+): T {
+  if (Platform.OS !== 'android') return styles;
+  return androidStyleSheetCache.get(styles)?.[colorScheme] as T ?? styles;
+}
 
 export const fonts = Platform.select({
   ios: {

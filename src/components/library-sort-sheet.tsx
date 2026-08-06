@@ -1,10 +1,10 @@
 import { Check } from 'lucide-react-native';
 import { useRef } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 
 import { KeyboardSheet, KeyboardSheetHandle } from '@/components/keyboard-sheet';
 import { MotionPressable as Pressable, hapticFeedback } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/context/ui-preferences-context';
 import type { TranslationKey } from '@/i18n/catalogs';
 import { LibrarySortOrder } from '@/types/document';
@@ -77,7 +77,7 @@ export function LibrarySortSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   options: { paddingTop: 16, paddingBottom: 8 },
   option: {
     minHeight: 64,

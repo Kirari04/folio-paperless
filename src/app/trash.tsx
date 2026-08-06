@@ -1,12 +1,12 @@
 import { ArrowLeft, RefreshCw, RotateCcw, Trash2 } from 'lucide-react-native';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppShell } from '@/components/app-shell';
 import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/components/motion';
 import { PaperThumbnail } from '@/components/paper-thumbnail';
-import { fonts, maxContentWidth, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, maxContentWidth, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n } from '@/context/ui-preferences-context';
 import { presentRuntimeError } from '@/i18n/error-presentation';
@@ -187,7 +187,7 @@ function TrashContent() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   root: { flex: 1, backgroundColor: palette.canvas },
   safe: { backgroundColor: palette.canvas },
   header: { width: '100%', maxWidth: maxContentWidth, alignSelf: 'center', height: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20 },

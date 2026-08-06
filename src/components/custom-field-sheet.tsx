@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Platform,
   ScrollView,
-  StyleSheet,
   Switch,
   Text,
   TextInput,
@@ -17,7 +16,7 @@ import {
   animateLayout,
   hapticFeedback,
 } from '@/components/motion';
-import { fonts, palette, radii } from '@/constants/theme';
+import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/context/ui-preferences-context';
 import { presentRuntimeError } from '@/i18n/error-presentation';
 import type { TranslationKey } from '@/i18n/catalogs';
@@ -319,7 +318,7 @@ export function CustomFieldSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = createThemedStyleSheet({
   scroll: { flexShrink: 1 },
   body: { paddingTop: 16, paddingBottom: 8 },
   booleanRow: { minHeight: 76, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, borderRadius: radii.md, backgroundColor: palette.paper },

@@ -27,7 +27,6 @@ import {
   Alert,
   Linking,
   Platform,
-  StyleSheet,
   Switch,
   Text,
   View,
@@ -38,7 +37,14 @@ import { AnimatedSegmentedControl } from '@/components/animated-segmented-contro
 import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/components/motion';
 import { FolioLogo } from '@/components/folio-logo';
 import { ProfileManagerSheet } from '@/components/profile-manager-sheet';
-import { fonts, palette, radii } from '@/constants/theme';
+import {
+  createThemedStyleSheet,
+  fonts,
+  palette,
+  radii,
+  resolveThemedPalette,
+  useThemedStyles,
+} from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useUpdates } from '@/context/update-context';
 import {
@@ -59,18 +65,19 @@ type OsSearchCapability = {
   reason: string | null;
 };
 
-function syncToneColor(tone: SyncStatusTone) {
-  if (tone === 'success') return palette.limeDark;
-  if (tone === 'progress') return palette.inkSoft;
-  if (tone === 'warning') return palette.apricot;
-  if (tone === 'danger') return palette.danger;
-  return palette.faint;
+function syncToneColor(tone: SyncStatusTone, colors: typeof palette) {
+  if (tone === 'success') return colors.limeDark;
+  if (tone === 'progress') return colors.inkSoft;
+  if (tone === 'warning') return colors.apricot;
+  if (tone === 'danger') return colors.danger;
+  return colors.faint;
 }
 
 export default function SettingsScreen() {
   const updates = useUpdates();
   const {
     appearance,
+    colorScheme,
     language,
     setAppearance,
     setLanguage,
@@ -79,6 +86,8 @@ export default function SettingsScreen() {
     formatFileSize,
     formatNumber,
   } = useI18n();
+  const colors = resolveThemedPalette(colorScheme);
+  const styles = useThemedStyles(themedStyles, colorScheme);
   const versionLabel = Constants.expoConfig?.version
     ? t('settings.version', { version: Constants.expoConfig.version })
     : t('settings.developmentBuild');
@@ -292,9 +301,9 @@ export default function SettingsScreen() {
         <View style={styles.connectionTop}>
           <View style={[styles.serverIcon, connected && styles.serverIconConnected]}>
             {connected ? (
-              <ShieldCheck color={palette.accentInk} size={23} />
+              <ShieldCheck color={colors.accentInk} size={23} />
             ) : (
-              <Server color={palette.paper} size={23} />
+              <Server color={colors.paper} size={23} />
             )}
           </View>
           <View style={styles.connectionCopy}>
@@ -302,7 +311,7 @@ export default function SettingsScreen() {
               <Text style={styles.connectionTitle}>
                 {activeProfile?.displayName ?? t('settings.demoWorkspace')}
               </Text>
-              <View style={[styles.liveDot, { backgroundColor: syncToneColor(syncStatus.tone) }]} />
+              <View style={[styles.liveDot, { backgroundColor: syncToneColor(syncStatus.tone, colors) }]} />
             </View>
             <Text style={styles.connectionSubtitle}>
               {activeProfile?.serverUrl ?? t('settings.demoWorkspaceSubtitle')}
@@ -317,7 +326,7 @@ export default function SettingsScreen() {
               accessibilityLiveRegion="polite"
               accessible
               style={styles.syncStatusBanner}>
-              <View style={[styles.liveDot, { backgroundColor: syncToneColor(syncStatus.tone) }]} />
+              <View style={[styles.liveDot, { backgroundColor: syncToneColor(syncStatus.tone, colors) }]} />
               <Text style={styles.syncStatusText}>{syncStatusText}</Text>
             </View>
             <View style={styles.serverStats}>
@@ -341,9 +350,9 @@ export default function SettingsScreen() {
                 onPress={handleRefresh}
                 style={styles.syncButton}>
                 {isSyncing ? (
-                  <ActivityIndicator color={palette.accentInk} size="small" />
+                  <ActivityIndicator color={colors.accentInk} size="small" />
                 ) : (
-                  <RefreshCw color={palette.accentInk} size={18} />
+                  <RefreshCw color={colors.accentInk} size={18} />
                 )}
               </Pressable>
             </View>
@@ -354,7 +363,7 @@ export default function SettingsScreen() {
             haptic="medium"
             onPress={() => setProfileManagerVisible(true)}
             style={styles.connectButton}>
-            <Server color={palette.accentInk} size={18} />
+            <Server color={colors.accentInk} size={18} />
             <Text style={styles.connectButtonText}>{t('settings.connect')}</Text>
           </Pressable>
         )}
@@ -368,9 +377,9 @@ export default function SettingsScreen() {
         {connected && (
           <View style={styles.connectionActions}>
             <Pressable onPress={() => setProfileManagerVisible(true)} style={styles.manageConnectionsButton}>
-              <Server color={palette.inkSoft} size={15} />
+              <Server color={colors.inkSoft} size={15} />
               <Text style={styles.changeServer}>{t('settings.manageConnections')}</Text>
-              <ChevronRight color={palette.inkSoft} size={15} />
+              <ChevronRight color={colors.inkSoft} size={15} />
             </Pressable>
           </View>
         )}
@@ -379,7 +388,7 @@ export default function SettingsScreen() {
       <Text style={styles.sectionLabel}>{t('settings.appearanceSection')}</Text>
       <View style={styles.settingsGroup}>
         <PreferenceControl
-          disabled={uiPreferenceSaving === 'appearance'}
+          busy={uiPreferenceSaving === 'appearance'}
           icon={SunMoon}
           onChange={(value) => saveUiPreference('appearance', value)}
           options={[
@@ -414,7 +423,7 @@ export default function SettingsScreen() {
           onPress={() => router.push('/trash')}
           title={t('settings.recentlyDeleted')}
           subtitle={t('settings.recentlyDeletedSubtitle')}
-          trailing={<ChevronRight color={palette.faint} size={18} />}
+          trailing={<ChevronRight color={colors.faint} size={18} />}
         />
         <SettingRow
           icon={Fingerprint}
@@ -424,8 +433,8 @@ export default function SettingsScreen() {
             <Switch
               disabled={preferenceSaving === 'biometricLock'}
               onValueChange={(value) => togglePreference('biometricLock', value)}
-              trackColor={{ false: palette.lineStrong, true: palette.ink }}
-              thumbColor={preferences.biometricLock ? palette.lime : palette.paper}
+              trackColor={{ false: colors.lineStrong, true: colors.ink }}
+              thumbColor={preferences.biometricLock ? colors.lime : colors.paper}
               value={preferences.biometricLock}
             />
           }
@@ -442,8 +451,8 @@ export default function SettingsScreen() {
             <Switch
               disabled={!osSearchCapability || preferenceSaving === 'osSearchEnabled'}
               onValueChange={(value) => void setOsSearchEnabled(value)}
-              trackColor={{ false: palette.lineStrong, true: palette.ink }}
-              thumbColor={preferences.osSearchEnabled ? palette.lime : palette.paper}
+              trackColor={{ false: colors.lineStrong, true: colors.ink }}
+              thumbColor={preferences.osSearchEnabled ? colors.lime : colors.paper}
               value={preferences.osSearchEnabled}
             />
           }
@@ -468,8 +477,8 @@ export default function SettingsScreen() {
             <Switch
               disabled={preferenceSaving === 'processingNotifications'}
               onValueChange={(value) => togglePreference('processingNotifications', value)}
-              trackColor={{ false: palette.lineStrong, true: palette.ink }}
-              thumbColor={preferences.processingNotifications ? palette.lime : palette.paper}
+              trackColor={{ false: colors.lineStrong, true: colors.ink }}
+              thumbColor={preferences.processingNotifications ? colors.lime : colors.paper}
               value={preferences.processingNotifications}
             />
           }
@@ -499,7 +508,7 @@ export default function SettingsScreen() {
       {Platform.OS === 'web' ? (
         <View style={styles.storageCard}>
           <View style={styles.storageHeader}>
-            <HardDrive color={palette.ink} size={20} />
+            <HardDrive color={colors.ink} size={20} />
             <View style={styles.storageCopy}>
               <Text style={styles.storageTitle}>{t('settings.offlineTitle')}</Text>
               <Text style={styles.storageSubtitle}>{t('settings.offlineWeb')}</Text>
@@ -509,7 +518,7 @@ export default function SettingsScreen() {
       ) : (
         <View style={styles.storageCard}>
           <View style={styles.storageHeader}>
-            <HardDrive color={palette.ink} size={20} />
+            <HardDrive color={colors.ink} size={20} />
             <View style={styles.storageCopy}>
               <Text style={styles.storageTitle}>{t('settings.offlineTitle')}</Text>
               <Text style={styles.storageSubtitle}>
@@ -570,7 +579,7 @@ export default function SettingsScreen() {
             active: formatNumber(tasks.filter((task) => !['ready', 'canceled', 'failed'].includes(task.stage)).length),
             failed: formatNumber(tasks.filter((task) => task.stage === 'failed').length),
           })}
-          trailing={<ChevronRight color={palette.faint} size={18} />}
+          trailing={<ChevronRight color={colors.faint} size={18} />}
         />
       </View>
 
@@ -591,7 +600,7 @@ export default function SettingsScreen() {
               onPress={() => Linking.openURL(FOLIO_RELEASES_URL)}
               title={t('updates.viewReleases')}
               subtitle={t('updates.platformUnsupported')}
-              trailing={<ExternalLink color={palette.faint} size={18} />}
+              trailing={<ExternalLink color={colors.faint} size={18} />}
             />
           )
         )}
@@ -605,7 +614,7 @@ export default function SettingsScreen() {
           }
           title={t('settings.aboutFolio')}
           subtitle={`${versionLabel} · Expo SDK 57`}
-          trailing={<ChevronRight color={palette.faint} size={18} />}
+          trailing={<ChevronRight color={colors.faint} size={18} />}
         />
         <SettingRow
           icon={ExternalLink}
@@ -613,7 +622,7 @@ export default function SettingsScreen() {
           onPress={() => Linking.openURL('https://docs.paperless-ngx.com/')}
           title={t('settings.paperlessDocs')}
           subtitle={t('settings.paperlessDocsSubtitle')}
-          trailing={<ChevronRight color={palette.faint} size={18} />}
+          trailing={<ChevronRight color={colors.faint} size={18} />}
         />
       </View>
 
@@ -633,6 +642,7 @@ export default function SettingsScreen() {
 type IconComponent = typeof Bell;
 
 function PreferenceControl<T extends string>({
+  busy,
   disabled,
   icon: Icon,
   title,
@@ -642,6 +652,7 @@ function PreferenceControl<T extends string>({
   onChange,
   last = false,
 }: {
+  busy?: boolean;
   disabled?: boolean;
   icon: IconComponent;
   title: string;
@@ -651,11 +662,14 @@ function PreferenceControl<T extends string>({
   onChange: (value: T) => void;
   last?: boolean;
 }) {
+  const { colorScheme } = useI18n();
+  const colors = resolveThemedPalette(colorScheme);
+  const styles = useThemedStyles(themedStyles, colorScheme);
   return (
     <View style={[styles.preferenceControl, last && styles.settingRowLast]}>
       <View style={styles.preferenceHeading}>
         <View style={styles.settingIcon}>
-          <Icon color={palette.ink} size={19} />
+          <Icon color={colors.ink} size={19} />
         </View>
         <View style={styles.settingCopy}>
           <Text style={styles.settingTitle}>{title}</Text>
@@ -664,6 +678,7 @@ function PreferenceControl<T extends string>({
       </View>
       <AnimatedSegmentedControl
         accessibilityLabel={title}
+        busy={busy}
         disabled={disabled}
         onChange={onChange}
         options={options}
@@ -688,13 +703,16 @@ function SettingRow({
   onPress?: () => void;
   last?: boolean;
 }) {
+  const { colorScheme } = useI18n();
+  const colors = resolveThemedPalette(colorScheme);
+  const styles = useThemedStyles(themedStyles, colorScheme);
   return (
     <Pressable
       disabled={!onPress}
       onPress={onPress}
       style={[styles.settingRow, last && styles.settingRowLast]}>
       <View style={styles.settingIcon}>
-        <Icon color={palette.ink} size={19} />
+        <Icon color={colors.ink} size={19} />
       </View>
       <View style={styles.settingCopy}>
         <Text style={styles.settingTitle}>{title}</Text>
@@ -711,7 +729,8 @@ function QuotaControl({ disabled, onChange, title, value }: {
   title: string;
   value: number;
 }) {
-  const { formatFileSize } = useI18n();
+  const { colorScheme, formatFileSize } = useI18n();
+  const styles = useThemedStyles(themedStyles, colorScheme);
   const options = [128, 256, 512, 1024].map((megabytes) => {
     const bytes = megabytes * 1024 * 1024;
     return { value: String(bytes), label: formatFileSize(bytes) };
@@ -739,25 +758,30 @@ function StorageAction({ disabled, icon: Icon, loading, onPress, subtitle, title
   subtitle: string;
   title: string;
 }) {
+  const { colorScheme } = useI18n();
+  const colors = resolveThemedPalette(colorScheme);
+  const styles = useThemedStyles(themedStyles, colorScheme);
   return (
     <Pressable disabled={disabled} onPress={onPress} style={[styles.storageAction, disabled && styles.disabled]}>
       <View style={styles.storageActionIcon}>
-        {loading ? <ActivityIndicator color={palette.ink} size="small" /> : <Icon color={palette.ink} size={18} />}
+        {loading ? <ActivityIndicator color={colors.ink} size="small" /> : <Icon color={colors.ink} size={18} />}
       </View>
       <View style={styles.storageActionCopy}>
         <Text style={styles.storageActionTitle}>{title}</Text>
         <Text style={styles.storageActionSubtitle}>{subtitle}</Text>
       </View>
-      <ChevronRight color={palette.faint} size={17} />
+      <ChevronRight color={colors.faint} size={17} />
     </Pressable>
   );
 }
 
 function UpdateStatusTrailing() {
   const { status } = useUpdates();
-  const { t } = useI18n();
+  const { colorScheme, t } = useI18n();
+  const colors = resolveThemedPalette(colorScheme);
+  const styles = useThemedStyles(themedStyles, colorScheme);
   if (status === 'checking' || status === 'downloading' || status === 'verifying' || status === 'installing') {
-    return <ActivityIndicator color={palette.ink} size="small" />;
+    return <ActivityIndicator color={colors.ink} size="small" />;
   }
   if (status === 'available') {
     return (
@@ -773,12 +797,12 @@ function UpdateStatusTrailing() {
       </View>
     );
   }
-  if (status === 'error') return <CircleAlert color={palette.danger} size={18} />;
-  if (status === 'up-to-date') return <Check color={palette.limeDark} size={19} strokeWidth={2.5} />;
-  return <ChevronRight color={palette.faint} size={18} />;
+  if (status === 'error') return <CircleAlert color={colors.danger} size={18} />;
+  if (status === 'up-to-date') return <Check color={colors.limeDark} size={19} strokeWidth={2.5} />;
+  return <ChevronRight color={colors.faint} size={18} />;
 }
 
-const styles = StyleSheet.create({
+const themedStyles = createThemedStyleSheet({
   header: {
     flexDirection: 'row',
     alignItems: 'flex-end',
