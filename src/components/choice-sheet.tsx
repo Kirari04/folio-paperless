@@ -166,8 +166,9 @@ export function ChoiceSheet({
     }
   }
 
-  const header = (
-    <>
+  const hasHeaderOptions = (allowNone && !multiple) || canCreate;
+  const header = hasHeaderOptions ? (
+    <View style={styles.listHeader}>
       {allowNone && !multiple && (
         <Pressable
           accessibilityRole="radio"
@@ -204,8 +205,8 @@ export function ChoiceSheet({
           </View>
         </Pressable>
       )}
-    </>
-  );
+    </View>
+  ) : null;
 
   return (
     <KeyboardSheet
@@ -384,13 +385,22 @@ export function ChoiceSheet({
   );
 }
 
+const choiceRowLayout = {
+  minHeight: 60,
+  flexDirection: 'row' as const,
+  alignItems: 'center' as const,
+  gap: 10,
+  paddingHorizontal: 14,
+  paddingVertical: 10,
+};
+
 const styles = createThemedStyleSheet({
   search: {
     minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginTop: 14,
+    marginTop: 16,
     paddingLeft: 14,
     paddingRight: 7,
     paddingVertical: 5,
@@ -483,19 +493,17 @@ const styles = createThemedStyleSheet({
   },
   listView: {
     flexShrink: 1,
-    marginTop: 8,
+    marginTop: 12,
   },
   list: {
-    gap: 7,
-    paddingBottom: 8,
+    gap: 8,
+    paddingBottom: 12,
+  },
+  listHeader: {
+    gap: 8,
   },
   option: {
-    minHeight: 52,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    ...choiceRowLayout,
     borderWidth: 1,
     borderColor: 'transparent',
     borderRadius: radii.md,
@@ -546,12 +554,7 @@ const styles = createThemedStyleSheet({
     backgroundColor: palette.lime,
   },
   createOption: {
-    minHeight: 60,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 11,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
+    ...choiceRowLayout,
     borderWidth: 1,
     borderColor: palette.limeDark,
     borderRadius: radii.md,
@@ -574,7 +577,7 @@ const styles = createThemedStyleSheet({
   empty: {
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 30,
+    paddingVertical: 24,
   },
   emptyTitle: {
     color: palette.ink,
@@ -607,7 +610,7 @@ const styles = createThemedStyleSheet({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 9,
-    paddingTop: 9,
+    paddingTop: 12,
     paddingBottom: 8,
     borderTopWidth: 1,
     borderColor: palette.line,
