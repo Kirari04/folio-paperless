@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <color name="folio_widget_background">#FFFDF8</color>
+  <color name="folio_widget_text">#17231B</color>
+  <color name="folio_widget_text_muted">#59625B</color>
+  <color name="folio_widget_action_background">#D8F678</color>
+</resources>

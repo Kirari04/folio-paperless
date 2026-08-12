@@ -519,7 +519,7 @@ test('Android widget resources have complete English and German label parity', a
   const [english, german] = await Promise.all(paths.map((path) => readFile(path, 'utf8')));
   const names = (source) => [...source.matchAll(/<string name="([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(names(german), names(english));
-  assert.match(german, /Gesperrt/);
+  assert.match(german, /Entsperren/);
   assert.match(german, /Schnellscan/);
 });
 
@@ -535,6 +535,44 @@ test('Android widget copy remains visible under large text and longer translatio
     assert.match(field, /android:maxLines="2"/);
     assert.doesNotMatch(field, /android:maxLines="1"/);
   }
+  assert.match(layout, /android:id="@\+id\/folio_widget_inbox_action"/);
+  assert.match(layout, /android:id="@\+id\/folio_widget_scan_action"/);
+  assert.match(layout, /android:background="@drawable\/folio_widget_scan_background"/);
+  assert.match(layout, /android:layout_height="52dp"/);
+});
+
+test('Android widget provides separate Inbox and Quick Scan actions', async () => {
+  const provider = await readFile(
+    new URL(
+      '../modules/folio-platform/android/src/main/java/app/folio/platform/FolioInboxWidgetProvider.kt',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  assert.match(provider, /WIDGET_INBOX_ROUTE = "folio-paperless:\/\/inbox"/);
+  assert.match(provider, /WIDGET_QUICK_SCAN_ROUTE = "folio-paperless:\/\/scan"/);
+  assert.match(
+    provider,
+    /setOnClickPendingIntent\(R\.id\.folio_widget_inbox_action, inboxIntent\)/,
+  );
+  assert.match(
+    provider,
+    /setOnClickPendingIntent\(R\.id\.folio_widget_scan_action, scanIntent\)/,
+  );
+});
+
+test('settings storage rows present explicit actions instead of navigation affordances', async () => {
+  const source = await readFile(new URL('../src/app/settings.tsx', import.meta.url), 'utf8');
+  assert.match(source, /actionLabel=\{t\('settings\.clearCacheAction'\)\}/);
+  assert.match(source, /actionLabel=\{t\('common\.remove'\)\}/);
+  const storageAction = source.match(
+    /function StorageAction[\s\S]*?function UpdateStatusTrailing/,
+  )?.[0] ?? '';
+  assert.match(storageAction, /accessibilityState=\{\{ busy: loading, disabled \}\}/);
+  assert.match(storageAction, /styles\.storageActionAffordance/);
+  assert.doesNotMatch(storageAction, /<ChevronRight/);
+  assert.equal(en['settings.clearCacheAction'], 'Clear now');
+  assert.equal(de['settings.clearCacheAction'], 'Jetzt leeren');
 });
 
 test('native shortcut and widget metadata have complete English and German catalogs', async () => {

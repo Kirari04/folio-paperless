@@ -4,7 +4,6 @@
   android:layout_width="match_parent"
   android:layout_height="match_parent"
   android:background="@drawable/folio_widget_background"
-  android:gravity="center_vertical"
   android:orientation="vertical"
   android:padding="16dp">
 
@@ -12,37 +11,74 @@
     android:id="@+id/folio_widget_brand"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
+    android:fontFamily="sans-serif-medium"
+    android:letterSpacing="0.08"
     android:text="@string/folio_widget_brand"
-    android:textColor="#CFD9D1"
-    android:textSize="13sp"
-    android:textStyle="bold" />
+    android:textAllCaps="true"
+    android:textColor="@color/folio_widget_text_muted"
+    android:textSize="11sp" />
 
-  <TextView
-    android:id="@+id/folio_widget_primary"
+  <LinearLayout
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:layout_marginTop="5dp"
-    android:autoSizeMaxTextSize="30sp"
-    android:autoSizeMinTextSize="14sp"
-    android:autoSizeStepGranularity="1sp"
-    android:autoSizeTextType="uniform"
-    android:maxLines="2"
-    android:text="@string/folio_widget_locked"
-    android:textColor="#FFFFFF"
-    android:textSize="30sp"
-    android:textStyle="bold" />
+    android:layout_height="0dp"
+    android:layout_marginTop="8dp"
+    android:layout_weight="1"
+    android:gravity="center_vertical"
+    android:orientation="horizontal">
 
-  <TextView
-    android:id="@+id/folio_widget_secondary"
-    android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:layout_marginTop="4dp"
-    android:autoSizeMaxTextSize="12sp"
-    android:autoSizeMinTextSize="10sp"
-    android:autoSizeStepGranularity="1sp"
-    android:autoSizeTextType="uniform"
-    android:maxLines="2"
-    android:text="@string/folio_widget_open_scan"
-    android:textColor="#CFD9D1"
-    android:textSize="12sp" />
+    <LinearLayout
+      android:id="@+id/folio_widget_inbox_action"
+      android:layout_width="0dp"
+      android:layout_height="match_parent"
+      android:layout_weight="1"
+      android:gravity="center_vertical"
+      android:orientation="vertical"
+      android:paddingEnd="12dp">
+
+      <TextView
+        android:id="@+id/folio_widget_primary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:autoSizeMaxTextSize="34sp"
+        android:autoSizeMinTextSize="16sp"
+        android:autoSizeStepGranularity="1sp"
+        android:autoSizeTextType="uniform"
+        android:fontFamily="sans-serif-medium"
+        android:maxLines="2"
+        android:text="@string/folio_widget_inbox"
+        android:textColor="@color/folio_widget_text"
+        android:textSize="34sp" />
+
+      <TextView
+        android:id="@+id/folio_widget_secondary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:autoSizeMaxTextSize="12sp"
+        android:autoSizeMinTextSize="9sp"
+        android:autoSizeStepGranularity="1sp"
+        android:autoSizeTextType="uniform"
+        android:maxLines="2"
+        android:text="@string/folio_widget_unlock_inbox"
+        android:textColor="@color/folio_widget_text_muted"
+        android:textSize="12sp" />
+    </LinearLayout>
+
+    <TextView
+      android:id="@+id/folio_widget_scan_action"
+      android:layout_width="wrap_content"
+      android:layout_height="52dp"
+      android:background="@drawable/folio_widget_scan_background"
+      android:drawableStart="@drawable/folio_widget_scan_icon"
+      android:drawablePadding="7dp"
+      android:fontFamily="sans-serif-medium"
+      android:gravity="center"
+      android:maxLines="2"
+      android:minWidth="112dp"
+      android:paddingStart="14dp"
+      android:paddingEnd="14dp"
+      android:text="@string/folio_widget_quick_scan"
+      android:textColor="#17231B"
+      android:textSize="12sp" />
+  </LinearLayout>
 </LinearLayout>

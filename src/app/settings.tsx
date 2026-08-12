@@ -550,6 +550,7 @@ export default function SettingsScreen() {
           />
           <View style={styles.storageActions}>
             <StorageAction
+              actionLabel={t('settings.clearCacheAction')}
               disabled={!activeProfile || cacheBusy !== null}
               icon={Database}
               loading={cacheBusy === 'clear'}
@@ -558,12 +559,14 @@ export default function SettingsScreen() {
               title={t('settings.clearCache')}
             />
             <StorageAction
+              actionLabel={t('common.remove')}
               disabled={!activeProfile || !offlineUsage?.pinnedFiles || cacheBusy !== null}
               icon={Trash2}
               loading={cacheBusy === 'pinned'}
               onPress={confirmRemovePinned}
               subtitle={t('settings.removePinnedSubtitle')}
               title={t('settings.removePinned')}
+              tone="danger"
             />
           </View>
         </View>
@@ -750,27 +753,47 @@ function QuotaControl({ disabled, onChange, title, value }: {
   );
 }
 
-function StorageAction({ disabled, icon: Icon, loading, onPress, subtitle, title }: {
+function StorageAction({ actionLabel, disabled, icon: Icon, loading, onPress, subtitle, title, tone = 'neutral' }: {
+  actionLabel: string;
   disabled?: boolean;
   icon: IconComponent;
   loading?: boolean;
   onPress: () => void;
   subtitle: string;
   title: string;
+  tone?: 'neutral' | 'danger';
 }) {
   const { colorScheme } = useI18n();
   const colors = resolveThemedPalette(colorScheme);
   const styles = useThemedStyles(themedStyles, colorScheme);
   return (
-    <Pressable disabled={disabled} onPress={onPress} style={[styles.storageAction, disabled && styles.disabled]}>
-      <View style={styles.storageActionIcon}>
-        {loading ? <ActivityIndicator color={colors.ink} size="small" /> : <Icon color={colors.ink} size={18} />}
+    <Pressable
+      accessibilityState={{ busy: loading, disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={[styles.storageAction, disabled && styles.disabled]}>
+      <View style={[styles.storageActionIcon, tone === 'danger' && styles.storageActionIconDanger]}>
+        {loading ? (
+          <ActivityIndicator color={tone === 'danger' ? colors.danger : colors.ink} size="small" />
+        ) : (
+          <Icon color={tone === 'danger' ? colors.danger : colors.ink} size={18} />
+        )}
       </View>
       <View style={styles.storageActionCopy}>
         <Text style={styles.storageActionTitle}>{title}</Text>
         <Text style={styles.storageActionSubtitle}>{subtitle}</Text>
       </View>
-      <ChevronRight color={colors.faint} size={17} />
+      <View style={[
+        styles.storageActionAffordance,
+        tone === 'danger' && styles.storageActionAffordanceDanger,
+      ]}>
+        <Text style={[
+          styles.storageActionAffordanceText,
+          tone === 'danger' && styles.storageActionAffordanceTextDanger,
+        ]}>
+          {actionLabel}
+        </Text>
+      </View>
     </Pressable>
   );
 }
@@ -1212,6 +1235,9 @@ const themedStyles = createThemedStyleSheet({
     borderRadius: 12,
     backgroundColor: palette.canvas,
   },
+  storageActionIconDanger: {
+    backgroundColor: palette.dangerSurface,
+  },
   storageActionCopy: { flex: 1, minWidth: 0 },
   storageActionTitle: {
     color: palette.ink,
@@ -1225,6 +1251,26 @@ const themedStyles = createThemedStyleSheet({
     fontSize: 9,
     lineHeight: 14,
     marginTop: 2,
+  },
+  storageActionAffordance: {
+    minHeight: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: radii.pill,
+    backgroundColor: palette.limeSurface,
+  },
+  storageActionAffordanceDanger: {
+    backgroundColor: palette.dangerSurface,
+  },
+  storageActionAffordanceText: {
+    color: palette.limeDark,
+    fontFamily: fonts.sans,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  storageActionAffordanceTextDanger: {
+    color: palette.danger,
   },
   taskCenterGroup: { marginTop: 10 },
   updateBadge: {

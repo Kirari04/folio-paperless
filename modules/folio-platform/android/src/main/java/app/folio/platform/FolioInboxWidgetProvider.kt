@@ -14,6 +14,7 @@ private const val WIDGET_PREFERENCES = "folio-platform-widget"
 private const val WIDGET_STATE_KEY = "state"
 private const val WIDGET_COUNT_KEY = "inbox-count"
 private const val WIDGET_QUICK_SCAN_ROUTE = "folio-paperless://scan"
+private const val WIDGET_INBOX_ROUTE = "folio-paperless://inbox"
 
 internal enum class FolioWidgetState(val value: String) {
   LOCKED("locked"),
@@ -78,12 +79,12 @@ class FolioInboxWidgetProvider : AppWidgetProvider() {
       return RemoteViews(context.packageName, R.layout.folio_inbox_widget).apply {
         when (safeState) {
           FolioWidgetState.LOCKED -> {
-            setTextViewText(R.id.folio_widget_primary, context.getString(R.string.folio_widget_locked))
-            setTextViewText(R.id.folio_widget_secondary, context.getString(R.string.folio_widget_open_scan))
+            setTextViewText(R.id.folio_widget_primary, context.getString(R.string.folio_widget_inbox))
+            setTextViewText(R.id.folio_widget_secondary, context.getString(R.string.folio_widget_unlock_inbox))
           }
           FolioWidgetState.NO_DATA -> {
             setTextViewText(R.id.folio_widget_primary, context.getString(R.string.folio_widget_inbox))
-            setTextViewText(R.id.folio_widget_secondary, context.getString(R.string.folio_widget_open_scan))
+            setTextViewText(R.id.folio_widget_secondary, context.getString(R.string.folio_widget_open_inbox))
           }
           FolioWidgetState.READY -> {
             setTextViewText(R.id.folio_widget_primary, count.toString())
@@ -96,18 +97,32 @@ class FolioInboxWidgetProvider : AppWidgetProvider() {
           }
         }
         setViewVisibility(R.id.folio_widget_brand, View.VISIBLE)
-        quickScanPendingIntent(context)?.let { setOnClickPendingIntent(R.id.folio_widget_root, it) }
+        setContentDescription(
+          R.id.folio_widget_inbox_action,
+          context.getString(R.string.folio_widget_inbox_action_description),
+        )
+        setContentDescription(
+          R.id.folio_widget_scan_action,
+          context.getString(R.string.folio_widget_scan_action_description),
+        )
+        routePendingIntent(context, WIDGET_INBOX_ROUTE, 0)?.let { inboxIntent ->
+          setOnClickPendingIntent(R.id.folio_widget_root, inboxIntent)
+          setOnClickPendingIntent(R.id.folio_widget_inbox_action, inboxIntent)
+        }
+        routePendingIntent(context, WIDGET_QUICK_SCAN_ROUTE, 1)?.let { scanIntent ->
+          setOnClickPendingIntent(R.id.folio_widget_scan_action, scanIntent)
+        }
       }
     }
 
-    private fun quickScanPendingIntent(context: Context): PendingIntent? {
+    private fun routePendingIntent(context: Context, route: String, requestCode: Int): PendingIntent? {
       val intent = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return null
       intent.action = Intent.ACTION_VIEW
-      intent.data = Uri.parse(WIDGET_QUICK_SCAN_ROUTE)
+      intent.data = Uri.parse(route)
       intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
       return PendingIntent.getActivity(
         context,
-        0,
+        requestCode,
         intent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
