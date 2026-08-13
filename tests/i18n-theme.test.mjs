@@ -326,6 +326,34 @@ test('semantic accent surfaces retain WCAG AA text contrast in both themes', () 
   }
 });
 
+test('bright lime actions retain a stable dark foreground in both themes', async () => {
+  const homeSource = await readFile(new URL('../src/app/index.tsx', import.meta.url), 'utf8');
+  const accentInk = '#111713';
+
+  for (const mode of ['light', 'dark']) {
+    assert.ok(
+      contrast(accentInk, themeHex[mode].lime) >= 4.5,
+      `${mode} on-accent text must retain 4.5:1 contrast on lime`,
+    );
+  }
+
+  assert.match(homeSource, /inboxPillText:\s*\{\s*color: palette\.accentInk/);
+  assert.match(homeSource, /onAccentTitle:\s*\{\s*color: palette\.accentInk/);
+  assert.match(homeSource, /onAccentSubtitle:\s*\{\s*color: palette\.accentInk/);
+  assert.match(homeSource, /<Sparkles color=\{palette\.accentInk\}/);
+});
+
+test('library header adapts before compact Android content can overflow', async () => {
+  const documentsSource = await readFile(new URL('../src/app/documents.tsx', import.meta.url), 'utf8');
+
+  assert.match(documentsSource, /const compactHeader = width < 600;/);
+  assert.match(documentsSource, /style=\{\[styles\.header, compactHeader && styles\.headerCompact\]\}/);
+  assert.match(documentsSource, /headerCompact:\s*\{[\s\S]*?flexDirection: 'column'/);
+  assert.match(documentsSource, /headerToolsCompact:\s*\{[\s\S]*?justifyContent: 'flex-end'/);
+  assert.match(documentsSource, /accessibilityLabel=\{t\('library\.searchLabel'\)\}\s*numberOfLines=\{1\}/);
+  assert.match(documentsSource, /searchInput:\s*\{[\s\S]*?minWidth: 0/);
+});
+
 test('semantic application surfaces, statuses, and control boundaries retain AA contrast', () => {
   for (const mode of ['light', 'dark']) {
     for (const surface of ['canvas', 'paper', 'paperStrong']) {

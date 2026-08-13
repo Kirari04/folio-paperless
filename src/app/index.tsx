@@ -168,7 +168,7 @@ export default function HomeScreen() {
           style={styles.inboxCard}>
           <View style={styles.inboxCopy}>
             <View style={styles.inboxPill}>
-              <Sparkles color={palette.ink} size={13} />
+              <Sparkles color={palette.accentInk} size={13} />
               <Text style={styles.inboxPillText}>{t('home.smartInbox')}</Text>
             </View>
             <Text style={styles.inboxTitle}>
@@ -220,10 +220,10 @@ export default function HomeScreen() {
             <Camera color={palette.lime} size={21} />
           </View>
           <View style={styles.quickText}>
-            <Text style={styles.quickTitle}>{t('home.scanPaper')}</Text>
-            <Text style={styles.quickSubtitle}>{t('home.scanSubtitle')}</Text>
+            <Text style={[styles.quickTitle, styles.onAccentTitle]}>{t('home.scanPaper')}</Text>
+            <Text style={[styles.quickSubtitle, styles.onAccentSubtitle]}>{t('home.scanSubtitle')}</Text>
           </View>
-          <ArrowRight color={palette.ink} size={18} />
+          <ArrowRight color={palette.accentInk} size={18} />
         </Pressable>
 
         <Pressable
@@ -472,7 +472,7 @@ const styles = createThemedStyleSheet({
     borderRadius: radii.pill,
   },
   inboxPillText: {
-    color: palette.ink,
+    color: palette.accentInk,
     fontFamily: fonts.sans,
     fontSize: 9,
     fontWeight: '900',
@@ -570,6 +570,13 @@ const styles = createThemedStyleSheet({
     fontFamily: fonts.sans,
     fontSize: 12,
     marginTop: 2,
+  },
+  onAccentTitle: {
+    color: palette.accentInk,
+  },
+  onAccentSubtitle: {
+    color: palette.accentInk,
+    opacity: 0.72,
   },
   statsCard: {
     marginTop: 12,

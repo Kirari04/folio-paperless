@@ -113,6 +113,7 @@ const DocumentsScreen = memo(function DocumentsScreen({
   const router = useRouter();
   const { formatNumber, t } = useI18n();
   const { width } = useWindowDimensions();
+  const compactHeader = width < 600;
   const {
     connected,
     profileConfigured,
@@ -838,14 +839,14 @@ const DocumentsScreen = memo(function DocumentsScreen({
   const listHeader = (
     <View style={styles.listHeader}>
       {!profileConfigured && <DemoModeBanner />}
-      <View style={styles.header}>
+      <View style={[styles.header, compactHeader && styles.headerCompact]}>
         {selectionActive ? (
           <>
-            <View style={styles.selectionCopy}>
+            <View style={[styles.selectionCopy, compactHeader && styles.selectionCopyCompact]}>
               <Text accessibilityLiveRegion="polite" style={styles.selectionTitle}>{t('library.selectedCount', { count: formatNumber(selection.selected) })}</Text>
               <Text style={styles.selectionMeta}>{selection.hiddenSelected ? t('library.shownHidden', { shown: formatNumber(selection.shownSelected), hidden: formatNumber(selection.hiddenSelected) }) : t('library.shownCount', { count: formatNumber(selection.shownSelected) })}</Text>
             </View>
-            <View style={styles.headerTools}>
+            <View style={[styles.headerTools, compactHeader && styles.headerToolsCompact]}>
               <Pressable accessibilityLabel={t('library.selectShownLabel')} disabled={!selection.shown} onPress={() => setSelectedIds((current) => selectShownDocuments(current, filteredDocuments))} style={styles.selectTextButton}>
                 <Text style={styles.selectText}>{t('library.selectShown')}</Text>
               </Pressable>
@@ -855,7 +856,7 @@ const DocumentsScreen = memo(function DocumentsScreen({
         ) : (
           <>
             <Text style={styles.title}>{t('library.title')}</Text>
-            <View style={styles.headerTools}>
+            <View style={[styles.headerTools, compactHeader && styles.headerToolsCompact]}>
               <Pressable accessibilityLabel={t('library.selectDocuments')} disabled={!filteredDocuments.length} onPress={() => setSelectionActive(true)} style={styles.selectTextButton}>
                 <CheckSquare2 color={palette.ink} size={16} />
                 <Text style={styles.selectText}>{t('library.select')}</Text>
@@ -896,6 +897,7 @@ const DocumentsScreen = memo(function DocumentsScreen({
           autoCorrect={false}
           onChangeText={updateQuery}
           accessibilityLabel={t('library.searchLabel')}
+          numberOfLines={1}
           placeholder={profileConfigured ? t('library.searchConnected') : t('library.searchDemo')}
           placeholderTextColor={palette.faint}
           returnKeyType="search"
@@ -1655,7 +1657,14 @@ const styles = createThemedStyleSheet({
     marginTop: 8,
     marginBottom: 22,
   },
+  headerCompact: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 12,
+    marginBottom: 18,
+  },
   title: {
+    flexShrink: 1,
     color: palette.ink,
     fontFamily: fonts.serif,
     fontSize: 40,
@@ -1663,10 +1672,12 @@ const styles = createThemedStyleSheet({
     letterSpacing: -1.3,
   },
   headerTools: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  headerToolsCompact: { alignSelf: 'stretch', justifyContent: 'flex-end' },
   headerIconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: palette.paper },
   selectTextButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 11, borderRadius: radii.sm, backgroundColor: palette.paper },
   selectText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 11, fontWeight: '900' },
   selectionCopy: { flex: 1, minWidth: 0 },
+  selectionCopyCompact: { flex: 0 },
   selectionTitle: { color: palette.ink, fontFamily: fonts.serif, fontSize: 28, fontWeight: '700' },
   selectionMeta: { color: palette.muted, fontFamily: fonts.sans, fontSize: 10, fontWeight: '800', marginTop: 2 },
   viewToggle: {
@@ -1698,6 +1709,7 @@ const styles = createThemedStyleSheet({
   },
   searchInput: {
     flex: 1,
+    minWidth: 0,
     color: palette.ink,
     fontFamily: fonts.sans,
     fontSize: 15,
