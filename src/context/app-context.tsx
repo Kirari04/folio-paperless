@@ -76,6 +76,10 @@ import {
 } from '@/lib/file-staging';
 import { sanitizeIntakeFilename, stageIntakeBatch } from '@/lib/intake';
 import {
+  DEFAULT_SCAN_ENGINE_PREFERENCE,
+  isScanEnginePreference,
+} from '@/lib/scan-engine';
+import {
   clearStagedFileReference,
   deleteTaskAfterStagedFileCleanup,
   StagedFileCleanupError,
@@ -270,6 +274,7 @@ const profileDataRemovalTransaction: ProfileDataRemovalTransaction = {
 const metadataUpdateController = new MetadataUpdateController(folioRepository);
 const defaultPreferences: AppPreferences = {
   biometricLock: false,
+  scanEngine: DEFAULT_SCAN_ENGINE_PREFERENCE,
   processingNotifications: false,
   notificationPrivacy: 'redacted',
   osSearchEnabled: false,
@@ -1746,9 +1751,15 @@ export function AppProvider({ children }: PropsWithChildren) {
       try {
         const savedPreferences = await loadStoredValue<AppPreferences>(PREFERENCES_KEY);
         if (!active) return;
-        const restoredPreferences = savedPreferences
+        const mergedPreferences = savedPreferences
           ? { ...defaultPreferences, ...savedPreferences }
           : defaultPreferences;
+        // A stored preference can predate this scanner choice, or name an
+        // engine a later build removed.
+        const restoredPreferences: AppPreferences =
+          isScanEnginePreference(mergedPreferences.scanEngine)
+            ? mergedPreferences
+            : { ...mergedPreferences, scanEngine: DEFAULT_SCAN_ENGINE_PREFERENCE };
         setRuntimeNotificationPreferences(
           restoredPreferences.processingNotifications,
           restoredPreferences.notificationPrivacy,

@@ -175,6 +175,7 @@ class FolioPlatformModule : Module() {
   private val protectedStorageOwnerId = UUID.randomUUID().toString().also {
     FolioProtectedStorageExclusiveCoordinator.registerOwner(it)
   }
+  private val fairScanScanner = FolioFairScanScanner()
 
   @Volatile
   private var searchUnlocked = false
@@ -373,6 +374,23 @@ class FolioPlatformModule : Module() {
 
     AsyncFunction("consumeInitialShortcutAsync") { null as String? }
 
+    AsyncFunction("isFairScanAvailableAsync") {
+      fairScanScanner.isAvailable(requireContext())
+    }
+
+    AsyncFunction("scanWithFairScanAsync") { promise: Promise ->
+      fairScanScanner.launch(appContext.currentActivity, requireContext(), promise)
+    }
+
+    OnActivityResult { _, payload ->
+      fairScanScanner.handleResult(
+        appContext.reactContext,
+        payload.requestCode,
+        payload.resultCode,
+        payload.data,
+      )
+    }
+
     OnCreate {
       if (
         preferences().getBoolean(CLEAR_ON_BACKGROUND_KEY, false) ||
@@ -389,6 +407,7 @@ class FolioPlatformModule : Module() {
     }
 
     OnDestroy {
+      fairScanScanner.abandon()
       FolioProtectedStorageExclusiveCoordinator.unregisterOwner(protectedStorageOwnerId)
       executor.shutdown()
     }

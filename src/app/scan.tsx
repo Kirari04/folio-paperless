@@ -43,11 +43,14 @@ import { presentRuntimeError } from '@/i18n/error-presentation';
 import {
   discardSmartScan,
   discardTemporaryFiles,
-  launchSmartScanner,
+  launchScanner,
   prepareSmartScan,
+  ScanEngineUnavailableError,
   SmartScannerUnavailableError,
   SmartScanSession,
+  type PreparedScanFile,
 } from '@/lib/document-scanner';
+import { FAIRSCAN_FDROID_URL } from '@/lib/fairscan-scanner';
 import { useRouter } from '@/lib/router';
 import type { RootStackParamList } from '@/lib/router';
 import type { ConnectionProfile } from '@/lib/auth/profile-store';
@@ -60,7 +63,12 @@ function pluralPages(count: number, t: Translator, formatNumber: (value: number)
   return count === 1 ? t('scan.pageOne') : t('scan.pageMany', { count: formatNumber(count) });
 }
 
-function smartScannerMessage(error: unknown, t: Translator) {
+function scannerMessage(error: unknown, t: Translator) {
+  if (error instanceof ScanEngineUnavailableError) {
+    return error.reason === 'fairscan-not-installed'
+      ? t('scan.fairScanMissing')
+      : t('scan.noScanEngine');
+  }
   if (error instanceof SmartScannerUnavailableError) {
     if (/hybrid object|nitro|native module/i.test(error.message)) {
       return t('scan.buildRequired');
@@ -194,6 +202,7 @@ export default function ScanScreen() {
   const [isSaving, setIsSaving] = useState(false);
   const [savingLabel, setSavingLabel] = useState(() => t('scan.uploading'));
   const [scanError, setScanError] = useState<string | null>(null);
+  const [fairScanMissing, setFairScanMissing] = useState(false);
   const [destinationVisible, setDestinationVisible] = useState(false);
   const [switchingProfileId, setSwitchingProfileId] = useState<string | null>(null);
   const [requestedProfileId, setRequestedProfileId] = useState<string | null>(null);
@@ -204,9 +213,12 @@ export default function ScanScreen() {
     importDocument,
     isBootstrapping,
     prepareDocuments,
+    preferences,
+    preferencesReady,
     profiles,
     switchProfile,
   } = useApp();
+  const scanEngine = preferences.scanEngine;
 
   const rememberScanSession = useCallback((session: SmartScanSession | null) => {
     scanSessionRef.current = session;
@@ -227,42 +239,83 @@ export default function ScanScreen() {
     navigation.setOptions({ gestureEnabled: !isSaving });
   }, [isSaving, navigation]);
 
-  const startSmartScan = useCallback(async () => {
+  const depositScanFile = useCallback(async (file: PreparedScanFile) => {
+    setSavingLabel(profileConfigured ? t('scan.securingCopy') : t('scan.adding'));
+    const intake = profileConfigured ? await prepareDocuments([file], 'camera') : null;
+    if (!profileConfigured) await importDocument(file);
+    await hapticFeedback('confirm');
+    return intake;
+  }, [importDocument, prepareDocuments, profileConfigured, t]);
+
+  const routeAfterDeposit = useCallback((batchId: string | undefined) => {
+    if (batchId) {
+      router.replace({ pathname: '/intake', params: { batchId } });
+    } else {
+      router.replace('/inbox');
+    }
+  }, [router]);
+
+  const startScan = useCallback(async () => {
     if (smartLaunchRef.current) return;
     smartLaunchRef.current = true;
     setIsLaunchingSmart(true);
     setScanError(null);
+    setFairScanMissing(false);
     try {
-      const result = await launchSmartScanner();
+      const result = await launchScanner(scanEngine);
       if (!mountedRef.current) return;
-      if (result) {
+      if (result.kind === 'cancelled') return;
+      if (result.kind === 'session') {
         animateLayout();
         setCaptureKind('smart');
         setSelectedPage(0);
-        rememberScanSession(result);
+        rememberScanSession(result.session);
         await hapticFeedback('confirm');
+        return;
+      }
+      // An external engine has already shown its own review and export step,
+      // so its PDF goes straight into Folio's existing deposit flow.
+      setIsSaving(true);
+      try {
+        const intake = await depositScanFile(result.file);
+        // The deposit flow keeps its own staged copy, so the cached hand-off
+        // file from the external engine goes away right after.
+        await discardTemporaryFiles([result.file.uri]);
+        routeAfterDeposit(intake?.batchId);
+      } catch (error) {
+        await discardTemporaryFiles([result.file.uri]);
+        if (!mountedRef.current) return;
+        setScanError(presentRuntimeError(error, t('scan.saveError')));
+        await hapticFeedback('error');
+      } finally {
+        if (mountedRef.current) setIsSaving(false);
       }
     } catch (error) {
       if (!mountedRef.current) return;
-      setScanError(smartScannerMessage(error, t));
+      setFairScanMissing(
+        error instanceof ScanEngineUnavailableError
+          && error.reason === 'fairscan-not-installed',
+      );
+      setScanError(scannerMessage(error, t));
       await hapticFeedback('error');
     } finally {
       smartLaunchRef.current = false;
       if (mountedRef.current) setIsLaunchingSmart(false);
     }
-  }, [rememberScanSession, t]);
+  }, [depositScanFile, rememberScanSession, routeAfterDeposit, scanEngine, t]);
 
   useEffect(() => {
     if (
       Platform.OS === 'ios'
       || autoLaunchRef.current
       || isBootstrapping
+      || !preferencesReady
       || profiles.length > 1
     ) return;
     autoLaunchRef.current = true;
-    const timer = setTimeout(() => void startSmartScan(), 220);
+    const timer = setTimeout(() => void startScan(), 220);
     return () => clearTimeout(timer);
-  }, [isBootstrapping, profiles.length, startSmartScan]);
+  }, [isBootstrapping, preferencesReady, profiles.length, startScan]);
 
   async function selectDestination(profileId: string) {
     if (isSaving || switchingProfileId) return;
@@ -352,17 +405,10 @@ export default function ScanScreen() {
         ? { ...scanSession, pdfUri: file.uri }
         : scanSession;
       if (preparedSession !== scanSession) rememberScanSession(preparedSession);
-      setSavingLabel(profileConfigured ? t('scan.securingCopy') : t('scan.adding'));
-      const intake = profileConfigured ? await prepareDocuments([file], 'camera') : null;
-      if (!profileConfigured) await importDocument(file);
-      await hapticFeedback('confirm');
+      const intake = await depositScanFile(file);
       scanSessionRef.current = null;
       await discardSmartScan(preparedSession);
-      if (intake?.batchId) {
-        router.replace({ pathname: '/intake', params: { batchId: intake.batchId } });
-      } else {
-        router.replace('/inbox');
-      }
+      routeAfterDeposit(intake?.batchId);
     } catch (error) {
       setScanError(presentRuntimeError(error, t('scan.saveError')));
       await hapticFeedback('error');
@@ -385,7 +431,7 @@ export default function ScanScreen() {
       setCameraReady(false);
       return;
     }
-    void startSmartScan();
+    void startScan();
   }
 
   async function pickFile() {
@@ -792,6 +838,15 @@ export default function ScanScreen() {
         {!!scanError && (
           <View accessibilityLiveRegion="polite" style={styles.launcherError}>
             <Text style={styles.launcherErrorText}>{scanError}</Text>
+            {fairScanMissing && (
+              <Pressable
+                accessibilityRole="link"
+                haptic="light"
+                onPress={() => void Linking.openURL(FAIRSCAN_FDROID_URL)}
+                style={styles.launcherErrorAction}>
+                <Text style={styles.launcherErrorActionText}>{t('scan.fairScanInstall')}</Text>
+              </Pressable>
+            )}
           </View>
         )}
       </View>
@@ -800,7 +855,7 @@ export default function ScanScreen() {
         <Pressable
           disabled={isLaunchingSmart || isSaving || !!switchingProfileId}
           haptic="light"
-          onPress={startSmartScan}
+          onPress={startScan}
           style={[
             styles.smartScanButton,
             (isLaunchingSmart || isSaving || !!switchingProfileId) && styles.disabledButton,
@@ -1086,6 +1141,21 @@ const styles = createThemedStyleSheet({
     lineHeight: 17,
     fontWeight: '700',
     textAlign: 'center',
+  },
+  launcherErrorAction: {
+    marginTop: 10,
+    alignSelf: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: radii.sm,
+    backgroundColor: palette.paper,
+  },
+  launcherErrorActionText: {
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
   },
   launcherActions: {
     paddingHorizontal: 18,

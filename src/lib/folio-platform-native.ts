@@ -1,5 +1,6 @@
 import { NativeModule, requireOptionalNativeModule } from 'expo';
 
+import type { NativeFairScanResult } from './fairscan-contract';
 import type {
   FolioPlatformNativePort,
   NativeOpenUrlEvent,
@@ -40,6 +41,14 @@ declare class FolioPlatformNativeModule
   excludeFileFromBackupAsync(fileUri: string): Promise<void>;
   acquireProtectedStorageLeaseAsync(): Promise<string>;
   releaseProtectedStorageLeaseAsync(leaseId: string): Promise<void>;
+  isFairScanAvailableAsync(): Promise<boolean>;
+  scanWithFairScanAsync(): Promise<NativeFairScanResult | null>;
+}
+
+/** Android only; the iOS module does not implement these functions. */
+export interface FolioFairScanNativePort {
+  isFairScanAvailableAsync(): Promise<boolean>;
+  scanWithFairScanAsync(): Promise<NativeFairScanResult | null>;
 }
 
 export interface FolioProtectedStorageNativePort {
@@ -55,5 +64,9 @@ export function getFolioPlatformNativeModule(): FolioPlatformNativePort | null {
 }
 
 export function getFolioProtectedStorageNativeModule(): FolioProtectedStorageNativePort | null {
+  return folioPlatformModule;
+}
+
+export function getFolioFairScanNativeModule(): FolioFairScanNativePort | null {
   return folioPlatformModule;
 }

@@ -1,3 +1,5 @@
+import type { ScanEnginePreference } from '@/lib/scan-engine';
+
 export type DocumentStatus = 'inbox' | 'archived' | 'processing';
 
 export type PaperlessOption = {
@@ -267,6 +269,8 @@ export type PaperlessTrashWorkspace = {
 
 export type AppPreferences = {
   biometricLock: boolean;
+  /** Which document scanner the scan screen uses; see `src/lib/scan-engine.ts`. */
+  scanEngine: ScanEnginePreference;
   processingNotifications: boolean;
   notificationPrivacy: 'redacted' | 'document-title';
   osSearchEnabled: boolean;

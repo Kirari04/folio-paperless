@@ -15,6 +15,7 @@ import {
   ListTodo,
   Search,
   RefreshCw,
+  ScanLine,
   Server,
   ShieldCheck,
   SunMoon,
@@ -58,6 +59,8 @@ import { IN_APP_APK_UPDATES_ENABLED } from '@/lib/distribution-runtime';
 import { useRouter } from '@/lib/router';
 import { createNativeOsSearchIndexAdapter, type NativeOsSearchEngine } from '@/lib/os-search-native-adapter';
 import { presentSyncStatus, type SyncStatusTone } from '@/lib/sync-status-presentation';
+import { FAIRSCAN_FDROID_URL, isFairScanAvailable } from '@/lib/fairscan-scanner';
+import { supportsFairScan } from '@/lib/scan-engine';
 
 type OsSearchCapability = {
   supported: boolean;
@@ -122,6 +125,8 @@ export default function SettingsScreen() {
       ? { supported: false, engine: 'unsupported', reason: 'native-module-unavailable' }
       : null
   ));
+  const scanEngineChoiceAvailable = supportsFairScan(Platform.OS);
+  const [fairScanInstalled, setFairScanInstalled] = useState<boolean | null>(null);
   const syncStatus = presentSyncStatus({
     connected: profileConfigured,
     lastSynced,
@@ -150,6 +155,15 @@ export default function SettingsScreen() {
       });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!scanEngineChoiceAvailable) return;
+    let active = true;
+    void isFairScanAvailable().then((available) => {
+      if (active) setFairScanInstalled(available);
+    });
+    return () => { active = false; };
+  }, [scanEngineChoiceAvailable]);
 
   async function handleRefresh() {
     try {
@@ -439,6 +453,34 @@ export default function SettingsScreen() {
             />
           }
         />
+        {scanEngineChoiceAvailable && (
+          <PreferenceControl
+            disabled={preferenceSaving === 'scanEngine'}
+            icon={ScanLine}
+            onChange={(value) => togglePreference('scanEngine', value)}
+            options={[
+              { value: 'auto', label: t('settings.scanEngineAutomatic') },
+              { value: 'fairscan', label: t('settings.scanEngineFairScan') },
+              { value: 'builtin', label: t('settings.scanEngineBuiltIn') },
+            ]}
+            subtitle={fairScanInstalled === false
+              ? t('settings.scanEngineFairScanMissing')
+              : t('settings.scanEngineSubtitle')}
+            title={t('settings.scanEngineTitle')}
+            value={preferences.scanEngine}
+          />
+        )}
+        {scanEngineChoiceAvailable
+          && fairScanInstalled === false
+          && preferences.scanEngine === 'fairscan' && (
+          <SettingRow
+            icon={ExternalLink}
+            onPress={() => void Linking.openURL(FAIRSCAN_FDROID_URL)}
+            title={t('settings.scanEngineInstallFairScan')}
+            subtitle={t('settings.scanEngineInstallFairScanSubtitle')}
+            trailing={<ChevronRight color={colors.faint} size={18} />}
+          />
+        )}
         <SettingRow
           icon={Search}
           title={t('settings.osSearchTitle')}

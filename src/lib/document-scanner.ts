@@ -4,6 +4,17 @@ import { Platform } from 'react-native';
 import type { ScanResult } from 'expo-document-scanner';
 
 import { createIOSScanPdf } from '@/lib/folio-ios-support-native';
+import {
+  FairScanUnavailableError,
+  isFairScanAvailable,
+  scanWithFairScan,
+} from '@/lib/fairscan-scanner';
+import {
+  chooseScanEngine,
+  type ScanEngine,
+  type ScanEnginePreference,
+  type ScanEngineUnavailableReason,
+} from '@/lib/scan-engine';
 
 export type SmartScanPage = {
   uri: string;
@@ -149,4 +160,88 @@ export async function prepareSmartScan(session: SmartScanSession): Promise<Prepa
   }
 
   throw new Error('The document scanner did not return its expected multi-page PDF.');
+}
+
+export class ScanEngineUnavailableError extends Error {
+  readonly reason: ScanEngineUnavailableReason;
+
+  constructor(reason: ScanEngineUnavailableReason, message: string) {
+    super(message);
+    this.name = 'ScanEngineUnavailableError';
+    this.reason = reason;
+  }
+}
+
+export type ScanLaunchResult =
+  /** The person backed out of the scanner. */
+  | { kind: 'cancelled' }
+  /** Page images Folio reviews itself before uploading. */
+  | { kind: 'session'; engine: ScanEngine; session: SmartScanSession }
+  /** A finished PDF; the external engine already offered its own review. */
+  | { kind: 'document'; engine: ScanEngine; file: PreparedScanFile };
+
+export async function isSmartScannerAvailable(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  try {
+    await import('expo-document-scanner');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The single entry point every scan goes through. It resolves the engine from
+ * the stored preference and what this device actually offers, then returns
+ * either page images for Folio's review step or a finished PDF.
+ */
+export async function launchScanner(
+  preference: ScanEnginePreference,
+): Promise<ScanLaunchResult> {
+  const [fairScanAvailable, builtInAvailable] = await Promise.all([
+    preference === 'builtin' ? Promise.resolve(false) : isFairScanAvailable(),
+    preference === 'fairscan' ? Promise.resolve(false) : isSmartScannerAvailable(),
+  ]);
+  const decision = chooseScanEngine({
+    platform: Platform.OS,
+    preference,
+    fairScanAvailable,
+    builtInAvailable,
+  });
+
+  if (decision.engine === null) {
+    throw new ScanEngineUnavailableError(
+      decision.reason,
+      decision.reason === 'fairscan-not-installed'
+        ? 'FairScan is not installed on this device.'
+        : 'No document scanner is available on this device.',
+    );
+  }
+
+  if (decision.engine === 'fairscan') {
+    let document: Awaited<ReturnType<typeof scanWithFairScan>>;
+    try {
+      document = await scanWithFairScan();
+    } catch (error) {
+      if (error instanceof FairScanUnavailableError) {
+        throw new ScanEngineUnavailableError('fairscan-not-installed', error.message);
+      }
+      throw error;
+    }
+    if (!document) return { kind: 'cancelled' };
+    return {
+      kind: 'document',
+      engine: 'fairscan',
+      file: {
+        uri: document.uri,
+        name: scanName('pdf'),
+        mimeType: 'application/pdf',
+        pageCount: document.pageCount ?? 1,
+      },
+    };
+  }
+
+  const session = await launchSmartScanner();
+  if (!session) return { kind: 'cancelled' };
+  return { kind: 'session', engine: 'builtin', session };
 }

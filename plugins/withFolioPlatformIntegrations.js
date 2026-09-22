@@ -277,6 +277,30 @@ function addIosWidgetLocalizationResources(project, relativeFiles) {
   return project;
 }
 
+// FairScan's documented, experimental scan-to-PDF action. Android 11 and newer
+// hide other packages, so `PackageManager` only resolves this action when the
+// intent is declared here. Declaring an intent is not a permission: it reveals
+// nothing beyond whether some app can scan a document to a PDF.
+const FAIRSCAN_SCAN_TO_PDF_ACTION = 'org.fairscan.app.action.SCAN_TO_PDF';
+
+function addAndroidScanEngineQueries(androidManifest) {
+  const manifest = androidManifest.manifest;
+  if (!Array.isArray(manifest.queries) || manifest.queries.length === 0) {
+    manifest.queries = [{}];
+  }
+  const queries = manifest.queries[0];
+  queries.intent ??= [];
+  const declared = queries.intent.some((entry) => entry?.action?.some(
+    (action) => action?.$?.['android:name'] === FAIRSCAN_SCAN_TO_PDF_ACTION,
+  ));
+  if (!declared) {
+    queries.intent.push({
+      action: [{ $: { 'android:name': FAIRSCAN_SCAN_TO_PDF_ACTION } }],
+    });
+  }
+  return androidManifest;
+}
+
 function addAndroidShortcutMetadata(androidManifest) {
   const mainActivity = AndroidConfig.Manifest.getMainActivityOrThrow(androidManifest);
   mainActivity['meta-data'] ??= [];
@@ -370,6 +394,7 @@ function withFolioPlatformIntegrations(config) {
 
   next = withAndroidManifest(next, (manifestConfig) => {
     manifestConfig.modResults = addAndroidShortcutMetadata(manifestConfig.modResults);
+    manifestConfig.modResults = addAndroidScanEngineQueries(manifestConfig.modResults);
     return manifestConfig;
   });
 
@@ -455,6 +480,8 @@ function withFolioPlatformIntegrations(config) {
 module.exports = withFolioPlatformIntegrations;
 module.exports.ANDROID_THEME_COLORS = ANDROID_THEME_COLORS;
 module.exports.SHORTCUTS = SHORTCUTS;
+module.exports.FAIRSCAN_SCAN_TO_PDF_ACTION = FAIRSCAN_SCAN_TO_PDF_ACTION;
+module.exports.addAndroidScanEngineQueries = addAndroidScanEngineQueries;
 module.exports.addAndroidShortcutMetadata = addAndroidShortcutMetadata;
 module.exports.addIosWidgetLocalizationResources = addIosWidgetLocalizationResources;
 module.exports.createAppleStringsFile = createAppleStringsFile;
