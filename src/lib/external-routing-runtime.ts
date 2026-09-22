@@ -7,6 +7,7 @@ import {
   type ExternalNavigationDecision,
   type ExternalNavigationState,
   type ExternalRoute,
+  type ExternalRouteRejectionCode,
   type ExternalRouteSource,
 } from './external-routing.ts';
 import {
@@ -16,7 +17,12 @@ import {
 
 export type ExternalRouteIngressResult =
   | { accepted: true; route: ExternalRoute }
-  | { accepted: false; reason: 'auth-callback' | 'invalid-url' | 'invalid-notification' };
+  | {
+      accepted: false;
+      reason: 'auth-callback' | 'invalid-url' | 'invalid-notification';
+      /** Present for a rejected URL so a caller can explain the refusal. */
+      code?: ExternalRouteRejectionCode;
+    };
 
 export type NotificationResponseIngressResult = ExternalRouteIngressResult
   | {
@@ -65,7 +71,9 @@ export class ExternalRoutingRuntime {
       return { accepted: false, reason: 'auth-callback' };
     }
     const parsed = parseExternalUrl(input, source);
-    if (!parsed.accepted) return { accepted: false, reason: 'invalid-url' };
+    if (!parsed.accepted) {
+      return { accepted: false, reason: 'invalid-url', code: parsed.code };
+    }
     return this.acceptRoute(parsed.route);
   }
 

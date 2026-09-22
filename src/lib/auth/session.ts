@@ -376,7 +376,7 @@ function parseHttpsUrl(value: string, field: string): URL {
   return url;
 }
 
-function parseOidcIssuer(value: string, field: string): URL {
+export function parseOidcIssuer(value: string, field: string): URL {
   const url = parseHttpsUrl(value, field);
   if (url.search) {
     throw new OidcValidationError(

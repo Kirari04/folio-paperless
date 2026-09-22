@@ -136,10 +136,22 @@ export function ExternalRoutingGateway() {
       const accepted = runtime.current.acceptUrl(input, 'deep-link');
       if (accepted.accepted) {
         drainExternalRoutes();
-      } else if (accepted.reason === 'invalid-url') {
-        runtime.current.acceptRoute({ kind: 'home', source: 'deep-link' });
-        drainExternalRoutes();
+        return;
       }
+      if (accepted.reason !== 'invalid-url') return;
+      // A refused connection link is explained instead of silently falling back
+      // to Home, because the person has to ask for a corrected link.
+      if (accepted.code?.startsWith('connect-')) {
+        Alert.alert(
+          t('routing.connectLinkTitle'),
+          t(accepted.code === 'connect-secret-in-link'
+            ? 'routing.connectSecretRejected'
+            : 'routing.connectLinkRejected'),
+        );
+        return;
+      }
+      runtime.current.acceptRoute({ kind: 'home', source: 'deep-link' });
+      drainExternalRoutes();
     };
 
     // Subscribe first, then synchronously consume the SDK 57 native cache. No
@@ -152,7 +164,7 @@ export function ExternalRoutingGateway() {
     return () => {
       subscription.remove();
     };
-  }, [drainExternalRoutes]);
+  }, [drainExternalRoutes, t]);
 
   useEffect(() => {
     const response = notification;

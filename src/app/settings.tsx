@@ -21,7 +21,7 @@ import {
   Trash2,
 } from 'lucide-react-native';
 import Constants from 'expo-constants';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -55,7 +55,11 @@ import {
 import { presentRuntimeError } from '@/i18n/error-presentation';
 import { FOLIO_RELEASES_URL } from '@/lib/app-updates';
 import { IN_APP_APK_UPDATES_ENABLED } from '@/lib/distribution-runtime';
-import { useRouter } from '@/lib/router';
+import {
+  parseExternalUrl,
+  type ConnectionProfilePrefill,
+} from '@/lib/external-routing';
+import { useNavigationRoute, useRouter } from '@/lib/router';
 import { createNativeOsSearchIndexAdapter, type NativeOsSearchEngine } from '@/lib/os-search-native-adapter';
 import { presentSyncStatus, type SyncStatusTone } from '@/lib/sync-status-presentation';
 
@@ -113,10 +117,24 @@ export default function SettingsScreen() {
     updatePreference,
   } = useApp();
   const [profileManagerVisible, setProfileManagerVisible] = useState(false);
+  const navigationRoute = useNavigationRoute();
+  const [dismissedConnectRouteKey, setDismissedConnectRouteKey] = useState<number | null>(null);
   const [cacheBusy, setCacheBusy] = useState<'clear' | 'pinned' | null>(null);
   const [preferenceSaving, setPreferenceSaving] = useState<keyof typeof preferences | null>(null);
   const [uiPreferenceSaving, setUiPreferenceSaving] = useState<'appearance' | 'language' | null>(null);
   const [preferenceError, setPreferenceError] = useState<string | null>(null);
+  // A folio-paperless://connect link arrives as a navigation parameter. The
+  // canonical link is re-parsed here, so the sheet only ever receives a prefill
+  // that already passed route validation. Each navigation carries its own key,
+  // which is what lets the same link open the sheet again after a dismissal.
+  const connectPrefill = useMemo<ConnectionProfilePrefill | null>(() => {
+    const link = navigationRoute.params.connect;
+    if (!link) return null;
+    const parsed = parseExternalUrl(link);
+    return parsed.accepted && parsed.route.kind === 'connect' ? parsed.route.prefill : null;
+  }, [navigationRoute.params.connect]);
+  const connectPrefillActive = connectPrefill !== null
+    && dismissedConnectRouteKey !== navigationRoute.key;
   const [osSearchCapability, setOsSearchCapability] = useState<OsSearchCapability | null>(() => (
     Platform.OS === 'web'
       ? { supported: false, engine: 'unsupported', reason: 'native-module-unavailable' }
@@ -385,6 +403,8 @@ export default function SettingsScreen() {
         )}
       </View>
 
+      <Text style={styles.connectLinkHint}>{t('settings.connectLinkHint')}</Text>
+
       <Text style={styles.sectionLabel}>{t('settings.appearanceSection')}</Text>
       <View style={styles.settingsGroup}>
         <PreferenceControl
@@ -635,8 +655,12 @@ export default function SettingsScreen() {
     </AppShell>
 
     <ProfileManagerSheet
-      onDismiss={() => setProfileManagerVisible(false)}
-      visible={profileManagerVisible}
+      onDismiss={() => {
+        setProfileManagerVisible(false);
+        setDismissedConnectRouteKey(navigationRoute.key);
+      }}
+      prefill={connectPrefillActive ? connectPrefill : null}
+      visible={profileManagerVisible || connectPrefillActive}
     />
     </>
   );
@@ -1074,6 +1098,14 @@ const themedStyles = createThemedStyleSheet({
     fontFamily: fonts.sans,
     fontSize: 11,
     fontWeight: '700',
+  },
+  connectLinkHint: {
+    color: palette.faint,
+    fontFamily: fonts.sans,
+    fontSize: 10,
+    lineHeight: 15,
+    paddingHorizontal: 4,
+    marginTop: 8,
   },
   disconnect: {
     flexDirection: 'row',

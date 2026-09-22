@@ -27,6 +27,76 @@ Development profiles created by the earlier OIDC implementation may still contai
 
 On web, Folio intentionally exposes API-token profiles only. Browser redirects, CORS, browser-managed TLS, and the lack of an OS credential store make the other flows misleading without a trusted backend. Production authentication support targets the native Android and iOS builds.
 
+## Prefilling a profile from a connection link
+
+An administrator, or whoever set up the household server, can hand out a link or a QR code that
+fills the add-profile form instead of dictating a URL, an issuer, and a client ID. The link is
+public configuration only, and it is a shortcut through typing, never through consent.
+
+```text
+folio-paperless://connect?server=<url>[&auth=token|password|oidc][&name=<label>]
+                         [&issuer=<url>&client_id=<id>][&scopes=<list>]
+```
+
+| Parameter   | Required                | Meaning                                                              |
+| ----------- | ----------------------- | -------------------------------------------------------------------- |
+| `server`    | yes                     | Paperless base URL, subpath included. Normalized like a typed URL.   |
+| `auth`      | no, defaults to `token` | `token`, `password` (Paperless username/password), or `oidc`.        |
+| `name`      | no                      | Profile display name, at most 64 characters.                         |
+| `issuer`    | only when `auth=oidc`   | OIDC issuer, validated by the same HTTPS issuer rule as a saved profile. |
+| `client_id` | only when `auth=oidc`   | Public OIDC client ID registered for Folio.                          |
+| `scopes`    | no, `auth=oidc` only    | Space-separated scopes; Folio keeps its own defaults when absent.    |
+
+Opening the link brings up Settings with the add-profile form already filled in. Every field stays
+editable, the mandatory connection test still has to pass, and OIDC still runs the full system
+browser PKCE flow. Nothing is written to the profile store until the person saves a tested profile,
+so a link can put a suggestion on the screen and nothing more. A link received while Folio is
+closed is handled on the next cold start: it travels through the same consumed-once Expo linking
+cache as `scan`, `inbox`, and `search`, and it waits for bootstrap and for biometric unlock like
+every other external route.
+
+Examples:
+
+```text
+folio-paperless://connect?server=https%3A%2F%2Fpaperless.example.com&name=Household
+folio-paperless://connect?server=http%3A%2F%2F192.168.1.10%3A8000&auth=password
+folio-paperless://connect?server=https%3A%2F%2Fpaperless.example.com&auth=oidc&issuer=https%3A%2F%2Fidentity.example.com%2Frealms%2Ffolio&client_id=folio-mobile&scopes=openid%20profile%20email
+```
+
+### What the link is refused for
+
+- **Any credential.** A `token`, `password`, `secret`, `client_secret`, `api_key`, `otp`,
+  `authorization`, or similarly named parameter is refused before anything else is read, with a
+  message asking for a link that carries only the server address and the sign-in method. Folio
+  accepts no secret from a link, on the grounds that a QR code, a chat message, and a mail thread
+  are all readable by whoever holds the device next.
+- **A downgraded server.** `server` must use HTTPS, except for loopback and private-network
+  addresses (`localhost`, `127.0.0.0/8`, `::1`, `10/8`, `172.16/12`, `192.168/16`, and
+  `.local`/`.internal`/`.home`/`.lan` names), which a self-hosted Paperless legitimately uses.
+  `issuer` must always use HTTPS and carry no query or fragment.
+- **Anything outside the parameter list**, a repeated parameter, credentials embedded in `server`,
+  an unknown `auth` value, OIDC parameters on a non-OIDC link, a missing issuer or client ID on an
+  OIDC link, a display name over 64 characters, and a control character anywhere.
+
+A refused link explains itself instead of silently falling back to Home, because the fix is to ask
+for a corrected link.
+
+### Making a QR code
+
+`qrencode` turns the link into a scannable code. Quote the URL so the shell keeps the query, and
+percent-encode the parameter values:
+
+```bash
+qrencode -o folio-connect.png -s 8 -l M \
+  'folio-paperless://connect?server=https%3A%2F%2Fpaperless.example.com&name=Household'
+
+# In a terminal, for a quick check:
+qrencode -t ANSIUTF8 'folio-paperless://connect?server=https%3A%2F%2Fpaperless.example.com'
+```
+
+Print it, or put it on the page that already documents the server. Two scans and a connection test
+later, the phone is ready, and no secret ever travelled with the code.
+
 ## mTLS native design
 
 Folio includes the `FolioMtls` local Expo module in native development and production builds. Browser and Expo Go builds remain explicitly unsupported and fail closed.

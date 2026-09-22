@@ -12,7 +12,7 @@ import {
   Trash2,
   UserRound,
 } from 'lucide-react-native';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -37,6 +37,7 @@ import type {
   ConnectionProfileAuthDraft,
   ConnectionProfileDraft,
 } from '@/lib/auth/profile-management';
+import type { ConnectionProfilePrefill } from '@/lib/auth/connection-link';
 import type { ClientIdentityMetadata, ConnectionProfile } from '@/lib/auth/profile-store';
 import type { TranslationKey } from '@/i18n/catalogs';
 
@@ -60,7 +61,13 @@ function emptyHeaders(): HeaderDraft[] {
   ];
 }
 
-export function ProfileManagerSheet({ visible, onDismiss }: {
+export function ProfileManagerSheet({ prefill, visible, onDismiss }: {
+  /**
+   * Public connection settings carried by a folio-paperless://connect link.
+   * They only fill the add-profile form: the person still confirms the fields,
+   * the connection test stays mandatory, and no secret can arrive this way.
+   */
+  prefill?: ConnectionProfilePrefill | null;
   visible: boolean;
   onDismiss: () => void;
 }) {
@@ -103,9 +110,45 @@ export function ProfileManagerSheet({ visible, onDismiss }: {
     clientIdentity?: ClientIdentityMetadata;
   } | null>(null);
   const [busy, setBusy] = useState<BusyAction>(null);
+  const [prefilled, setPrefilled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const oidcVerifierAvailable = isOidcSignatureVerificationAvailable();
+  const prefillApplied = useRef(false);
+
+  // A connect link opens the add-profile form already filled in. Every field
+  // stays editable, the connection test remains mandatory before Save, and the
+  // link carries no secret, so nothing is stored without an explicit
+  // confirmation.
+  useEffect(() => {
+    if (!visible) {
+      prefillApplied.current = false;
+      return;
+    }
+    if (!prefill || prefillApplied.current) return;
+    prefillApplied.current = true;
+    testController.current?.abort();
+    testController.current = null;
+    setEditing(null);
+    setDisplayName(prefill.displayName ?? '');
+    setServerUrl(prefill.serverUrl);
+    setAuthKind(prefill.authKind);
+    setToken('');
+    setUsername('');
+    setPassword('');
+    setOtpCode('');
+    setOtpRequired(false);
+    setOidcIssuer(prefill.issuer ?? '');
+    setOidcClientId(prefill.clientId ?? '');
+    setOidcScopes(prefill.scopes?.length ? prefill.scopes.join(' ') : 'openid profile email');
+    setHeaders(emptyHeaders());
+    setTestResult(null);
+    setError(null);
+    setNotice(null);
+    setPrefilled(true);
+    setScreen('form');
+    animateLayout();
+  }, [prefill, visible]);
 
   function queueTestDiscard(preparationId: string) {
     pendingDiscard.current = pendingDiscard.current
@@ -131,6 +174,7 @@ export function ProfileManagerSheet({ visible, onDismiss }: {
   }
 
   function startAdd() {
+    setPrefilled(false);
     setEditing(null);
     setDisplayName('');
     setServerUrl('');
@@ -152,6 +196,7 @@ export function ProfileManagerSheet({ visible, onDismiss }: {
   }
 
   function startEdit(profile: ConnectionProfile) {
+    setPrefilled(false);
     setEditing(profile);
     setDisplayName(profile.displayName);
     setServerUrl(profile.serverUrl);
@@ -524,6 +569,7 @@ export function ProfileManagerSheet({ visible, onDismiss }: {
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}>
+          {prefilled && <Text style={styles.hint}>{t('profiles.prefilledFromLink')}</Text>}
           <Field
             autoCapitalize="words"
             label={t('profiles.name')}

@@ -1,3 +1,15 @@
+import {
+  CONNECTION_LINK_HOSTNAME,
+  CONNECTION_LINK_QUERY_PARAMETERS,
+  connectionLinkQueryValues,
+  findConnectionLinkSecretParameter,
+  parseConnectionLinkParameters,
+  type ConnectionLinkRejectionCode,
+  type ConnectionProfilePrefill,
+} from './auth/connection-link.ts';
+
+export type { ConnectionProfilePrefill };
+
 export const FOLIO_URL_SCHEME = 'folio-paperless' as const;
 export const MAX_EXTERNAL_URL_LENGTH = 2_048;
 export const MAX_DEFERRED_EXTERNAL_ROUTES = 16;
@@ -32,6 +44,11 @@ export type ExternalRoute =
       source: ExternalRouteSource;
       profileId: string;
       documentId: string;
+    }
+  | {
+      kind: 'connect';
+      source: ExternalRouteSource;
+      prefill: ConnectionProfilePrefill;
     };
 
 export type ExternalRouteRejectionCode =
@@ -46,7 +63,8 @@ export type ExternalRouteRejectionCode =
   | 'invalid-profile-id'
   | 'profile-required'
   | 'invalid-document-id'
-  | 'invalid-search-query';
+  | 'invalid-search-query'
+  | ConnectionLinkRejectionCode;
 
 export type ExternalRouteParseResult =
   | { accepted: true; route: ExternalRoute }
@@ -210,6 +228,19 @@ export function parseExternalUrl(
     };
   }
 
+  if (routeName === CONNECTION_LINK_HOSTNAME && segments.length === 1) {
+    // A credential-shaped parameter is refused before the allowlist so the
+    // person is told that Folio never takes a secret from a link.
+    if (findConnectionLinkSecretParameter(url.searchParams.keys())) {
+      return rejected('connect-secret-in-link', source);
+    }
+    const query = readAllowedQuery(url, CONNECTION_LINK_QUERY_PARAMETERS);
+    if (query.error) return rejected(query.error, source);
+    const parsed = parseConnectionLinkParameters(query.values);
+    if (!parsed.accepted) return rejected(parsed.code, source);
+    return { accepted: true, route: { kind: 'connect', source, prefill: parsed.prefill } };
+  }
+
   if (routeName === 'document' && segments.length === 2) {
     const query = readAllowedQuery(url, ['profile']);
     if (query.error) return rejected(query.error, source);
@@ -267,6 +298,12 @@ export function serializeExternalRoute(route: ExternalRoute): string {
       url.hostname = 'document';
       url.pathname = `/${encodeURIComponent(route.documentId)}`;
       break;
+    case 'connect':
+      url.hostname = CONNECTION_LINK_HOSTNAME;
+      for (const [key, value] of Object.entries(connectionLinkQueryValues(route.prefill))) {
+        url.searchParams.set(key, value);
+      }
+      break;
   }
   const profileId = scopeProfileId(route);
   if (profileId) url.searchParams.set('profile', profileId);
@@ -290,7 +327,7 @@ export type InternalNavigationTarget =
   | { pathname: '/inbox' }
   | { pathname: '/tasks' }
   | { pathname: '/scan' }
-  | { pathname: '/settings' }
+  | { pathname: '/settings'; params?: { connect?: string } }
   | { pathname: '/document/[id]'; params: { id: string } };
 
 export type ExternalNavigationDecision =
@@ -314,7 +351,7 @@ export type ExternalNavigationDecision =
     };
 
 function routeNeedsAuthentication(route: ExternalRoute): boolean {
-  return route.kind !== 'home' && route.kind !== 'settings';
+  return route.kind !== 'home' && route.kind !== 'settings' && route.kind !== 'connect';
 }
 
 function routeTarget(route: ExternalRoute): InternalNavigationTarget {
@@ -338,6 +375,13 @@ function routeTarget(route: ExternalRoute): InternalNavigationTarget {
       };
     case 'document':
       return { pathname: '/document/[id]', params: { id: route.documentId } };
+    case 'connect':
+      // Settings owns the profile manager. The canonical link travels as a
+      // navigation parameter so the screen re-parses exactly what was accepted.
+      return {
+        pathname: '/settings',
+        params: { connect: serializeExternalRoute(route) },
+      };
   }
 }
 
