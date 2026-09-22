@@ -45,10 +45,16 @@ test('native PDF search remains page-aware, cancellable, highlighted, and local-
   assert.doesNotMatch(nativePdfPatch, /^\+.*Log\.[a-z]+\([^\n]*(?:path|query|snippet)/mi);
 });
 
-test('page editing renders real single-page thumbnails from one credential-free local PDF', () => {
+test('page editing renders pre-rendered thumbnails from one credential-free local PDF', () => {
   assert.match(pageEditor, /prepareSecurePdfPreview\(/);
-  assert.match(pageEditor, /<PdfView[\s\S]*singlePage[\s\S]*source=\{\{ uri: localUri \}\}/);
-  assert.doesNotMatch(pageEditor, /<PdfView[\s\S]*source=\{\{[\s\S]*headers:/);
+  // One sequential native render pass replaces the former per-page live PDF
+  // surfaces, which exhausted native memory on long scanned documents.
+  assert.match(pageEditor, /renderPdfPageThumbnails\(\s*nextLease\.uri,\s*directory,\s*PAGE_THUMBNAIL_WIDTH,?\s*\)/);
+  assert.match(pageEditor, /<Image[\s\S]*contentFit="contain"[\s\S]*source=\{\{ uri: thumbnail\.uri \}\}/);
+  assert.doesNotMatch(pageEditor, /<PdfView/);
+  assert.doesNotMatch(pageEditor, /react-native-pdf/);
+  assert.doesNotMatch(pageEditor, /source=\{\{[\s\S]*headers:/);
+  assert.match(pageEditor, /deletePdfPageThumbnails\(thumbnailDirectory\.current\)/);
   assert.match(pageEditor, /movePdfEditorSelection/);
   assert.match(pageEditor, /rotatePdfEditorSelection/);
   assert.match(pageEditor, /deletePdfEditorSelection/);

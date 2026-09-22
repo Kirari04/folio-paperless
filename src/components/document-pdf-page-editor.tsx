@@ -1,3 +1,4 @@
+import { Image } from 'expo-image';
 import { StatusBar } from 'expo-status-bar';
 import {
   Check,
@@ -19,7 +20,6 @@ import {
   Platform,
   ScrollView,
   Text,
-  UIManager,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -39,7 +39,16 @@ import {
   togglePdfEditorSplits,
   type PdfEditorPage,
 } from '@/lib/document-production';
+import {
+  deletePdfPageThumbnails,
+  pdfPageThumbnailsAvailable,
+  renderPdfPageThumbnails,
+} from '@/lib/folio-pdf-pages-native';
 import { getPaperlessDocumentUrl } from '@/lib/paperless';
+import {
+  pdfPageThumbnailDirectoryUri,
+  type PdfPageThumbnail,
+} from '@/lib/pdf-page-thumbnails';
 import {
   prepareSecurePdfPreview,
   type SecurePdfCacheLease,
@@ -47,9 +56,10 @@ import {
 import type { DocumentItem, PaperlessCredentials } from '@/types/document';
 import type { PaperlessPdfPageOperation } from '@/types/paperless-advanced';
 
-type PdfComponent = typeof import('react-native-pdf').default;
-
 const MAX_EDITOR_PAGES = 10_000;
+// The thumbnail viewport is 128dp wide; 384px keeps it crisp on a 3x screen
+// while every page stays a small JPEG instead of a live PDF surface.
+const PAGE_THUMBNAIL_WIDTH = 384;
 
 function editorPageCountHint(pageCount: number) {
   return Number.isSafeInteger(pageCount) && pageCount >= 1 && pageCount <= MAX_EDITOR_PAGES
@@ -93,17 +103,20 @@ export function DocumentPdfPageEditor({
   const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
-  const [PdfView, setPdfView] = useState<PdfComponent | null>(null);
-  const [localUri, setLocalUri] = useState<string | null>(null);
+  const [thumbnails, setThumbnails] = useState<PdfPageThumbnail[] | null>(null);
+  const [renderingPages, setRenderingPages] = useState(false);
   const [loadProgress, setLoadProgress] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sourcePageCount, setSourcePageCount] = useState(() => editorPageCountHint(document.pageCount));
   const [pages, setPages] = useState<PdfEditorPage[]>(() => createPdfEditorPages(editorPageCountHint(document.pageCount)));
   const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
-  const resolvedCount = useRef(false);
   const lease = useRef<SecurePdfCacheLease | null>(null);
-  const nativePdfAvailable = Platform.OS !== 'web'
-    && !!UIManager.getViewManagerConfig?.('RNPDFPdfView');
+  const thumbnailDirectory = useRef<string | null>(null);
+  const thumbnailRendererAvailable = Platform.OS !== 'web' && pdfPageThumbnailsAvailable();
+  const thumbnailByPage = useMemo(
+    () => new Map((thumbnails ?? []).map((thumbnail) => [thumbnail.page, thumbnail])),
+    [thumbnails],
+  );
   const changed = useMemo(
     () => pdfEditorPlanChanged(pages, sourcePageCount),
     [pages, sourcePageCount],
@@ -113,7 +126,6 @@ export function DocumentPdfPageEditor({
 
   useEffect(() => {
     if (!open) return;
-    resolvedCount.current = false;
     const resetFrame = requestAnimationFrame(() => {
       const pageCount = editorPageCountHint(document.pageCount);
       setSourcePageCount(pageCount);
@@ -124,42 +136,74 @@ export function DocumentPdfPageEditor({
   }, [document.id, document.pageCount, open]);
 
   useEffect(() => {
-    if (!open || !nativePdfAvailable || !editEnabled) return;
+    if (!open || !thumbnailRendererAvailable || !editEnabled) return;
     const controller = new AbortController();
     let mounted = true;
     const resetFrame = requestAnimationFrame(() => {
-      setLocalUri(null);
+      setThumbnails(null);
+      setRenderingPages(false);
       setLoadProgress(0);
       setLoadError(null);
     });
     lease.current?.dispose();
     lease.current = null;
+    deletePdfPageThumbnails(thumbnailDirectory.current);
+    thumbnailDirectory.current = null;
 
-    void Promise.all([
-      import('react-native-pdf'),
-      prepareSecurePdfPreview({
-        credentials,
-        documentId: document.remoteId!,
-        uri: getPaperlessDocumentUrl(credentials, document.remoteId!, 'preview'),
-        signal: controller.signal,
-        onProgress: (progress) => {
-          if (mounted) setLoadProgress(progress);
-        },
-      }),
-    ])
-      .then(([pdfModule, nextLease]) => {
+    void (async () => {
+      let directory: string | null = null;
+      try {
+        const nextLease = await prepareSecurePdfPreview({
+          credentials,
+          documentId: document.remoteId!,
+          uri: getPaperlessDocumentUrl(credentials, document.remoteId!, 'preview'),
+          signal: controller.signal,
+          onProgress: (progress) => {
+            if (mounted) setLoadProgress(progress);
+          },
+        });
         if (!mounted) {
           nextLease.dispose();
           return;
         }
         lease.current = nextLease;
-        setPdfView(() => pdfModule.default);
-        setLocalUri(nextLease.uri);
-      })
-      .catch((error) => {
-        if (!mounted || (error instanceof Error && error.name === 'AbortError')) return;
+        directory = pdfPageThumbnailDirectoryUri(nextLease.uri);
+        thumbnailDirectory.current = directory;
+        setRenderingPages(true);
+        // One pass over the document, one page bitmap at a time, off the JS
+        // thread: the editor never holds a live PDF surface per page.
+        const rendered = await renderPdfPageThumbnails(
+          nextLease.uri,
+          directory,
+          PAGE_THUMBNAIL_WIDTH,
+        );
+        if (!mounted) {
+          deletePdfPageThumbnails(directory);
+          return;
+        }
+        if (!rendered) {
+          setLoadError(t('paperless3.pageEditorRendererUnavailable'));
+          return;
+        }
+        if (rendered.pageCount > MAX_EDITOR_PAGES) {
+          setLoadError(t('paperless3.pageEditorMalformedPdf'));
+          return;
+        }
+        setThumbnails(rendered.pages);
+        setSourcePageCount(rendered.pageCount);
+        setPages(createPdfEditorPages(rendered.pageCount));
+        setSelectedPages(new Set());
+      } catch (error) {
+        if (!mounted) {
+          deletePdfPageThumbnails(directory);
+          return;
+        }
+        if (error instanceof Error && error.name === 'AbortError') return;
         setLoadError(t('paperless3.pageEditorMalformedPdf'));
-      });
+      } finally {
+        if (mounted) setRenderingPages(false);
+      }
+    })();
 
     return () => {
       mounted = false;
@@ -167,8 +211,10 @@ export function DocumentPdfPageEditor({
       controller.abort();
       lease.current?.dispose();
       lease.current = null;
+      deletePdfPageThumbnails(thumbnailDirectory.current);
+      thumbnailDirectory.current = null;
     };
-  }, [credentials, document.remoteId, editEnabled, nativePdfAvailable, open, retryKey, t]);
+  }, [credentials, document.remoteId, editEnabled, open, retryKey, t, thumbnailRendererAvailable]);
 
   function togglePage(sourcePage: number) {
     setSelectedPages((current) => {
@@ -182,19 +228,6 @@ export function DocumentPdfPageEditor({
   function resetPlan(pageCount = sourcePageCount) {
     setPages(createPdfEditorPages(pageCount));
     setSelectedPages(new Set());
-  }
-
-  function resolveActualPageCount(numberOfPages: number) {
-    if (resolvedCount.current || !Number.isSafeInteger(numberOfPages) || numberOfPages < 1) return;
-    resolvedCount.current = true;
-    if (numberOfPages > MAX_EDITOR_PAGES) {
-      setLoadError(t('paperless3.pageEditorMalformedPdf'));
-      return;
-    }
-    if (numberOfPages !== sourcePageCount) {
-      setSourcePageCount(numberOfPages);
-      resetPlan(numberOfPages);
-    }
   }
 
   function deleteSelection() {
@@ -281,7 +314,7 @@ export function DocumentPdfPageEditor({
                 <Text style={styles.stateTitle}>{t('paperless3.unavailable')}</Text>
                 <Text style={styles.stateCopy}>{editUnavailableDetail || t('paperless3.notAdvertisedPdf')}</Text>
               </View>
-            ) : !nativePdfAvailable ? (
+            ) : !thumbnailRendererAvailable ? (
               <View style={styles.stateBox}>
                 <Text style={styles.stateTitle}>{t('paperless3.unavailable')}</Text>
                 <Text style={styles.stateCopy}>{t('paperless3.pageEditorRendererUnavailable')}</Text>
@@ -294,11 +327,15 @@ export function DocumentPdfPageEditor({
                   <Text style={styles.retryText}>{t('common.retry')}</Text>
                 </Pressable>
               </View>
-            ) : !PdfView || !localUri ? (
+            ) : !thumbnails ? (
               <View accessibilityLiveRegion="polite" style={styles.loadingState}>
                 <ActivityIndicator color={palette.limeDark} size="large" />
-                <Text style={styles.stateTitle}>{t('paperless3.pageEditorPreparing')}</Text>
-                {loadProgress > 0 && (
+                <Text style={styles.stateTitle}>
+                  {t(renderingPages
+                    ? 'paperless3.pageEditorRenderingPages'
+                    : 'paperless3.pageEditorPreparing')}
+                </Text>
+                {!renderingPages && loadProgress > 0 && (
                   <Text style={styles.stateCopy}>{formatNumber(Math.round(loadProgress * 100))}%</Text>
                 )}
               </View>
@@ -335,6 +372,7 @@ export function DocumentPdfPageEditor({
                     const selected = selectedPages.has(item.sourcePage);
                     const outputDocument = pdfEditorOutputDocument(pages, index) + 1;
                     const quarterTurn = item.rotation === 90 || item.rotation === 270;
+                    const thumbnail = thumbnailByPage.get(item.sourcePage);
                     return (
                       <View style={styles.pageSlot}>
                         <Pressable
@@ -353,24 +391,20 @@ export function DocumentPdfPageEditor({
                                 ],
                               },
                             ]}>
-                              <PdfView
-                                enableAnnotationRendering={false}
-                                enableDoubleTapZoom={false}
-                                fitPolicy={2}
-                                maxScale={1}
-                                minScale={1}
-                                onError={() => setLoadError(t('paperless3.pageEditorMalformedPdf'))}
-                                onLoadComplete={resolveActualPageCount}
-                                page={item.sourcePage}
-                                renderActivityIndicator={() => (
+                              {thumbnail ? (
+                                <Image
+                                  accessibilityIgnoresInvertColors
+                                  cachePolicy="none"
+                                  contentFit="contain"
+                                  source={{ uri: thumbnail.uri }}
+                                  style={styles.pageThumbnail}
+                                  transition={0}
+                                />
+                              ) : (
+                                <View style={styles.pageThumbnailFallback}>
                                   <ActivityIndicator color={palette.limeDark} size="small" />
-                                )}
-                                scrollEnabled={false}
-                                singlePage
-                                source={{ uri: localUri }}
-                                style={styles.pdfThumbnail}
-                                trustAllCerts={false}
-                              />
+                                </View>
+                              )}
                             </View>
                           </View>
                           <View style={[styles.pageBadge, selected && styles.pageBadgeSelected]}>
@@ -520,7 +554,8 @@ const styles = createThemedStyleSheet({
   pageCardSelected: { borderColor: palette.limeDark, backgroundColor: palette.limeSurface },
   thumbnailViewport: { height: 164, overflow: 'hidden', backgroundColor: palette.viewerSurface },
   thumbnailTransform: { width: '100%', height: '100%' },
-  pdfThumbnail: { width: '100%', height: '100%', backgroundColor: palette.viewerSurface },
+  pageThumbnail: { width: '100%', height: '100%', backgroundColor: palette.viewerSurface },
+  pageThumbnailFallback: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', backgroundColor: palette.viewerSurface },
   pageBadge: { position: 'absolute', top: 8, left: 8, minWidth: 27, height: 27, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: palette.inverseScrim, paddingHorizontal: 5 },
   pageBadgeSelected: { backgroundColor: palette.lime },
   pageBadgeText: { color: palette.onDark, fontFamily: fonts.sans, fontSize: 10, fontWeight: '900' },

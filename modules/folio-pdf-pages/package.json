@@ -1,0 +1,9 @@
+{
+  "name": "folio-pdf-pages",
+  "version": "0.1.0",
+  "description": "Sequential, memory-bounded PDF page thumbnails rendered by the platform PDF engine.",
+  "license": "MIT",
+  "author": "Folio contributors",
+  "homepage": "https://github.com/Kirari04/folio-paperless",
+  "private": true
+}

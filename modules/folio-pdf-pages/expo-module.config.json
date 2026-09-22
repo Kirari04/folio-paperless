@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["FolioPdfPagesModule"]
+  },
+  "android": {
+    "modules": ["app.folio.pdfpages.FolioPdfPagesModule"]
+  }
+}
