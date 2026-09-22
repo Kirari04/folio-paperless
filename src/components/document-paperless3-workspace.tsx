@@ -174,6 +174,7 @@ export function DocumentPaperless3Workspace({
   const controller = useRef<AbortController | null>(null);
   const [tab, setTab] = useState<WorkspaceTab>('tags');
   const [loading, setLoading] = useState(false);
+  const [loadedOnce, setLoadedOnce] = useState(false);
   const [tagHierarchy, setTagHierarchy] = useState<PaperlessTagHierarchy | null>(null);
   const [tagError, setTagError] = useState<string | null>(null);
   const [selectedTagIds, setSelectedTagIds] = useState<number[]>([]);
@@ -237,7 +238,8 @@ export function DocumentPaperless3Workspace({
     const nextController = new AbortController();
     controller.current = nextController;
     setLoading(true);
-    setPdfAccess(null);
+    // Keep the previous access snapshot while refreshing: dropping it would
+    // disable the PDF tools mid-session and close an open page editor.
     try {
       const fullPermissions = capabilities.features.fullPermissions.supported;
       const detail = await advancedApi.client.get<unknown>(
@@ -310,7 +312,10 @@ export function DocumentPaperless3Workspace({
     } catch (error) {
       if (!nextController.signal.aborted) onToast(readableError(error, t('paperless3.actionFailed')), true);
     } finally {
-      if (!nextController.signal.aborted) setLoading(false);
+      if (!nextController.signal.aborted) {
+        setLoading(false);
+        setLoadedOnce(true);
+      }
     }
   }, [advancedApi, capabilities, catalog.tags, document.tagIds, onToast, remoteId, t]);
 
@@ -561,7 +566,7 @@ export function DocumentPaperless3Workspace({
           ))}
         </ScrollView>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          {advanced.phase === 'loading' || loading ? (
+          {advanced.phase === 'loading' || (loading && !loadedOnce) ? (
             <CenterState copy={t('paperless3.loading')} loading />
           ) : advanced.phase !== 'ready' ? (
             <CenterState copy={advanced.error ? presentRuntimeMessage(advanced.error) : t('paperless3.connect')} />

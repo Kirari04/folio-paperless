@@ -22,6 +22,7 @@ import {
   requireBiometricSupport,
   setRuntimeNotificationPreferences,
 } from '@/lib/device-features';
+import { sameCredentialContext } from '@/lib/credential-context';
 import { savePaperlessDocument, sharePaperlessDocument } from '@/lib/document-files';
 import { submitPersistentBulkTask } from '@/lib/bulk-document-controller';
 import {
@@ -628,27 +629,11 @@ function profileDisplayName(serverUrl: string) {
   }
 }
 
-function normalizedCredentialHeaders(headers?: Record<string, string>) {
-  return Object.entries(headers ?? {})
-    .map(([name, value]) => [name.toLowerCase(), value] as const)
-    .sort(([left], [right]) => left.localeCompare(right));
-}
-
 function credentialContextsMatch(
   left: PaperlessCredentials,
   right: PaperlessCredentials,
 ) {
-  try {
-    return left.profileId === right.profileId
-      && normalizeServerUrl(left.serverUrl) === normalizeServerUrl(right.serverUrl)
-      && left.token === right.token
-      && left.clientIdentityRef === right.clientIdentityRef
-      && (left.authorizationScheme ?? 'Token') === (right.authorizationScheme ?? 'Token')
-      && JSON.stringify(normalizedCredentialHeaders(left.customHeaders))
-        === JSON.stringify(normalizedCredentialHeaders(right.customHeaders));
-  } catch {
-    return false;
-  }
+  return sameCredentialContext(left, right);
 }
 
 async function credentialsForProfile(
