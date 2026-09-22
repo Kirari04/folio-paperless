@@ -1,0 +1,28 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "Folio pour Paperless",
+    "NSCameraUsageDescription": "Autoriser Folio à numériser des documents papier.",
+    "NSFaceIDUsageDescription": "Autoriser Folio à protéger vos aperçus de documents avec Face ID.",
+    "Localizable.strings": {
+      "folio_quick_scan_short": "Scan rapide",
+      "folio_quick_scan_long": "Numériser un document papier",
+      "folio_inbox_short": "Réception",
+      "folio_inbox_long": "Ouvrir votre boîte de réception",
+      "folio_search_short": "Rechercher",
+      "folio_search_long": "Rechercher dans les documents",
+      "folio_widget_display_name": "Réception Folio",
+      "folio_widget_description": "Affiche le nombre d’éléments en réception et ouvre Folio sans révéler le détail des documents."
+    }
+  },
+  "android": {
+    "CFBundleDisplayName": "Folio pour Paperless",
+    "NSCameraUsageDescription": "Autoriser Folio à numériser des documents papier.",
+    "NSFaceIDUsageDescription": "Autoriser Folio à protéger vos aperçus de documents avec Face ID.",
+    "folio_quick_scan_short": "Scan rapide",
+    "folio_quick_scan_long": "Numériser un document papier",
+    "folio_inbox_short": "Réception",
+    "folio_inbox_long": "Ouvrir votre boîte de réception",
+    "folio_search_short": "Rechercher",
+    "folio_search_long": "Rechercher dans les documents"
+  }
+}

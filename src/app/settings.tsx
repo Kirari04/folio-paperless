@@ -409,6 +409,7 @@ export default function SettingsScreen() {
             { value: 'system', label: t('settings.system') },
             { value: 'en', label: t('settings.english') },
             { value: 'de', label: t('settings.german') },
+            { value: 'fr', label: t('settings.french') },
           ]}
           subtitle={t('settings.languageSubtitle')}
           title={t('settings.languageTitle')}

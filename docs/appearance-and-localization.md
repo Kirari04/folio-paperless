@@ -14,9 +14,9 @@ Automated contrast checks cover primary, secondary, status, and accent text at W
 
 ## Translation contract
 
-Application copy lives in `src/i18n/catalogs.ts`. English is the source catalog and runtime fallback; German is declared as `Record<TranslationKey, string>`, so TypeScript rejects a missing key. `tests/i18n-theme.test.mjs` also checks key parity, non-empty messages, matching interpolation placeholders, and every registered Folio-owned diagnostic in both runtime catalogs. Unknown Paperless/server messages remain verbatim.
+Application copy lives in `src/i18n/catalogs.ts`. English is the source catalog and runtime fallback; German and French are declared as `Record<TranslationKey, string>`, so TypeScript rejects a missing key. `tests/i18n-theme.test.mjs` also checks key parity, non-empty messages, matching interpolation placeholders, and every registered Folio-owned diagnostic in every runtime catalog. Unknown Paperless/server messages remain verbatim.
 
-When **System** language is selected, Folio walks the device locale list in the OS-defined preference order and uses the first supported language. If neither English nor German is present, it falls back to English. The matching full language tag (for example, `de-CH` rather than only `de`) drives `Intl` date, time, count, number, list, and file-size formatting.
+When **System** language is selected, Folio walks the device locale list in the OS-defined preference order and uses the first supported language, as listed in `supportedLocales` (`src/i18n/core.ts`). If none of them is present, it falls back to English. The matching full language tag (for example, `de-CH` rather than only `de`) drives `Intl` date, time, count, number, list, and file-size formatting.
 
 Use `useI18n()` in React code:
 
@@ -33,10 +33,10 @@ Android widget resources live under `modules/folio-platform/android/src/main/res
 
 ## Adding a language
 
-1. Add the locale to `SupportedLocale`, `LanguagePreference`, and `catalogs`.
-2. Add a complete catalog with the same keys and placeholders as English.
+1. Add the locale to `supportedLocales` (`src/i18n/core.ts`) and to `catalogs`.
+2. Add a complete catalog with the same keys and placeholders as English, plus its `settings.<language>` option label in every catalog.
 3. Add the language control label and option in Settings.
-4. Add the locale to the `expo-localization` `supportedLocales` lists in `app.json`.
+4. Add the locale to the `expo-localization` `supportedLocales` lists in `app.json`, and add a `modules/folio-platform/android/src/main/res/values-<locale>/folio_widget_strings.xml` resource file.
 5. Add `assets/locales/<locale>.json` for the native app name and permission descriptions, then reference it from the top-level `locales` map.
 6. Extend the locale-selection tests and run `npm test`, `npm run lint`, `npx tsc --noEmit`, and `npx expo config --type public`.
 
@@ -50,4 +50,4 @@ Automated checks verify catalog parity, interpolation placeholders, fallback beh
 2. Select each explicit Folio override, force-quit and relaunch, and confirm the splash transitions directly into the selected theme/language without a mismatched frame.
 3. At the largest accessibility text size, navigate every tab and modal, complete profile setup and intake, and verify copy wraps, controls remain reachable, and no required action is clipped.
 4. Trigger success/failure notifications and background work in both languages; confirm Folio-owned copy is localized while Paperless-provided error text remains unchanged.
-5. Add the inbox widget in both system languages. Confirm protected states reveal no archive data, German Android resources render, iOS labels update after a Folio language change, and Quick Scan still requires the normal authentication gate.
+5. Add the inbox widget in each system language. Confirm protected states reveal no archive data, the localized Android resources render, iOS labels update after a Folio language change, and Quick Scan still requires the normal authentication gate.

@@ -8,7 +8,8 @@
     "userInterfaceStyle": "automatic",
     "locales": {
       "en": "./assets/locales/en.json",
-      "de": "./assets/locales/de.json"
+      "de": "./assets/locales/de.json",
+      "fr": "./assets/locales/fr.json"
     },
     "ios": {
       "icon": "./assets/images/icon.png",
@@ -102,11 +103,13 @@
           "supportedLocales": {
             "ios": [
               "en",
-              "de"
+              "de",
+              "fr"
             ],
             "android": [
               "en",
-              "de"
+              "de",
+              "fr"
             ]
           }
         }

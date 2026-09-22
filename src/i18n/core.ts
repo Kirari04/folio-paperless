@@ -1,8 +1,10 @@
 import { catalogs, type TranslationKey } from './catalogs.ts';
 
+export const supportedLocales = ['en', 'de', 'fr'] as const;
+
 export type AppearancePreference = 'system' | 'light' | 'dark';
-export type LanguagePreference = 'system' | 'en' | 'de';
-export type SupportedLocale = 'en' | 'de';
+export type SupportedLocale = (typeof supportedLocales)[number];
+export type LanguagePreference = 'system' | SupportedLocale;
 export type InterpolationValues = Record<string, string | number>;
 
 export type LocaleDescriptor = {
@@ -14,6 +16,10 @@ function normalizedLanguageCode(value: string | null | undefined) {
   return value?.trim().toLocaleLowerCase().split(/[-_]/, 1)[0];
 }
 
+export function isSupportedLocale(value: string | null | undefined): value is SupportedLocale {
+  return supportedLocales.includes(value as SupportedLocale);
+}
+
 export function resolveSupportedLocale(
   preference: LanguagePreference,
   languageCodes: (string | null | undefined)[],
@@ -21,7 +27,7 @@ export function resolveSupportedLocale(
   if (preference !== 'system') return preference;
   for (const languageCode of languageCodes) {
     const normalized = normalizedLanguageCode(languageCode);
-    if (normalized === 'en' || normalized === 'de') return normalized;
+    if (isSupportedLocale(normalized)) return normalized;
   }
   return 'en';
 }

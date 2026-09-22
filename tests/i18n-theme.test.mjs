@@ -5,7 +5,7 @@ import test from 'node:test';
 import { createElement, useCallback, useState } from 'react';
 import { act, create } from 'react-test-renderer';
 
-import { de, en } from '../src/i18n/catalogs.ts';
+import { de, en, fr } from '../src/i18n/catalogs.ts';
 import {
   formatFileSizeForLocale,
   formatListForLocale,
@@ -37,6 +37,7 @@ const fixedNow = new Date('2026-08-02T10:15:00.000Z');
 const englishLocales = [{ languageCode: 'en', languageTag: 'en-US' }];
 const germanLocales = [{ languageCode: 'de', languageTag: 'de-DE' }];
 const swissGermanLocales = [{ languageCode: 'de', languageTag: 'de-CH' }];
+const frenchLocales = [{ languageCode: 'fr', languageTag: 'fr-FR' }];
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 function I18nProbe() {
@@ -119,34 +120,42 @@ function placeholders(message) {
   return [...message.matchAll(/{{(\w+)}}/g)].map((match) => match[1]).sort();
 }
 
-test('German and English catalogs have the same non-empty keys and placeholders', () => {
-  assert.deepEqual(Object.keys(de).sort(), Object.keys(en).sort());
-  for (const key of Object.keys(en)) {
-    assert.ok(en[key].trim(), `${key} is empty in English`);
-    assert.ok(de[key].trim(), `${key} is empty in German`);
-    assert.deepEqual(
-      placeholders(de[key]),
-      placeholders(en[key]),
-      `${key} uses different interpolation placeholders`,
-    );
+test('every translated catalog has the same non-empty keys and placeholders as English', () => {
+  for (const [locale, catalog] of Object.entries({ de, fr })) {
+    assert.deepEqual(Object.keys(catalog).sort(), Object.keys(en).sort(), `${locale} keys differ`);
+    for (const key of Object.keys(en)) {
+      assert.ok(en[key].trim(), `${key} is empty in English`);
+      assert.ok(catalog[key].trim(), `${key} is empty in ${locale}`);
+      assert.deepEqual(
+        placeholders(catalog[key]),
+        placeholders(en[key]),
+        `${key} uses different interpolation placeholders in ${locale}`,
+      );
+    }
   }
 });
 
-test('offline queue and coordinator fallbacks are localized in both catalogs', () => {
+test('offline queue and coordinator fallbacks are localized in every catalog', () => {
   assert.equal(en['taskRuntime.syncFailed'], 'Workspace synchronization failed.');
   assert.equal(de['taskRuntime.syncFailed'], 'Die Arbeitsbereichssynchronisierung ist fehlgeschlagen.');
+  assert.equal(fr['taskRuntime.syncFailed'], 'La synchronisation de l’espace de travail a échoué.');
   assert.match(en['appError.offlineMetadataMissing'], /filename and file type/);
   assert.match(de['appError.offlineMetadataMissing'], /Dateinamen und Dateityp/);
+  assert.match(fr['appError.offlineMetadataMissing'], /nom de fichier et le type de fichier/);
 });
 
-test('system locale selection falls back to English and honors German preferences', () => {
-  assert.equal(resolveSupportedLocale('system', ['fr', 'it']), 'en');
-  assert.equal(resolveSupportedLocale('system', ['fr', 'de']), 'de');
-  assert.equal(resolveSupportedLocale('system', ['fr', 'en', 'de']), 'en');
-  assert.equal(resolveSupportedLocale('system', ['fr', 'de', 'en']), 'de');
+test('system locale selection falls back to English and honors every supported language', () => {
+  assert.equal(resolveSupportedLocale('system', ['it', 'ja']), 'en');
+  assert.equal(resolveSupportedLocale('system', ['it', 'de']), 'de');
+  assert.equal(resolveSupportedLocale('system', ['it', 'en', 'de']), 'en');
+  assert.equal(resolveSupportedLocale('system', ['it', 'de', 'en']), 'de');
   assert.equal(resolveSupportedLocale('system', ['de-CH']), 'de');
+  assert.equal(resolveSupportedLocale('system', ['it', 'fr']), 'fr');
+  assert.equal(resolveSupportedLocale('system', ['fr-CH', 'de', 'en']), 'fr');
+  assert.equal(resolveSupportedLocale('system', ['de', 'fr']), 'de');
   assert.equal(resolveSupportedLocale('en', ['de']), 'en');
   assert.equal(resolveSupportedLocale('de', ['en']), 'de');
+  assert.equal(resolveSupportedLocale('fr', ['en']), 'fr');
 });
 
 test('native formatting stays usable when optional Intl constructors are absent', () => {
@@ -167,7 +176,7 @@ test('native formatting stays usable when optional Intl constructors are absent'
   }
 });
 
-test('representative screen copy interpolates in both supported languages', () => {
+test('representative screen copy interpolates in every supported language', () => {
   assert.equal(
     translate('en', 'home.taskCenterSummary', { active: 3, failed: 1 }),
     '3 active · 1 failed',
@@ -179,6 +188,14 @@ test('representative screen copy interpolates in both supported languages', () =
   assert.equal(
     translate('de', 'detail.openPreviewOf', { title: 'Rechnung' }),
     'Vollständige Vorschau von Rechnung öffnen',
+  );
+  assert.equal(
+    translate('fr', 'viewer.pageOf', { page: 2, count: 12 }),
+    'Page 2 sur 12',
+  );
+  assert.equal(
+    translate('fr', 'detail.openPreviewOf', { title: 'Facture' }),
+    'Ouvrir l’aperçu complet de Facture',
   );
 });
 
@@ -280,6 +297,31 @@ test('the real provider reactively follows system theme and locale, then honors 
   await act(async () => renderer.unmount());
 });
 
+test('a French system locale renders French copy and French formatting', async () => {
+  let renderer;
+  await act(async () => {
+    renderer = create(createElement(StatefulI18nHarness, {
+      systemLocales: frenchLocales,
+      systemScheme: 'light',
+    }));
+  });
+
+  const probe = renderer.root.findByType('folio-i18n-probe');
+  assert.equal(probe.props.locale, 'fr');
+  assert.equal(probe.props.localeTag, 'fr-FR');
+  assert.equal(probe.props.navigationLabel, 'Bibliothèque');
+  assert.equal(
+    probe.props.runtimeDiagnostic,
+    'Synchronisation échouée · aucun cache synchronisé pour l’instant',
+  );
+  assert.equal(probe.props.number, new Intl.NumberFormat('fr-FR').format(12_345.6));
+  assert.equal(probe.props.list, new Intl.ListFormat('fr-FR').format(['Alpha', 'Beta', 'Gamma']));
+  assert.equal(probe.props.fileSize, '1,5 MB');
+  assert.match(probe.props.documentDate, /^Aujourd’hui, /);
+
+  await act(async () => renderer.unmount());
+});
+
 test('appearance resolution covers system, light, and dark rendering modes', () => {
   assert.equal(resolveColorScheme('system', 'dark'), 'dark');
   assert.equal(resolveColorScheme('system', null), 'light');
@@ -292,7 +334,11 @@ test('stored appearance and language survive restart and corrupt values fail saf
     appearance: 'dark',
     language: 'de',
   });
-  assert.deepEqual(parseStoredUiPreferences('{"appearance":"sepia","language":"fr"}'), {
+  assert.deepEqual(parseStoredUiPreferences('{"appearance":"light","language":"fr"}'), {
+    appearance: 'light',
+    language: 'fr',
+  });
+  assert.deepEqual(parseStoredUiPreferences('{"appearance":"sepia","language":"it"}'), {
     appearance: 'system',
     language: 'system',
   });
@@ -501,7 +547,7 @@ test('known Folio service diagnostics localize while Paperless text stays unchan
 
 test('every registered Folio-owned diagnostic resolves through both complete catalogs', () => {
   assert.ok(Object.keys(folioDiagnosticKeys).length >= 100);
-  for (const locale of ['en', 'de']) {
+  for (const locale of ['en', 'de', 'fr']) {
     setRuntimeLocale(locale);
     for (const [diagnostic, key] of Object.entries(folioDiagnosticKeys)) {
       const expected = translate(locale, key);
@@ -541,14 +587,17 @@ test('privacy-bounded iOS widget labels follow the active locale', () => {
   setRuntimeLocale('en');
 });
 
-test('Android widget resources have complete English and German label parity', async () => {
-  const paths = ['values', 'values-de'].map((directory) =>
+test('Android widget resources have complete label parity in every locale', async () => {
+  const paths = ['values', 'values-de', 'values-fr'].map((directory) =>
     new URL(`../modules/folio-platform/android/src/main/res/${directory}/folio_widget_strings.xml`, import.meta.url));
-  const [english, german] = await Promise.all(paths.map((path) => readFile(path, 'utf8')));
+  const [english, german, french] = await Promise.all(paths.map((path) => readFile(path, 'utf8')));
   const names = (source) => [...source.matchAll(/<string name="([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(names(german), names(english));
+  assert.deepEqual(names(french), names(english));
   assert.match(german, /Entsperren/);
   assert.match(german, /Schnellscan/);
+  assert.match(french, /Déverrouiller/);
+  assert.match(french, /Scan rapide/);
 });
 
 test('Android widget copy remains visible under large text and longer translations', async () => {
@@ -603,20 +652,25 @@ test('settings storage rows present explicit actions instead of navigation affor
   assert.equal(de['settings.clearCacheAction'], 'Jetzt leeren');
 });
 
-test('native shortcut and widget metadata have complete English and German catalogs', async () => {
-  const [english, german] = await Promise.all(
-    ['en', 'de'].map((locale) => readFile(
+test('native shortcut and widget metadata have complete catalogs in every locale', async () => {
+  const [english, german, french] = await Promise.all(
+    ['en', 'de', 'fr'].map((locale) => readFile(
       new URL(`../assets/locales/${locale}.json`, import.meta.url),
       'utf8',
     ).then(JSON.parse)),
   );
   for (const platform of ['ios', 'android']) {
     assert.deepEqual(Object.keys(german[platform]).sort(), Object.keys(english[platform]).sort());
+    assert.deepEqual(Object.keys(french[platform]).sort(), Object.keys(english[platform]).sort());
   }
-  assert.deepEqual(
-    Object.keys(german.ios['Localizable.strings']).sort(),
-    Object.keys(english.ios['Localizable.strings']).sort(),
-  );
+  for (const catalog of [german, french]) {
+    assert.deepEqual(
+      Object.keys(catalog.ios['Localizable.strings']).sort(),
+      Object.keys(english.ios['Localizable.strings']).sort(),
+    );
+  }
+  assert.equal(french.android.folio_quick_scan_short, 'Scan rapide');
+  assert.equal(french.ios['Localizable.strings'].folio_widget_display_name, 'Réception Folio');
   assert.equal(german.android.folio_quick_scan_short, 'Schnellscan');
   assert.equal(german.ios['Localizable.strings'].folio_search_long, 'Dokumente durchsuchen');
   assert.equal(german.ios['Localizable.strings'].folio_widget_display_name, 'Folio-Eingang');
@@ -905,7 +959,12 @@ test('Expo config declares automatic appearance, native locales, and incoming sh
 
   assert.equal(staticConfig.userInterfaceStyle, 'automatic');
   assert.equal(staticConfig.ios.infoPlist.CFBundleAllowMixedLocalizations, true);
-  assert.deepEqual(Object.keys(staticConfig.locales).sort(), ['de', 'en']);
+  assert.deepEqual(Object.keys(staticConfig.locales).sort(), ['de', 'en', 'fr']);
+  const localization = dynamicConfig.plugins.find(
+    (plugin) => Array.isArray(plugin) && plugin[0] === 'expo-localization',
+  );
+  assert.deepEqual(localization[1].supportedLocales.ios, ['en', 'de', 'fr']);
+  assert.deepEqual(localization[1].supportedLocales.android, ['en', 'de', 'fr']);
   assert.ok(pluginNames.includes('expo-localization'));
   assert.ok(pluginNames.includes('expo-system-ui'));
   assert.ok(pluginNames.includes('expo-sqlite'));

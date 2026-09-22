@@ -1,4 +1,5 @@
 import type { AppearancePreference, LanguagePreference } from './core.ts';
+import { isSupportedLocale } from './core.ts';
 
 export type StoredUiPreferences = {
   appearance: AppearancePreference;
@@ -17,7 +18,7 @@ function isAppearance(value: unknown): value is AppearancePreference {
 }
 
 function isLanguage(value: unknown): value is LanguagePreference {
-  return value === 'system' || value === 'en' || value === 'de';
+  return value === 'system' || (typeof value === 'string' && isSupportedLocale(value));
 }
 
 export function parseStoredUiPreferences(serialized: string | null): StoredUiPreferences {

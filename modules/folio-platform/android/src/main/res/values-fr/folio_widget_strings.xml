@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="folio_widget_brand">Folio</string>
+  <string name="folio_widget_description">La réception en un coup d’œil, avec des raccourcis vers Réception et Scan rapide</string>
+  <string name="folio_widget_inbox">Réception</string>
+  <string name="folio_widget_inbox_item">Élément en réception</string>
+  <string name="folio_widget_inbox_items">Éléments en réception</string>
+  <string name="folio_widget_unlock_inbox">Déverrouiller pour voir le nombre</string>
+  <string name="folio_widget_open_inbox">Ouvrir la réception</string>
+  <string name="folio_widget_quick_scan">Scan rapide</string>
+  <string name="folio_widget_inbox_action_description">Ouvrir la réception Folio</string>
+  <string name="folio_widget_scan_action_description">Lancer le scan rapide</string>
+</resources>

@@ -38,7 +38,7 @@ not affiliated with or endorsed by the Paperless-ngx project.
 - Reduce-Motion-aware page transitions, tactile press feedback, semantic haptics, and animated state changes.
 - Multiple profile-scoped connections using tokens, password/OTP exchange, OIDC with PKCE,
   approved custom headers, or native mutual TLS identities.
-- System/light/dark appearance, English/German localization, and locale-aware formatting.
+- System/light/dark appearance, English/German/French localization, and locale-aware formatting.
 - A polished demo workspace so the product can be evaluated without a server.
 
 ## Inside Folio
