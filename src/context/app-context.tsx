@@ -136,6 +136,7 @@ import {
   savedViewToLibraryState,
   sortLibraryDocuments,
 } from '@/lib/library-filters';
+import { canServeCachedLibraryResults } from '@/lib/library-search-policy';
 import {
   createSavedViewSnapshot,
   filterSavedViewSnapshot,
@@ -2945,8 +2946,12 @@ export function AppProvider({ children }: PropsWithChildren) {
             ).catch(() => undefined);
           }
           return { documents: result.documents, totalDocuments: result.totalDocuments };
-        } catch {
+        } catch (error) {
           // Continue with cached metadata for transient network/server errors.
+          // Anything else — a rejected token, a removed permission, a refused
+          // API version — has to reject so the library screen shows the error
+          // instead of serving stale documents as filtered results.
+          if (!canServeCachedLibraryResults(error)) throw error;
         }
       }
 
