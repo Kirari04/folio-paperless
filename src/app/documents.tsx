@@ -36,7 +36,7 @@ import { DemoModeBanner } from '@/components/demo-mode-banner';
 import { LibraryFilterSheet } from '@/components/library-filter-sheet';
 import { LibrarySortSheet } from '@/components/library-sort-sheet';
 import { MotionPressable as Pressable, hapticFeedback } from '@/components/motion';
-import { PaperThumbnail } from '@/components/paper-thumbnail';
+import { DocumentThumbnail } from '@/components/document-thumbnail';
 import { createThemedStyleSheet, bottomNavHeight, fonts, maxContentWidth, palette, radii } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n, type TranslationKey } from '@/i18n';
@@ -1586,7 +1586,7 @@ const LibraryDocument = memo(function LibraryDocument({
           {selected && <Check color={palette.accentInk} size={14} strokeWidth={3} />}
         </View>
       )}
-      <PaperThumbnail document={document} width={grid ? 112 : 68} />
+      <DocumentThumbnail document={document} width={grid ? 112 : 68} />
       <View style={grid ? styles.gridBody : styles.listBody}>
         <Text numberOfLines={2} style={grid ? styles.gridTitle : styles.documentTitle}>
           {document.title}

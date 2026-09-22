@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const [viewer, webViewer, documentDetail, pageEditor, mergeSelection, secureCache, workspace, search, nativePdfPatch] = await Promise.all([
+const [viewer, webViewer, documentDetail, pageEditor, mergeSelection, secureThumbnail, secureCache, workspace, search, nativePdfPatch] = await Promise.all([
   readFile(new URL('../src/components/document-preview-viewer.tsx', import.meta.url), 'utf8'),
   readFile(new URL('../src/components/document-preview-viewer.web.tsx', import.meta.url), 'utf8'),
   readFile(new URL('../src/app/document/[id].tsx', import.meta.url), 'utf8'),
   readFile(new URL('../src/components/document-pdf-page-editor.tsx', import.meta.url), 'utf8'),
   readFile(new URL('../src/components/document-pdf-merge-selection.tsx', import.meta.url), 'utf8'),
+  readFile(new URL('../src/components/secure-document-thumbnail.tsx', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/secure-pdf-preview-cache.ts', import.meta.url), 'utf8'),
   readFile(new URL('../src/components/document-paperless3-workspace.tsx', import.meta.url), 'utf8'),
   readFile(new URL('../src/lib/viewer-search.ts', import.meta.url), 'utf8'),
@@ -72,7 +73,12 @@ test('PDF preview caches and merge thumbnails stay profile scoped and mTLS aware
   assert.match(viewer, /downloadFileWithinLimit/);
   assert.match(viewer, /assertSafePdfFile/);
   assert.match(mergeSelection, /SecureDocumentThumbnail/);
-  assert.match(mergeSelection, /downloadPaperlessFileWithCredentials/);
+  // The merge rail and the document cards share one downloader.
+  assert.match(secureThumbnail, /usesNativeMutualTls\(credentials\)/);
+  assert.match(secureThumbnail, /downloadPaperlessFileWithCredentials/);
+  assert.match(secureThumbnail, /documentThumbnailCacheSeed\(\{[\s\S]*serverOrigin/);
+  assert.match(secureThumbnail, /digestStringAsync/);
+  assert.match(secureThumbnail, /localFile\?\.exists\) localFile\.delete\(\)/);
   assert.match(mergeSelection, /selectedIds\.indexOf\(documentId\)/);
 });
 

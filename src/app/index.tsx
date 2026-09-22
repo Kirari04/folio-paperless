@@ -17,7 +17,7 @@ import { AppShell } from '@/components/app-shell';
 import { MotionPressable as Pressable, hapticFeedback } from '@/components/motion';
 import { DocumentCard } from '@/components/document-card';
 import { FolioLogo } from '@/components/folio-logo';
-import { PaperThumbnail } from '@/components/paper-thumbnail';
+import { DocumentThumbnail } from '@/components/document-thumbnail';
 import { SectionHeading } from '@/components/section-heading';
 import { createThemedStyleSheet, fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
@@ -200,7 +200,7 @@ export default function HomeScreen() {
                     zIndex: index,
                   },
                 ]}>
-                <PaperThumbnail document={document} width={58} />
+                <DocumentThumbnail document={document} width={58} />
               </View>
             ))}
             {!inboxDocuments.length && (

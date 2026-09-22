@@ -12,7 +12,7 @@ import { ActivityIndicator, Text, View } from 'react-native';
 
 import { AppShell } from '@/components/app-shell';
 import { MotionPressable as Pressable, animateLayout, hapticFeedback } from '@/components/motion';
-import { PaperThumbnail } from '@/components/paper-thumbnail';
+import { DocumentThumbnail } from '@/components/document-thumbnail';
 import { createThemedStyleSheet, fonts, palette, radii, shadows } from '@/constants/theme';
 import { useApp } from '@/context/app-context';
 import { useI18n } from '@/context/ui-preferences-context';
@@ -121,7 +121,7 @@ export default function InboxScreen() {
             style={styles.reviewCard}>
             <View style={styles.previewArea}>
               <View style={styles.previewGlow} />
-              <PaperThumbnail document={activeDocument} width={166} />
+              <DocumentThumbnail document={activeDocument} width={166} />
               <View style={styles.pageCount}>
                 <Text style={styles.pageCountText}>
                   {formatNumber(activeDocument.pageCount)}{' '}
@@ -237,7 +237,7 @@ export default function InboxScreen() {
                   })
                 }
                 style={styles.nextCard}>
-                <PaperThumbnail document={inboxDocuments[1]} width={48} />
+                <DocumentThumbnail document={inboxDocuments[1]} width={48} />
                 <View style={styles.nextBody}>
                   <Text numberOfLines={1} style={styles.nextTitle}>
                     {inboxDocuments[1].title}

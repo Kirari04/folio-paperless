@@ -1,21 +1,11 @@
-import { CryptoDigestAlgorithm, digestStringAsync } from 'expo-crypto';
-import { File, Paths } from 'expo-file-system';
-import { Image } from 'expo-image';
 import { Check, FileStack } from 'lucide-react-native';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Text, View } from 'react-native';
 
 import { MotionPressable as Pressable } from '@/components/motion';
+import { SecureDocumentThumbnail } from '@/components/secure-document-thumbnail';
 import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/i18n';
-import { translateRuntime } from '@/i18n/runtime';
-import {
-  downloadPaperlessFileWithCredentials,
-  getPaperlessDocumentUrl,
-  paperlessCredentialFileHeaders,
-  usesNativeMutualTls,
-} from '@/lib/paperless';
-import { MAX_THUMBNAIL_DOWNLOAD_BYTES } from '@/lib/download-policy';
 import { isChangeAuthorizedPdfMergeDocument } from '@/lib/paperless-advanced';
 import type { DocumentItem, PaperlessCredentials } from '@/types/document';
 
@@ -63,8 +53,6 @@ export function DocumentPdfMergeSelection({
     && !busy
     && selectedIds.length >= 2
     && selectedIds.every((documentId) => candidateIds.has(documentId));
-  const headers = useMemo(() => paperlessCredentialFileHeaders(credentials), [credentials]);
-  const profileKey = credentials.profileId || 'missing-profile';
 
   function toggleDocument(documentId: number) {
     if (documentId === currentId || !candidateIds.has(documentId)) return;
@@ -113,8 +101,13 @@ export function DocumentPdfMergeSelection({
               <SecureDocumentThumbnail
                 credentials={credentials}
                 documentId={documentId}
-                headers={headers}
-                profileKey={profileKey}
+                fallback={
+                  <View accessibilityLabel={item.title}>
+                    <FileStack color={palette.muted} size={22} />
+                  </View>
+                }
+                pendingFallback={<ActivityIndicator color={palette.limeDark} size="small" />}
+                style={styles.thumbnail}
                 title={item.title}
               />
               <View style={[styles.order, checked && styles.orderSelected]}>
@@ -149,85 +142,6 @@ export function DocumentPdfMergeSelection({
         <Text style={styles.mergeButtonText}>{t('paperless3.createMerged')}</Text>
       </Pressable>
     </View>
-  );
-}
-
-function SecureDocumentThumbnail({
-  credentials,
-  documentId,
-  headers,
-  profileKey,
-  title,
-}: {
-  credentials: PaperlessCredentials;
-  documentId: number;
-  headers: Record<string, string>;
-  profileKey: string;
-  title: string;
-}) {
-  const [localUri, setLocalUri] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-  const nativeMutualTls = usesNativeMutualTls(credentials);
-  const remoteUri = getPaperlessDocumentUrl(credentials, documentId, 'thumb');
-
-  useEffect(() => {
-    if (!nativeMutualTls) return;
-    const controller = new AbortController();
-    let mounted = true;
-    let localFile: File | null = null;
-    void digestStringAsync(
-      CryptoDigestAlgorithm.SHA256,
-      `${profileKey}\n${new URL(credentials.serverUrl).origin}\n${documentId}\nthumb`,
-    ).then(async (digest) => {
-      if (!mounted) return;
-      const destination = new File(Paths.cache, `folio-merge-thumb-${digest.slice(0, 40)}.img`);
-      localFile = destination;
-      const response = await downloadPaperlessFileWithCredentials(
-        credentials,
-        remoteUri,
-        destination.uri,
-        { signal: controller.signal, maxBytes: MAX_THUMBNAIL_DOWNLOAD_BYTES },
-      );
-      if (
-        response.status < 200
-        || response.status >= 300
-        || !destination.exists
-        || destination.size < 1
-        || destination.size > MAX_THUMBNAIL_DOWNLOAD_BYTES
-      ) {
-        throw new Error(translateRuntime('runtimeError.thumbnailUnavailable'));
-      }
-      if (mounted) setLocalUri(destination.uri);
-      else if (destination.exists) destination.delete();
-    }).catch((error) => {
-      if (!mounted && localFile?.exists) localFile.delete();
-      else if (!(error instanceof Error && error.name === 'AbortError')) setFailed(true);
-    });
-    return () => {
-      mounted = false;
-      controller.abort();
-      if (localFile?.exists) localFile.delete();
-    };
-  }, [credentials, documentId, nativeMutualTls, profileKey, remoteUri]);
-
-  if (failed) {
-    return <View accessibilityLabel={title} style={styles.thumbnailPlaceholder}><FileStack color={palette.muted} size={22} /></View>;
-  }
-  if (nativeMutualTls && !localUri) {
-    return <View style={styles.thumbnailPlaceholder}><ActivityIndicator color={palette.limeDark} size="small" /></View>;
-  }
-  return (
-    <Image
-      accessibilityLabel={title}
-      cachePolicy={localUri ? 'none' : 'memory'}
-      contentFit="cover"
-      source={localUri ? { uri: localUri } : {
-        uri: remoteUri,
-        headers,
-        cacheKey: `folio-merge-${profileKey}-${documentId}`,
-      }}
-      style={styles.thumbnail}
-    />
   );
 }
 
@@ -278,13 +192,6 @@ const styles = createThemedStyleSheet({
   thumbnail: {
     width: '100%',
     height: 126,
-    backgroundColor: palette.viewerSurface,
-  },
-  thumbnailPlaceholder: {
-    width: '100%',
-    height: 126,
-    alignItems: 'center',
-    justifyContent: 'center',
     backgroundColor: palette.viewerSurface,
   },
   order: {

@@ -10,6 +10,7 @@ import {
   FileText,
   Fingerprint,
   HardDrive,
+  Images,
   Info,
   Languages,
   ListTodo,
@@ -403,7 +404,6 @@ export default function SettingsScreen() {
         <PreferenceControl
           disabled={uiPreferenceSaving === 'language'}
           icon={Languages}
-          last
           onChange={(value) => saveUiPreference('language', value)}
           options={[
             { value: 'system', label: t('settings.system') },
@@ -413,6 +413,21 @@ export default function SettingsScreen() {
           subtitle={t('settings.languageSubtitle')}
           title={t('settings.languageTitle')}
           value={language}
+        />
+        <SettingRow
+          icon={Images}
+          last
+          title={t('settings.realThumbnailsTitle')}
+          subtitle={t('settings.realThumbnailsSubtitle')}
+          trailing={
+            <Switch
+              disabled={preferenceSaving === 'realThumbnails'}
+              onValueChange={(value) => togglePreference('realThumbnails', value)}
+              trackColor={{ false: colors.lineStrong, true: colors.ink }}
+              thumbColor={preferences.realThumbnails ? colors.lime : colors.paper}
+              value={preferences.realThumbnails}
+            />
+          }
         />
       </View>
 

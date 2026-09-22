@@ -39,6 +39,7 @@ import { OsSearchRuntimeGateway } from '@/components/os-search-runtime-gateway';
 import { UpdateOverlay } from '@/components/update-overlay';
 import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { AppProvider, useApp } from '@/context/app-context';
+import { DocumentThumbnailProvider } from '@/context/document-thumbnail-context';
 import { UpdateProvider } from '@/context/update-context';
 import { I18nProvider, useI18n } from '@/context/ui-preferences-context';
 import {
@@ -284,7 +285,15 @@ function ProtectedAppRuntime({ lockEnabled }: { lockEnabled: boolean }) {
         accessibilityElementsHidden={!appActive || showLock}
         importantForAccessibility={!appActive || showLock ? 'no-hide-descendants' : 'auto'}
         style={styles.protectedRoot}>
-        <AppNavigator />
+        {/*
+          Real document thumbnails are document previews, so the lock that keeps
+          previews private also holds them back: while it is up, every card
+          paints its illustrated paper instead. The privacy curtain covers the
+          recent-apps switcher on its own, above this subtree.
+        */}
+        <DocumentThumbnailProvider contentPrivate={showLock}>
+          <AppNavigator />
+        </DocumentThumbnailProvider>
         {appActive && !showLock && (
           <>
             <ExternalRoutingGateway />

@@ -267,6 +267,11 @@ export type PaperlessTrashWorkspace = {
 
 export type AppPreferences = {
   biometricLock: boolean;
+  /**
+   * Show the thumbnail Paperless rendered on document cards instead of the
+   * illustrated paper; see `src/lib/document-thumbnail-policy.ts`.
+   */
+  realThumbnails: boolean;
   processingNotifications: boolean;
   notificationPrivacy: 'redacted' | 'document-title';
   osSearchEnabled: boolean;

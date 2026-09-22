@@ -1,7 +1,7 @@
 import { ChevronRight } from 'lucide-react-native';
 import { Text, View } from 'react-native';
 
-import { PaperThumbnail } from '@/components/paper-thumbnail';
+import { DocumentThumbnail } from '@/components/document-thumbnail';
 import { MotionPressable as Pressable } from '@/components/motion';
 import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { useI18n } from '@/context/ui-preferences-context';
@@ -18,7 +18,7 @@ export function DocumentCard({ document }: { document: DocumentItem }) {
       onPressIn={() => router.preload({ pathname: '/document/[id]', params: { id: document.id } })}
       onPress={() => router.push({ pathname: '/document/[id]', params: { id: document.id } })}
       style={styles.card}>
-      <PaperThumbnail document={document} />
+      <DocumentThumbnail document={document} />
       <View style={styles.body}>
         <Text numberOfLines={2} style={styles.title}>
           {document.title}

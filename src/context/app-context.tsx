@@ -270,6 +270,7 @@ const profileDataRemovalTransaction: ProfileDataRemovalTransaction = {
 const metadataUpdateController = new MetadataUpdateController(folioRepository);
 const defaultPreferences: AppPreferences = {
   biometricLock: false,
+  realThumbnails: true,
   processingNotifications: false,
   notificationPrivacy: 'redacted',
   osSearchEnabled: false,
@@ -1746,9 +1747,14 @@ export function AppProvider({ children }: PropsWithChildren) {
       try {
         const savedPreferences = await loadStoredValue<AppPreferences>(PREFERENCES_KEY);
         if (!active) return;
-        const restoredPreferences = savedPreferences
+        const merged = savedPreferences
           ? { ...defaultPreferences, ...savedPreferences }
           : defaultPreferences;
+        // A blob written before a preference existed, or one whose file was
+        // tampered with, must not hand a non-boolean to the card renderer.
+        const restoredPreferences: AppPreferences = typeof merged.realThumbnails === 'boolean'
+          ? merged
+          : { ...merged, realThumbnails: defaultPreferences.realThumbnails };
         setRuntimeNotificationPreferences(
           restoredPreferences.processingNotifications,
           restoredPreferences.notificationPrivacy,

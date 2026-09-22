@@ -4,6 +4,9 @@ import { Text, View } from 'react-native';
 import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
 import { DocumentItem } from '@/types/document';
 
+/** The frame every document picture occupies, illustrated or real. */
+export const PAPER_THUMBNAIL_ASPECT_RATIO = 1.24;
+
 export function PaperThumbnail({
   document,
   width = 74,
@@ -11,7 +14,7 @@ export function PaperThumbnail({
   document: DocumentItem;
   width?: number;
 }) {
-  const height = width * 1.24;
+  const height = width * PAPER_THUMBNAIL_ASPECT_RATIO;
   return (
     <View
       style={[
