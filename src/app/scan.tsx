@@ -203,6 +203,7 @@ export default function ScanScreen() {
     profileConfigured,
     importDocument,
     isBootstrapping,
+    preferences,
     prepareDocuments,
     profiles,
     switchProfile,
@@ -257,12 +258,13 @@ export default function ScanScreen() {
       Platform.OS === 'ios'
       || autoLaunchRef.current
       || isBootstrapping
+      || !preferences.autoLaunchScanner
       || profiles.length > 1
     ) return;
     autoLaunchRef.current = true;
     const timer = setTimeout(() => void startSmartScan(), 220);
     return () => clearTimeout(timer);
-  }, [isBootstrapping, profiles.length, startSmartScan]);
+  }, [isBootstrapping, preferences.autoLaunchScanner, profiles.length, startSmartScan]);
 
   async function selectDestination(profileId: string) {
     if (isSaving || switchingProfileId) return;

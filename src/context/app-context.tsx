@@ -270,6 +270,7 @@ const profileDataRemovalTransaction: ProfileDataRemovalTransaction = {
 const metadataUpdateController = new MetadataUpdateController(folioRepository);
 const defaultPreferences: AppPreferences = {
   biometricLock: false,
+  autoLaunchScanner: true,
   processingNotifications: false,
   notificationPrivacy: 'redacted',
   osSearchEnabled: false,

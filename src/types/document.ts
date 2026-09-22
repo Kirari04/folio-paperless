@@ -267,6 +267,12 @@ export type PaperlessTrashWorkspace = {
 
 export type AppPreferences = {
   biometricLock: boolean;
+  /**
+   * Android, single profile: open the scanner as soon as the scan screen
+   * appears. Off, the screen waits for the Scan button, which also leaves room
+   * to pick an import instead.
+   */
+  autoLaunchScanner: boolean;
   processingNotifications: boolean;
   notificationPrivacy: 'redacted' | 'document-title';
   osSearchEnabled: boolean;
