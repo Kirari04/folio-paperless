@@ -9,6 +9,7 @@ import {
   mergePermissionSets,
   normalizeNestedTags,
   parseDocumentRepresentations,
+  rankPdfMergeCandidates,
   parsePaperlessSavedView,
   parsePaperlessTag,
   parsePaperlessTaskV10,
@@ -1933,4 +1934,32 @@ test('profile mismatch prevents cross-server advanced operations', () => {
     () => new PaperlessAdvancedApi(client, fullCapabilities()),
     /different connection profile/,
   );
+});
+
+test('rankPdfMergeCandidates puts related PDFs first, honours the search, and caps the list', () => {
+  const base = { source: 'remote', status: 'ready', mimeType: 'application/pdf', canEdit: true, tags: [] };
+  const current = { ...base, remoteId: 1, title: 'Invoice Garrec 2024-11', correspondentId: 'c-garrec', documentTypeId: 't-invoice', created: '2024-11-05', added: '2024-11-06' };
+  const documents = [
+    current,
+    { ...base, remoteId: 2, title: 'Zebra note', added: '2025-01-01' },
+    { ...base, remoteId: 3, title: 'Invoice Garrec 2024-10', correspondentId: 'c-garrec', documentTypeId: 't-invoice', created: '2024-10-05', added: '2024-10-06' },
+    { ...base, remoteId: 4, title: 'Quote Garrec 2022-01', correspondentId: 'c-garrec', created: '2022-01-05', added: '2022-01-06' },
+    { ...base, remoteId: 5, title: 'Élève certificate', correspondent: 'École', tags: ['school'], added: '2024-12-01' },
+    { ...base, remoteId: 6, title: 'Not a PDF', mimeType: 'image/png', correspondentId: 'c-garrec', added: '2025-02-01' },
+    { ...base, remoteId: 7, title: 'Read only', canEdit: false, correspondentId: 'c-garrec', added: '2025-02-01' },
+  ];
+
+  assert.deepEqual(
+    rankPdfMergeCandidates(current, documents).map((document) => document.remoteId),
+    [3, 4, 2, 5],
+  );
+  assert.deepEqual(
+    rankPdfMergeCandidates(current, documents, 'ecole eleve').map((document) => document.remoteId),
+    [5],
+  );
+  assert.deepEqual(
+    rankPdfMergeCandidates(current, documents, 'garrec', 1).map((document) => document.remoteId),
+    [3],
+  );
+  assert.deepEqual(rankPdfMergeCandidates(current, documents, 'nothing here'), []);
 });

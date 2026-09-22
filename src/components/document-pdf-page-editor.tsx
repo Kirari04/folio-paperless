@@ -15,6 +15,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
@@ -270,8 +271,14 @@ export function DocumentPdfPageEditor({
             </Pressable>
           </View>
 
+          {/* The modal has its own window on Android, which the app's soft-input mode does not
+              resize: without this, the merge search field disappears under the keyboard. */}
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.keyboardFrame}>
           <ScrollView
             contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}
+            keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled">
             <Text style={styles.sectionTitle}>{t('paperless3.pageEditorTitle')}</Text>
             <Text style={styles.sectionCopy}>{t('paperless3.pageEditorSelectHint')}</Text>
@@ -439,6 +446,7 @@ export function DocumentPdfPageEditor({
               onMerge={onMerge}
             />
           </ScrollView>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
     </>
@@ -501,6 +509,7 @@ const styles = createThemedStyleSheet({
   headerTitle: { color: palette.ink, fontFamily: fonts.serif, fontSize: 23, fontWeight: '600' },
   headerSubtitle: { color: palette.muted, fontFamily: fonts.sans, fontSize: 11, marginTop: 3 },
   closeButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: palette.paper },
+  keyboardFrame: { flex: 1 },
   content: { width: '100%', maxWidth: 860, alignSelf: 'center', padding: 20 },
   sectionTitle: { color: palette.ink, fontFamily: fonts.serif, fontSize: 25, fontWeight: '600' },
   sectionCopy: { maxWidth: 620, color: palette.muted, fontFamily: fonts.sans, fontSize: 12, lineHeight: 19, marginTop: 6 },

@@ -1,9 +1,9 @@
 import { CryptoDigestAlgorithm, digestStringAsync } from 'expo-crypto';
 import { File, Paths } from 'expo-file-system';
 import { Image } from 'expo-image';
-import { Check, FileStack } from 'lucide-react-native';
+import { Check, FileStack, Search, X } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Text, TextInput, View } from 'react-native';
 
 import { MotionPressable as Pressable } from '@/components/motion';
 import { createThemedStyleSheet, fonts, palette, radii } from '@/constants/theme';
@@ -16,7 +16,7 @@ import {
   usesNativeMutualTls,
 } from '@/lib/paperless';
 import { MAX_THUMBNAIL_DOWNLOAD_BYTES } from '@/lib/download-policy';
-import { isChangeAuthorizedPdfMergeDocument } from '@/lib/paperless-advanced';
+import { isChangeAuthorizedPdfMergeDocument, rankPdfMergeCandidates } from '@/lib/paperless-advanced';
 import type { DocumentItem, PaperlessCredentials } from '@/types/document';
 
 type DocumentPdfMergeSelectionProps = {
@@ -36,29 +36,40 @@ export function DocumentPdfMergeSelection({
   enabled,
   onMerge,
 }: DocumentPdfMergeSelectionProps) {
-  const { formatNumber, t } = useI18n();
+  const { formatDate, formatNumber, t } = useI18n();
   const currentId = currentDocument.remoteId!;
   const [selectedIds, setSelectedIds] = useState<number[]>([currentId]);
-  const candidates = useMemo(() => {
+  const [query, setQuery] = useState('');
+  const authorized = useMemo(() => {
     const byId = new Map<number, DocumentItem>();
     for (const document of documents) {
       if (isChangeAuthorizedPdfMergeDocument(document)) byId.set(document.remoteId!, document);
     }
     if (isChangeAuthorizedPdfMergeDocument(currentDocument)) byId.set(currentId, currentDocument);
-    return [...byId.values()].sort((left, right) => {
-      if (left.remoteId === currentId) return -1;
-      if (right.remoteId === currentId) return 1;
-      return left.title.localeCompare(right.title);
-    });
+    return byId;
   }, [currentDocument, currentId, documents]);
+  const ranked = useMemo(
+    () => rankPdfMergeCandidates(currentDocument, [...authorized.values()], query),
+    [authorized, currentDocument, query],
+  );
+  // The current document stays first, and anything already picked stays visible even when the
+  // search no longer matches it, so the chosen order can always be reviewed and undone.
+  const candidates = useMemo(() => {
+    const ordered = new Map<number, DocumentItem>();
+    const current = authorized.get(currentId);
+    if (current) ordered.set(currentId, current);
+    for (const id of selectedIds) {
+      const document = authorized.get(id);
+      if (document) ordered.set(id, document);
+    }
+    for (const document of ranked) ordered.set(document.remoteId!, document);
+    return [...ordered.values()];
+  }, [authorized, currentId, ranked, selectedIds]);
   const selected = selectedIds.flatMap((id) => {
-    const document = candidates.find((candidate) => candidate.remoteId === id);
+    const document = authorized.get(id);
     return document ? [document] : [];
   });
-  const candidateIds = useMemo(
-    () => new Set(candidates.map((candidate) => candidate.remoteId!)),
-    [candidates],
-  );
+  const candidateIds = useMemo(() => new Set(authorized.keys()), [authorized]);
   const canSubmitMerge = enabled
     && !busy
     && selectedIds.length >= 2
@@ -94,11 +105,38 @@ export function DocumentPdfMergeSelection({
         })}
       </Text>
 
+      <View style={styles.search}>
+        <Search color={palette.muted} size={18} />
+        <TextInput
+          accessibilityLabel={t('paperless3.pageEditorMergeSearchLabel')}
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={setQuery}
+          placeholder={t('paperless3.pageEditorMergeSearchPlaceholder')}
+          placeholderTextColor={palette.faint}
+          returnKeyType="search"
+          style={styles.searchInput}
+          value={query}
+        />
+        {!!query && (
+          <Pressable accessibilityLabel={t('choice.clearSearch')} haptic="light" onPress={() => setQuery('')} style={styles.clearSearch}>
+            <X color={palette.muted} size={16} />
+          </Pressable>
+        )}
+      </View>
+
+      {ranked.length === 0 && (
+        <Text style={styles.empty}>
+          {query ? t('paperless3.pageEditorMergeNoMatches') : t('paperless3.pageEditorMergeNoCandidates')}
+        </Text>
+      )}
+
       <FlatList
         contentContainerStyle={styles.rail}
         data={candidates}
         horizontal
         keyExtractor={(item) => String(item.remoteId)}
+        keyboardShouldPersistTaps="handled"
         renderItem={({ item }) => {
           const documentId = item.remoteId!;
           const order = selectedIds.indexOf(documentId);
@@ -126,10 +164,12 @@ export function DocumentPdfMergeSelection({
                 </View>
               )}
               <Text numberOfLines={2} style={styles.documentTitle}>{item.title}</Text>
-              <Text style={styles.documentMeta}>
+              <Text numberOfLines={1} style={styles.documentMeta}>
                 {documentId === currentId
                   ? t('paperless3.pageEditorCurrentDocument')
-                  : t('paperless3.pageEditorDocumentId', { id: documentId })}
+                  : [item.correspondent, item.created ? formatDate(item.created, { year: 'numeric', month: 'short' }) : '']
+                    .filter(Boolean)
+                    .join(' · ') || t('paperless3.pageEditorDocumentId', { id: documentId })}
               </Text>
             </Pressable>
           );
@@ -263,6 +303,41 @@ const styles = createThemedStyleSheet({
     fontSize: 11,
     fontWeight: '800',
     marginTop: 14,
+  },
+  search: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+    paddingLeft: 14,
+    paddingRight: 7,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: radii.md,
+    backgroundColor: palette.paper,
+  },
+  searchInput: {
+    flex: 1,
+    minHeight: 38,
+    color: palette.ink,
+    fontFamily: fonts.sans,
+    fontSize: 15,
+  },
+  clearSearch: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 18,
+  },
+  empty: {
+    color: palette.muted,
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 12,
   },
   rail: { gap: 10, paddingVertical: 12, paddingRight: 20 },
   document: {

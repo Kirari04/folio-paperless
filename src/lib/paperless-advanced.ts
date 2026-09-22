@@ -988,6 +988,81 @@ export function isChangeAuthorizedPdfMergeDocument(document: {
     && document.mimeType?.split(';', 1)[0].trim().toLocaleLowerCase() === 'application/pdf';
 }
 
+export type PdfMergeCandidateDocument = {
+  remoteId?: number;
+  source: string;
+  status: string;
+  mimeType?: string;
+  canEdit?: boolean;
+  title: string;
+  correspondent?: string;
+  correspondentId?: string;
+  documentType?: string;
+  documentTypeId?: string;
+  tags?: readonly string[];
+  created?: string;
+  added?: string;
+};
+
+export const PDF_MERGE_CANDIDATE_LIMIT = 24;
+const PDF_MERGE_RELATED_PERIOD_MS = 90 * 24 * 60 * 60 * 1000;
+
+function foldSearchText(value: string) {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().trim();
+}
+
+function documentTimestamp(value: string | undefined) {
+  const timestamp = Date.parse(value ?? '');
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+/**
+ * Ranks the PDFs a document can be merged with. Related documents come first (same correspondent,
+ * shared tags, same type, created in the same period), then the most recently added ones; an
+ * optional query (accent- and case-insensitive, every word must match title, correspondent, type or
+ * a tag) narrows the list. The current document is never returned, and the list is capped so a large
+ * library does not turn the picker into an endless rail.
+ */
+export function rankPdfMergeCandidates<T extends PdfMergeCandidateDocument>(
+  current: T,
+  documents: readonly T[],
+  query = '',
+  limit = PDF_MERGE_CANDIDATE_LIMIT,
+): T[] {
+  const words = foldSearchText(query).split(/\s+/).filter(Boolean);
+  const currentTags = new Set(current.tags ?? []);
+  const currentCreated = documentTimestamp(current.created);
+  const seen = new Set<number>();
+  const ranked: { document: T; score: number; added: number }[] = [];
+  for (const document of documents) {
+    if (
+      !isChangeAuthorizedPdfMergeDocument(document)
+      || document.remoteId === current.remoteId
+      || seen.has(document.remoteId!)
+    ) continue;
+    seen.add(document.remoteId!);
+    if (words.length > 0) {
+      const haystack = foldSearchText(
+        [document.title, document.correspondent ?? '', document.documentType ?? '', ...(document.tags ?? [])].join(' '),
+      );
+      if (!words.every((word) => haystack.includes(word))) continue;
+    }
+    let score = 0;
+    if (document.correspondentId && document.correspondentId === current.correspondentId) score += 4;
+    if (document.documentTypeId && document.documentTypeId === current.documentTypeId) score += 1;
+    score += Math.min(3, (document.tags ?? []).filter((tag) => currentTags.has(tag)).length);
+    const created = documentTimestamp(document.created);
+    if (currentCreated && created && Math.abs(created - currentCreated) <= PDF_MERGE_RELATED_PERIOD_MS) score += 2;
+    ranked.push({ document, score, added: documentTimestamp(document.added) });
+  }
+  ranked.sort((left, right) => (
+    right.score - left.score
+    || right.added - left.added
+    || left.document.title.localeCompare(right.document.title)
+  ));
+  return ranked.slice(0, Math.max(0, limit)).map((entry) => entry.document);
+}
+
 export function selectChangeAuthorizedPdfMergeIds(
   documents: readonly {
     remoteId?: number;
