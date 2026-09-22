@@ -213,6 +213,7 @@ import { overlayPendingMetadataUpdates } from '@/lib/metadata-update';
 import { OfflineSyncCoordinator, type SyncTrigger } from '@/lib/offline-sync';
 import { drainOfflineDownloads } from '@/lib/offline-download-worker';
 import { dispatchTaskNotification } from '@/lib/task-notification-outbox';
+import { inboxStatusFromTags, isInboxTagOption } from '@/lib/inbox-tag';
 
 const PREFERENCES_KEY = 'folio.preferences';
 const platformStore = createPlatformStringStore();
@@ -779,11 +780,7 @@ function applyDocumentChanges(document: DocumentItem, changes: DocumentChanges):
         ? document.archiveSerialNumber
         : changes.archiveSerialNumber,
     customFields: changes.customFields ?? document.customFields,
-    status: tags
-      ? tags.some((tag) => tag.name.toLocaleLowerCase() === 'inbox')
-        ? 'inbox'
-        : 'archived'
-      : document.status,
+    status: tags ? inboxStatusFromTags(tags) : document.status,
   };
 }
 
@@ -2709,8 +2706,9 @@ export function AppProvider({ children }: PropsWithChildren) {
       const document = documents.find((item) => item.id === id);
       if (!document) return;
       assertDocumentReady(document);
+      // Remove the server's inbox tags, whatever they are named.
       const remainingTags = catalog.tags.filter(
-        (tag) => document.tagIds.includes(tag.id) && tag.name.toLocaleLowerCase() !== 'inbox',
+        (tag) => document.tagIds.includes(tag.id) && !isInboxTagOption(tag),
       );
       await updateDocument(id, { tags: remainingTags });
       if (activeProfileIdRef.current !== operationProfileId) return;

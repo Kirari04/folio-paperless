@@ -5,6 +5,7 @@ import type {
   PaperlessWorkspaceResourceAvailability,
   PaperlessWorkspaceResourceCapability,
 } from '../types/document.ts';
+import { inboxStatusFromTags } from './inbox-tag.ts';
 
 export const PAPERLESS_OPTIONAL_WORKSPACE_RESOURCES = [
   'correspondents',
@@ -27,9 +28,7 @@ export function resolvePaperlessDocumentStatus(
   if (authoritativeInboxIds) {
     return authoritativeInboxIds.has(documentId) ? 'inbox' : 'archived';
   }
-  return resolvedTags.some((tag) => (
-    tag.isInboxTag === true || tag.name.toLocaleLowerCase() === 'inbox'
-  )) ? 'inbox' : 'archived';
+  return inboxStatusFromTags(resolvedTags);
 }
 
 type OptionalResourceLoaders<T extends Record<PaperlessOptionalWorkspaceResource, unknown>> = {

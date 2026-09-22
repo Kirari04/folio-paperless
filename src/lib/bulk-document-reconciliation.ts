@@ -7,6 +7,7 @@ import type {
   CachedWorkspace,
   FolioRepository,
 } from '../types/persistence.ts';
+import { isInboxTagOption } from './inbox-tag.ts';
 
 function uniquePositiveIntegers(values: readonly number[]) {
   return [...new Set(values.filter((value) => Number.isSafeInteger(value) && value > 0))];
@@ -72,7 +73,7 @@ function existingRemoteOption(
 }
 
 function isInboxTag(option: PaperlessOption | undefined, name: string) {
-  return option?.isInboxTag === true || name.toLocaleLowerCase() === 'inbox';
+  return isInboxTagOption({ name, isInboxTag: option?.isInboxTag });
 }
 
 function reconcileTags(

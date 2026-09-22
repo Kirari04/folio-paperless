@@ -12,6 +12,7 @@ import type {
   PersistentMetadataUpdate,
   PersistentTask,
 } from '../types/tasks.ts';
+import { inboxStatusFromTags } from './inbox-tag.ts';
 
 const METADATA_FIELDS = [
   'title',
@@ -238,9 +239,7 @@ export function applyMetadataPatch(
       ? document.archiveSerialNumber
       : changes.archiveSerialNumber,
     customFields: changes.customFields ?? document.customFields,
-    status: tags
-      ? tags.some((tag) => tag.name.toLocaleLowerCase() === 'inbox') ? 'inbox' : 'archived'
-      : document.status,
+    status: tags ? inboxStatusFromTags(tags) : document.status,
   };
 }
 
