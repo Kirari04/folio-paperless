@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { sameCredentialContext } from '@/lib/credential-context';
+
 import { useApp } from '@/context/app-context';
 import { translateRuntime } from '@/i18n/runtime';
 import {
@@ -99,18 +101,32 @@ export function usePaperlessAdvanced() {
       ? { phase: 'loading', api: null, capabilities: null, error: null }
       : { phase: 'disconnected', api: null, capabilities: null, error: null }
   ));
+  // The app republishes an equal credentials object on foreground restore and
+  // other lifecycle events. Bind the client, the cache and the discovered
+  // capabilities to the credential *context* (same authority, same secrets):
+  // a new object with the same context keeps the session, a real re-login
+  // (different token, server or client identity) starts a new generation.
+  const [binding, setBinding] = useState<{ credentials: PaperlessCredentials; generation: number } | null>(
+    () => credentials ? { credentials, generation: ++nextCredentialGeneration } : null,
+  );
+  const bindingIsStale = credentials
+    ? !binding || !sameCredentialContext(binding.credentials, credentials)
+    : binding !== null;
+  if (bindingIsStale) {
+    setBinding(credentials ? { credentials, generation: ++nextCredentialGeneration } : null);
+  }
+  const boundCredentials = bindingIsStale ? credentials : binding?.credentials ?? null;
   const client = useMemo(() => {
-    if (!credentials) return null;
+    if (!boundCredentials) return null;
     try {
-      return createPaperlessAdvancedClient(credentials);
+      return createPaperlessAdvancedClient(boundCredentials);
     } catch {
       return null;
     }
-  }, [credentials]);
-  const credentialGeneration = useMemo(
-    () => credentials ? ++nextCredentialGeneration : 0,
-    [credentials],
-  );
+  }, [boundCredentials]);
+  const credentialGeneration = bindingIsStale
+    ? (credentials ? nextCredentialGeneration : 0)
+    : binding?.generation ?? 0;
   const cacheBinding = useMemo(() => credentials ? JSON.stringify({
     serverUrl: normalizeServerUrl(credentials.serverUrl),
     credentialGeneration,
@@ -122,7 +138,7 @@ export function usePaperlessAdvanced() {
   }, [client]);
 
   useEffect(() => {
-    if (!credentials) {
+    if (!boundCredentials) {
       const timer = setTimeout(() => {
         setState({ phase: 'disconnected', api: null, capabilities: null, error: null });
       }, 0);
@@ -158,7 +174,13 @@ export function usePaperlessAdvanced() {
       };
     }
     const loadingTimer = setTimeout(() => {
-      setState({ phase: 'loading', api: null, capabilities: null, error: null });
+      // Capabilities already discovered for this profile stay in force while
+      // they are re-checked, so an open workspace keeps its tab and its editor.
+      setState((current) => (
+        current.phase === 'ready' && current.api.client.profileId === client.profileId
+          ? current
+          : { phase: 'loading', api: null, capabilities: null, error: null }
+      ));
     }, 0);
     void discoverPaperlessCapabilities(client, { signal: controller.signal })
       .then((capabilities) => {
@@ -188,7 +210,7 @@ export function usePaperlessAdvanced() {
       clearTimeout(loadingTimer);
       controller.abort();
     };
-  }, [cacheBinding, client, credentials, handleCapabilityMismatch, reloadKey]);
+  }, [boundCredentials, cacheBinding, client, handleCapabilityMismatch, reloadKey]);
 
   useEffect(() => {
     const profileId = client?.profileId;
