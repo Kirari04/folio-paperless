@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   ScrollView,
   Text,
   TextInput,
@@ -560,6 +562,11 @@ export function DocumentPaperless3Workspace({
             </Pressable>
           ))}
         </ScrollView>
+        {/* A page sheet is its own window on Android: the app's soft-input mode does not
+            resize it, so inputs near the bottom would slide under the keyboard. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.keyboardFrame}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           {advanced.phase === 'loading' || loading ? (
             <CenterState copy={t('paperless3.loading')} loading />
@@ -724,6 +731,7 @@ export function DocumentPaperless3Workspace({
             </>
           )}
         </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     </Modal>
   );
@@ -777,6 +785,7 @@ function SuggestionRow<Field extends string>({ canAccept, children, decision, fi
 function PdfCapability({ children, detail, label, supported }: { children: React.ReactNode; detail?: string; label: string; supported: boolean }) { const { t } = useI18n(); return <View style={[styles.pdfBlock, !supported && styles.pdfDisabled]}><Text style={styles.rowTitle}>{label}</Text>{supported ? children : <Text style={styles.rowMeta}>{detail ? presentRuntimeMessage(detail) : t('paperless3.notAdvertisedPdf')}</Text>}</View>; }
 
 const styles = createThemedStyleSheet({
+  keyboardFrame: { flex: 1 },
   root: { flex: 1, backgroundColor: palette.canvas },
   header: { minHeight: 74, flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 11, borderBottomWidth: 1, borderColor: palette.line },
   headerCopy: { flex: 1, minWidth: 0 },

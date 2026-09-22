@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
@@ -511,6 +512,11 @@ export function DocumentFileActions({
           </Pressable>
         </View>
 
+        {/* A page sheet is its own window on Android: the app's soft-input mode does not
+            resize it, so inputs near the bottom would slide under the keyboard. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.keyboardFrame}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           {contentState === 'offline-unavailable' ? (
             <View accessibilityLiveRegion="polite" style={styles.centerState}>
@@ -670,6 +676,7 @@ export function DocumentFileActions({
             </>
           )}
         </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     </Modal>
   );
@@ -685,6 +692,7 @@ function ActionButton({ disabled, icon: Icon, label, loading, onPress }: { disab
 }
 
 const styles = createThemedStyleSheet({
+  keyboardFrame: { flex: 1 },
   root: { flex: 1, backgroundColor: palette.canvas },
   header: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1, borderColor: palette.line },
   headerCopy: { flex: 1, minWidth: 0 },
