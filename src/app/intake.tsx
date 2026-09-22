@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, Copy, Pencil, Plus, Save, Trash2 } from 'lucide-react-native';
+import { Check, ChevronLeft, Copy, Info, Pencil, Plus, RotateCcw, Save, Trash2 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -19,6 +19,7 @@ import { useI18n, type TranslationKey } from '@/i18n';
 import { presentRuntimeError } from '@/i18n/error-presentation';
 import { sanitizeIntakeFilename } from '@/lib/intake';
 import { intakePermissionState } from '@/lib/intake-permissions';
+import { clearUploadBatchPrefillFields } from '@/lib/upload-batch-prefill';
 import {
   applyUploadPreset,
   lastUsedCreatedDateForPreset,
@@ -202,7 +203,9 @@ export default function IntakeScreen() {
     creationCapabilities,
     intakeRejectionBatches,
     tasks,
+    uploadBatchPrefills,
     uploadPresets,
+    clearUploadBatchPrefill,
     createCatalogOption,
     updateUploadTask,
     submitUploadTasks,
@@ -238,6 +241,25 @@ export default function IntakeScreen() {
   const rejectionBatch = useMemo(() => intakeRejectionBatches.find((notice) => (
     notice.batchId === batchId && notice.profileId === activeProfile?.id
   )), [activeProfile?.id, batchId, intakeRejectionBatches]);
+
+  // Batch scanning: this sheet may have opened filled in like the previous
+  // upload. It says so, and "Reset" clears exactly the fields it filled in.
+  const batchPrefill = batchId ? uploadBatchPrefills[batchId] : undefined;
+
+  function resetBatchPrefill() {
+    if (!batchPrefill) return;
+    setDrafts((current) => {
+      const next = { ...current };
+      batch.forEach((task) => {
+        const existing = next[task.id] ?? task.metadata;
+        if (existing) next[task.id] = clearUploadBatchPrefillFields(existing, batchPrefill.fields);
+      });
+      return next;
+    });
+    clearUploadBatchPrefill(batchPrefill.batchId);
+    setError(null);
+    void hapticFeedback('selection');
+  }
 
   function chooseOtherFiles() {
     if (rejectionBatch) dismissIntakeRejectionBatch(rejectionBatch.batchId);
@@ -585,6 +607,26 @@ export default function IntakeScreen() {
             onChooseMore={chooseOtherFiles}
             onDismiss={() => dismissIntakeRejectionBatch(rejectionBatch.batchId)}
           />
+        )}
+        {!!batchPrefill && (
+          <View style={styles.prefillBanner} accessibilityRole="summary">
+            <View style={styles.prefillIcon}>
+              <Info color={palette.limeDark} size={16} />
+            </View>
+            <Text style={styles.prefillCopy}>
+              {batchPrefill.origin === 'previous-upload' || !batchPrefill.label
+                ? t('intake.prefillPrevious')
+                : t('intake.prefillFromLabel', { source: batchPrefill.label })}
+            </Text>
+            <Pressable
+              accessibilityLabel={t('intake.prefillResetAccessibility')}
+              accessibilityRole="button"
+              onPress={resetBatchPrefill}
+              style={styles.prefillResetButton}>
+              <RotateCcw color={palette.ink} size={15} />
+              <Text style={styles.prefillResetText}>{t('intake.prefillReset')}</Text>
+            </Pressable>
+          </View>
         )}
         {batch.length > 1 && (
           <>
@@ -1079,6 +1121,13 @@ const styles = createThemedStyleSheet({
   secondaryText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 13, fontWeight: '900' },
   primaryButton: { minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: radii.md, backgroundColor: palette.lime },
   primaryText: { color: palette.accentInk, fontFamily: fonts.sans, fontSize: 14, fontWeight: '900' },
+  // Same visual language as the app's other callouts: a tinted surface with an info glyph, so the
+  // prefill is noticed at a glance without competing with the primary action.
+  prefillBanner: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 10, borderRadius: radii.md, backgroundColor: palette.limeSurface, borderWidth: 1, borderColor: palette.line },
+  prefillIcon: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.paperStrong },
+  prefillCopy: { flex: 1, color: palette.ink, fontFamily: fonts.sans, fontSize: 12, lineHeight: 17 },
+  prefillResetButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, borderRadius: radii.pill, backgroundColor: palette.paperStrong },
+  prefillResetText: { color: palette.ink, fontFamily: fonts.sans, fontSize: 12, fontWeight: '800' },
   help: { color: palette.muted, fontFamily: fonts.sans, fontSize: 12, lineHeight: 17 },
   error: { color: palette.danger, fontFamily: fonts.sans, fontSize: 13, fontWeight: '800', lineHeight: 19 },
   footerHelp: { color: palette.muted, fontFamily: fonts.sans, fontSize: 11, textAlign: 'center' },

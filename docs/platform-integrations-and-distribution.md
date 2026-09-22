@@ -4,13 +4,37 @@ Folio’s platform boundary treats every URL, notification response, shortcut, O
 
 ## Route and lock contract
 
-Supported routes are Home, Library, Inbox, Scanner, Settings, Search, and a profile-scoped document ID. Cold-start and warm-start callers use the same parser and resolver. Navigation waits for bootstrap, profile selection, and biometric unlock. A route targeting a different known profile waits for an explicit profile switch; unknown profiles and inaccessible, deleted, or missing documents fall back to Home.
+Supported routes are Home, Library, Inbox, Scanner, Settings, Search, and a profile-scoped document ID. The Scanner route accepts one optional `tags` parameter, described under [Batch uploads](#batch-uploads). Cold-start and warm-start callers use the same parser and resolver. Navigation waits for bootstrap, profile selection, and biometric unlock. A route targeting a different known profile waits for an explicit profile switch; unknown profiles and inaccessible, deleted, or missing documents fall back to Home.
 
 The mounted routing gateway uses the same deferred queue for cold links, warm links, notification responses, shortcuts, Spotlight, and AppSearch handoffs. Expo SDK 57's synchronous `getLinkingURL()` cache is cleared with `clearInitialURL()` before a URL receives routing authority, and warm URL events clear the same cache before entering the queue. A handled URL therefore cannot replay when the gateway unmounts for biometric lock and mounts again after unlock. Deferred routes are bounded to 16 entries, expire after ten minutes, deduplicate canonical targets, and can be cleared entirely or per profile. A second event cannot overwrite an earlier route that is still waiting for bootstrap or unlock.
 
 Notification responses are cleared through Expo SDK 57's synchronous `clearLastNotificationResponse()` API before the first asynchronous registry lookup. The response identifier must consume a matching profile-scoped persistent handle exactly once, its strict payload must match the scheduled payload, and only the default tap action is routed. Rejected, tampered, unsupported-action, and already-consumed responses cannot replay navigation after restart.
 
 Universal links and Android App Links are intentionally not configured. The project has no verified owned web domain or association files, so the app must not claim HTTPS links.
+
+## Batch uploads
+
+Scanning happens in batches: ten annexes of one folder reach Paperless with the same correspondent, the same document type, and the same tags. The upload sheet therefore opens filled in, says so, and offers to clear it. Every path that stages documents for review — the built-in scanner, file import, and an incoming share — uses the same rule.
+
+- **Default.** The sheet repeats the metadata of the upload the person last sent from the same connection profile: created date, correspondent, document type, tags, storage path, owner, and custom fields.
+- **Never repeated.** The title, which belongs to one piece of paper, and the archive serial number, which must stay unique in Paperless. The exclusion is a type (`UploadBatchPrefillField`), not a convention, so no future field can reintroduce it by accident.
+- **Written on Send.** The memory is captured the moment the person taps Send, not when Paperless finishes processing: two quick scans must behave exactly like two slow ones, and a later failure does not undo what the person meant for the next document. Drafts that are never sent leave the memory untouched.
+- **Scope.** One entry per connection profile, held in memory only, dropped on restart and an hour after the upload it describes: a batch is contiguous, and a document scanned the next morning belongs to another one. A prefilled field never survives into the durable record of another profile.
+- **First upload.** With no previous upload, and only then, the sheet borrows the tags of the library filter or saved view in view. Tags only: a filter may legitimately mix correspondents and document types, so nothing else can be inferred from it.
+- **Fields left out.** A prefill fills in the fields the previous upload carried and leaves the others to the source-default preset, so a configured preset is never silently emptied.
+- **Reset.** The sheet shows one discreet banner — "Filled in like the previous upload", or "Prefilled from &lt;label&gt;" — with a Reset action that clears exactly the fields the prefill filled and makes the profile forget the remembered upload. Nothing blocks the upload; the normal gesture is still to send.
+
+### `folio-paperless://scan?tags=<list>`
+
+```text
+folio-paperless://scan?tags=2,Insurance
+```
+
+`tags` is a comma-separated list of at most 16 Paperless tag remote IDs or tag names, each at most 128 characters, deduplicated, free of control characters. A numeric item is a remote ID; anything else is a name matched against the printed label of the active profile's tag catalog, case- and width-insensitively. Unknown items are ignored and reported in a message: a link can never create a tag, and the profile that opens the link may not be the one it was written for.
+
+A credential-shaped parameter (`token`, `password`, `api_key`, `client_secret`, `authorization`, and the like) is refused before anything else is read, with an explicit message rather than a silent fallback to Home. A QR code, a chat message, and a mail thread are all readable by whoever holds the device next, so a link is not a channel for a credential. Unknown parameters, repeated parameters, a trailing path segment, and a fragment are refused by the shared route parser.
+
+The link only navigates and prefills: it opens the scanner with those tags as the prefill of the lot, and the first successful upload of the lot replaces them. Cold and warm links use the same parser, the same deferred queue, and the same consumed-once Expo linking cache as every other route; the scanner re-parses the canonical link it receives instead of trusting navigation state, and waits for a tag catalog before resolving it.
 
 ## Privacy boundaries
 
@@ -77,4 +101,5 @@ Test on physical Android and iOS devices using release candidates:
 7. Confirm both platform widgets show the locked state while protected and never reveal a title, profile, server, timestamp, or route on Android.
 8. On the Play candidate, confirm no self-update UI appears and Android settings do not list installation of unknown apps for Folio.
 9. Install the GitHub APK candidate and verify updater behavior remains isolated to that flavor.
-10. Re-run accessibility, localization, offline, and upgrade-path checks before submission.
+10. Scan two documents in a row: confirm the second sheet opens filled in like the first, with its own title, that Reset clears those fields, and that a `folio-paperless://scan?tags=…` link with one unknown tag prefills the known ones and reports the rest.
+11. Re-run accessibility, localization, offline, and upgrade-path checks before submission.

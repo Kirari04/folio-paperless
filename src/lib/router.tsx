@@ -50,7 +50,7 @@ export type NavigationRoute = {
 export type RootStackParamList = {
   Tabs: undefined;
   Document: { id: string; from?: string };
-  Scan: undefined;
+  Scan: { prefill?: string } | undefined;
   Trash: undefined;
   Intake: { batchId?: string } | undefined;
   Tasks: undefined;
@@ -116,7 +116,7 @@ function nativeRouteFor(route: NavigationRoute) {
         params: { id: route.params.id, from: route.params.from },
       };
     case '/scan':
-      return { name: 'Scan' as const, params: undefined };
+      return { name: 'Scan' as const, params: { prefill: route.params.prefill } };
     case '/trash':
       return { name: 'Trash' as const, params: undefined };
     case '/intake':

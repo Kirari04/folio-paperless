@@ -136,10 +136,22 @@ export function ExternalRoutingGateway() {
       const accepted = runtime.current.acceptUrl(input, 'deep-link');
       if (accepted.accepted) {
         drainExternalRoutes();
-      } else if (accepted.reason === 'invalid-url') {
-        runtime.current.acceptRoute({ kind: 'home', source: 'deep-link' });
-        drainExternalRoutes();
+        return;
       }
+      if (accepted.reason !== 'invalid-url') return;
+      // A refused scan link is explained instead of silently falling back to
+      // Home, because the fix is to ask for a corrected link.
+      if (accepted.code?.startsWith('scan-')) {
+        Alert.alert(
+          t('routing.scanLinkTitle'),
+          t(accepted.code === 'scan-secret-in-link'
+            ? 'routing.scanSecretRejected'
+            : 'routing.scanLinkRejected'),
+        );
+        return;
+      }
+      runtime.current.acceptRoute({ kind: 'home', source: 'deep-link' });
+      drainExternalRoutes();
     };
 
     // Subscribe first, then synchronously consume the SDK 57 native cache. No
@@ -152,7 +164,7 @@ export function ExternalRoutingGateway() {
     return () => {
       subscription.remove();
     };
-  }, [drainExternalRoutes]);
+  }, [drainExternalRoutes, t]);
 
   useEffect(() => {
     const response = notification;

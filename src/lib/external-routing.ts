@@ -1,3 +1,14 @@
+import {
+  SCAN_LINK_QUERY_PARAMETERS,
+  findScanLinkSecretParameter,
+  parseScanLinkParameters,
+  scanLinkQueryValues,
+  type ScanLinkRejectionCode,
+  type ScanPrefillLink,
+} from './scan-prefill-link.ts';
+
+export type { ScanPrefillLink };
+
 export const FOLIO_URL_SCHEME = 'folio-paperless' as const;
 export const MAX_EXTERNAL_URL_LENGTH = 2_048;
 export const MAX_DEFERRED_EXTERNAL_ROUTES = 16;
@@ -19,7 +30,7 @@ export type ExternalRoute =
   | { kind: 'library'; source: ExternalRouteSource; scope: ExternalProfileScope }
   | { kind: 'inbox'; source: ExternalRouteSource; scope: ExternalProfileScope }
   | { kind: 'tasks'; source: 'notification'; scope: Extract<ExternalProfileScope, { kind: 'profile' }> }
-  | { kind: 'scanner'; source: ExternalRouteSource }
+  | { kind: 'scanner'; source: ExternalRouteSource; prefill?: ScanPrefillLink }
   | { kind: 'settings'; source: ExternalRouteSource }
   | {
       kind: 'search';
@@ -46,7 +57,8 @@ export type ExternalRouteRejectionCode =
   | 'invalid-profile-id'
   | 'profile-required'
   | 'invalid-document-id'
-  | 'invalid-search-query';
+  | 'invalid-search-query'
+  | ScanLinkRejectionCode;
 
 export type ExternalRouteParseResult =
   | { accepted: true; route: ExternalRoute }
@@ -167,10 +179,19 @@ export function parseExternalUrl(
   }
 
   if ((routeName === 'scan' || routeName === 'scanner') && segments.length === 1) {
-    const query = readAllowedQuery(url, []);
-    return query.error
-      ? rejected(query.error, source)
-      : { accepted: true, route: { kind: 'scanner', source } };
+    // A credential-shaped parameter is refused before the allowlist so the
+    // person is told that Folio never takes a secret from a link.
+    if (findScanLinkSecretParameter(url.searchParams.keys())) {
+      return rejected('scan-secret-in-link', source);
+    }
+    const query = readAllowedQuery(url, SCAN_LINK_QUERY_PARAMETERS);
+    if (query.error) return rejected(query.error, source);
+    if (query.values.tags === undefined) {
+      return { accepted: true, route: { kind: 'scanner', source } };
+    }
+    const parsed = parseScanLinkParameters(query.values);
+    if (!parsed.accepted) return rejected(parsed.code, source);
+    return { accepted: true, route: { kind: 'scanner', source, prefill: parsed.prefill } };
   }
 
   if (
@@ -255,6 +276,11 @@ export function serializeExternalRoute(route: ExternalRoute): string {
       break;
     case 'scanner':
       url.hostname = 'scan';
+      if (route.prefill) {
+        for (const [key, value] of Object.entries(scanLinkQueryValues(route.prefill))) {
+          url.searchParams.set(key, value);
+        }
+      }
       break;
     case 'settings':
       url.hostname = 'settings';
@@ -289,7 +315,7 @@ export type InternalNavigationTarget =
   | { pathname: '/documents'; params?: { q?: string } }
   | { pathname: '/inbox' }
   | { pathname: '/tasks' }
-  | { pathname: '/scan' }
+  | { pathname: '/scan'; params?: { prefill?: string } }
   | { pathname: '/settings' }
   | { pathname: '/document/[id]'; params: { id: string } };
 
@@ -328,7 +354,11 @@ function routeTarget(route: ExternalRoute): InternalNavigationTarget {
     case 'tasks':
       return { pathname: '/tasks' };
     case 'scanner':
-      return { pathname: '/scan' };
+      // The canonical link travels as a navigation parameter so the scanner
+      // re-parses exactly what the gateway accepted, cold start included.
+      return route.prefill
+        ? { pathname: '/scan', params: { prefill: serializeExternalRoute(route) } }
+        : { pathname: '/scan' };
     case 'settings':
       return { pathname: '/settings' };
     case 'search':

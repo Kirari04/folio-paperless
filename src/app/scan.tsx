@@ -25,6 +25,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Modal,
   Platform,
@@ -48,7 +49,9 @@ import {
   SmartScannerUnavailableError,
   SmartScanSession,
 } from '@/lib/document-scanner';
-import { useRouter } from '@/lib/router';
+import { parseExternalUrl } from '@/lib/external-routing';
+import { resolveScanLinkTags } from '@/lib/scan-prefill-link';
+import { useLocalSearchParams, useRouter } from '@/lib/router';
 import type { RootStackParamList } from '@/lib/router';
 import type { ConnectionProfile } from '@/lib/auth/profile-store';
 
@@ -176,7 +179,8 @@ function DestinationPicker({
 export default function ScanScreen() {
   const router = useRouter();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Scan'>>();
-  const { formatNumber, t } = useI18n();
+  const { prefill: prefillLink } = useLocalSearchParams<{ prefill?: string }>();
+  const { formatList, formatNumber, t } = useI18n();
   const cameraRef = useRef<CameraView>(null);
   const mountedRef = useRef(true);
   const scanSessionRef = useRef<SmartScanSession | null>(null);
@@ -200,13 +204,58 @@ export default function ScanScreen() {
   const [completedSwitchId, setCompletedSwitchId] = useState<string | null>(null);
   const {
     activeProfile,
+    catalog,
     profileConfigured,
     importDocument,
     isBootstrapping,
+    prefillUploadBatchFromTags,
     prepareDocuments,
     profiles,
     switchProfile,
   } = useApp();
+  const consumedPrefillLink = useRef<string | null>(null);
+
+  /**
+   * A `folio-paperless://scan?tags=…` link opens the scanner with the tags of
+   * a batch already chosen. The canonical link is re-parsed here rather than
+   * trusted as navigation state, its tags are resolved against the active
+   * profile's catalog, and unknown tags are reported instead of created. The
+   * resolution waits for a catalog, so a cold start resolves once the cached
+   * workspace is available.
+   */
+  useEffect(() => {
+    if (
+      !prefillLink
+      || consumedPrefillLink.current === prefillLink
+      || isBootstrapping
+      || !profileConfigured
+      || !catalog.tags.length
+    ) return;
+    consumedPrefillLink.current = prefillLink;
+    const parsed = parseExternalUrl(prefillLink, 'deep-link');
+    if (!parsed.accepted || parsed.route.kind !== 'scanner' || !parsed.route.prefill) return;
+    const resolved = resolveScanLinkTags(parsed.route.prefill, catalog.tags);
+    if (resolved.tags.length) {
+      prefillUploadBatchFromTags(
+        resolved.tags,
+        formatList(resolved.tags.map((tag) => tag.name)),
+      );
+    }
+    if (resolved.unresolved.length) {
+      Alert.alert(
+        t('scan.linkTagsTitle'),
+        t('scan.linkTagsUnknown', { tags: formatList(resolved.unresolved) }),
+      );
+    }
+  }, [
+    catalog.tags,
+    formatList,
+    isBootstrapping,
+    prefillLink,
+    prefillUploadBatchFromTags,
+    profileConfigured,
+    t,
+  ]);
 
   const rememberScanSession = useCallback((session: SmartScanSession | null) => {
     scanSessionRef.current = session;

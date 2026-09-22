@@ -126,6 +126,7 @@ const DocumentsScreen = memo(function DocumentsScreen({
     online,
     refresh,
     publishSavedView,
+    reportLibraryTagFilter,
     searchLibrary,
     trackPaperlessBulkOperation,
     reconcilePaperlessBulkOperation,
@@ -381,6 +382,18 @@ const DocumentsScreen = memo(function DocumentsScreen({
     }, 0);
     return () => clearTimeout(timer);
   }, [activeSavedView, catalog, connected, presetRefined]);
+
+  // A first upload has no previous one to copy. The tags of the filter or
+  // saved view in view are then the only stated intent, so the upload sheet
+  // may borrow them — tags only, since a filter can mix everything else.
+  useEffect(() => {
+    const view = activeSavedView
+      ? catalog.savedViews.find((candidate) => candidate.id === activeSavedView)
+      : undefined;
+    reportLibraryTagFilter(filters.tagIds.length
+      ? { tagIds: filters.tagIds, ...(view ? { label: view.name } : {}) }
+      : null);
+  }, [activeSavedView, catalog.savedViews, filters.tagIds, reportLibraryTagFilter]);
 
   function clearAll() {
     setQuery('');
